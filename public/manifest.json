@@ -1,0 +1,18 @@
+{
+  "name": "IronPulse Workout Tracker",
+  "short_name": "IronPulse",
+  "description": "Mobile-first Progressive Web App Workout Tracker with Firestore offline sync, dynamic set boxes, and AI programming.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#090D16",
+  "theme_color": "#F97316",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

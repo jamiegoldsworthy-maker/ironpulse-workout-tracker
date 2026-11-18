@@ -1,0 +1,91 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  h1, h2, h3, h4, .font-display {
+    font-family: 'Plus Jakarta Sans', 'Outfit', system-ui, sans-serif;
+  }
+
+  /* Hide number input spinners for crisp set boxes */
+  input[type='number']::-webkit-inner-spin-button,
+  input[type='number']::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type='number'] {
+    -moz-appearance: textfield;
+  }
+}
+
+/* Force Mobile Viewport Overrides:
+   When troubleshooting Mobile view on a wide laptop screen, prevent desktop
+   media-query grid columns from squishing content inside the 420px phone frame */
+.force-mobile-view .md\:grid-cols-2,
+.force-mobile-view .lg\:grid-cols-12,
+.force-mobile-view .sm\:grid-cols-3,
+.force-mobile-view .sm\:grid-cols-4,
+.force-mobile-view .lg\:grid-cols-5 {
+  grid-template-columns: repeat(1, minmax(0, 1fr)) !important;
+}
+
+.force-mobile-view .lg\:col-span-8,
+.force-mobile-view .lg\:col-span-4,
+.force-mobile-view .sm\:col-span-2 {
+  grid-column: span 1 / span 1 !important;
+}
+
+.force-mobile-view .lg\:grid-cols-4 {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+}
+
+.force-mobile-view .sm\:grid-cols-6 {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+}
+
+/* Crisp instant hover tooltips for buttons with data-tooltip */
+[data-tooltip] {
+  position: relative;
+}
+
+[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  bottom: calc(100% + 7px);
+  left: 50%;
+  transform: translateX(-50%) translateY(4px);
+  background-color: #0f172a;
+  color: #f8fafc;
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.25;
+  padding: 5px 9px;
+  border-radius: 8px;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.14s ease, transform 0.14s ease, visibility 0.14s;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.28);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  z-index: 60;
+}
+
+[data-tooltip][data-tooltip-pos='bottom']::after {
+  bottom: auto;
+  top: calc(100% + 7px);
+}
+
+@media (hover: hover) {
+  [data-tooltip]:hover::after {
+    opacity: 1;
+    visibility: visible;
+    transform: translateX(-50%) translateY(0);
+  }
+}
