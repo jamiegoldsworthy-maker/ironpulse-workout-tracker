@@ -445,10 +445,10 @@ export const HistoryView: React.FC = () => {
                     <YAxis tick={{ fontSize: 11 }} />
                     <Tooltip
                       contentStyle={{
-                        backgroundColor: '#0f172a',
-                        borderColor: '#334155',
+                        backgroundColor: 'var(--bg-card)',
+                        borderColor: 'var(--border-card)',
+                        color: 'var(--text-primary)',
                         borderRadius: '12px',
-                        color: '#fff',
                         fontSize: '12px',
                       }}
                     />
@@ -645,10 +645,10 @@ export const HistoryView: React.FC = () => {
                       <YAxis tick={{ fontSize: 11 }} />
                       <Tooltip
                         contentStyle={{
-                          backgroundColor: '#0f172a',
-                          borderColor: '#334155',
+                          backgroundColor: 'var(--bg-card)',
+                        borderColor: 'var(--border-card)',
+                        color: 'var(--text-primary)',
                           borderRadius: '12px',
-                          color: '#fff',
                           fontSize: '12px',
                         }}
                       />
@@ -675,10 +675,10 @@ export const HistoryView: React.FC = () => {
                       <YAxis tick={{ fontSize: 11 }} />
                       <Tooltip
                         contentStyle={{
-                          backgroundColor: '#0f172a',
-                          borderColor: '#334155',
+                          backgroundColor: 'var(--bg-card)',
+                        borderColor: 'var(--border-card)',
+                        color: 'var(--text-primary)',
                           borderRadius: '12px',
-                          color: '#fff',
                           fontSize: '12px',
                         }}
                       />

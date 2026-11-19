@@ -20,6 +20,10 @@ export const App: React.FC = () => {
       } else {
         root.classList.remove('dark');
       }
+      const themeMeta = document.querySelector('meta[name="theme-color"]');
+      if (themeMeta) {
+        themeMeta.setAttribute('content', mode === 'dark' ? '#16181A' : '#F3EDE6');
+      }
     };
 
     if (meta.theme === 'system') {
