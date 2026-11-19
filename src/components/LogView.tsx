@@ -149,6 +149,16 @@ export const LogView: React.FC = () => {
     };
   };
 
+  const handleWorkoutCardTouchMove = (e: React.TouchEvent) => {
+    const start = cardTouchStartRef.current;
+    if (!start || draftWorkouts.length <= 1 || e.touches.length !== 1) return;
+    const dx = e.touches[0].clientX - start.x;
+    const dy = e.touches[0].clientY - start.y;
+    if (Math.abs(dx) >= 14 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+      e.preventDefault();
+    }
+  };
+
   const handleWorkoutCardTouchEnd = (e: React.TouchEvent, currentIdx: number) => {
     const start = cardTouchStartRef.current;
     cardTouchStartRef.current = null;
@@ -157,10 +167,8 @@ export const LogView: React.FC = () => {
     const dy = e.changedTouches[0].clientY - start.y;
     if (Math.abs(dx) < 50 || Math.abs(dx) <= Math.abs(dy) * 1.5) return;
 
-    const targetIdx =
-      dx < 0
-        ? Math.min(draftWorkouts.length - 1, currentIdx + 1)
-        : Math.max(0, currentIdx - 1);
+    const total = draftWorkouts.length;
+    const targetIdx = dx < 0 ? (currentIdx + 1) % total : (currentIdx - 1 + total) % total;
     if (targetIdx === currentIdx) return;
 
     const targetDraft = draftWorkouts[targetIdx];
@@ -632,7 +640,8 @@ export const LogView: React.FC = () => {
     if (logLayoutMode === 'list' || draftWorkouts.length === 0) {
       return draftWorkouts.map((d, idx) => ({ draft: d, originalIdx: idx }));
     }
-    const safeIdx = Math.min(activeCardIdx, draftWorkouts.length - 1);
+    const safeIdx =
+      ((activeCardIdx % draftWorkouts.length) + draftWorkouts.length) % draftWorkouts.length;
     return [{ draft: draftWorkouts[safeIdx], originalIdx: safeIdx }];
   }, [logLayoutMode, draftWorkouts, activeCardIdx]);
 
@@ -910,27 +919,15 @@ export const LogView: React.FC = () => {
             </div>
           )}
 
-          {/* Workout Cards Container (Supports horizontal swipe in Cards mode) */}
-          <div
-            onTouchStart={(e) => {
-              if (logLayoutMode !== 'cards') return;
-              touchStartXRef.current = e.touches[0].clientX;
-            }}
-            onTouchEnd={(e) => {
-              if (logLayoutMode !== 'cards' || touchStartXRef.current === null) return;
-              const deltaX = e.changedTouches[0].clientX - touchStartXRef.current;
-              if (deltaX < -60 && activeCardIdx < draftWorkouts.length - 1) {
-                setActiveCardIdx((i) => i + 1);
-              } else if (deltaX > 60 && activeCardIdx > 0) {
-                setActiveCardIdx((i) => i - 1);
-              }
-              touchStartXRef.current = null;
-            }}
-            className="space-y-4"
-          >
+          {/* Workout Cards Container */}
+          <div className="space-y-4 touch-pan-y">
             {visibleWorkouts.map(({ draft, originalIdx: cardIdx }) => {
               const isCollapsed = isWorkoutMinimized(draft);
               const preset = presets.find((p) => p.presetUuid === draft.presetUuid);
+              const isMobilityFlowWorkout =
+                draft.exercises.length > 0 &&
+                (draft.exercises.every((e) => e.trackingType === 'mobility') ||
+                  /^(mobility|yoga)$/i.test((draft.workoutType || '').trim()));
 
               const activeWeekNumber: number | null = (() => {
                 const coachMatch = draft.coachNotes?.match(/\[?W(?:eek\s*)?(\d+)\]?/i);
@@ -971,6 +968,7 @@ export const LogView: React.FC = () => {
                       cardRefs.current[draft.logUuid] = el;
                     }}
                     onTouchStart={handleWorkoutCardTouchStart}
+                    onTouchMove={handleWorkoutCardTouchMove}
                     onTouchEnd={(e) => handleWorkoutCardTouchEnd(e, cardIdx)}
                     role="button"
                     tabIndex={0}
@@ -982,7 +980,7 @@ export const LogView: React.FC = () => {
                       }
                     }}
                     title="Tap to expand workout details & sets"
-                    className={`rounded-3xl bg-white dark:bg-slate-900 border transition-all overflow-hidden cursor-pointer ${
+                    className={`touch-pan-y rounded-3xl bg-white dark:bg-slate-900 border transition-all overflow-hidden cursor-pointer ${
                       draft.isSaved && draft.status === 'completed'
                         ? 'border-emerald-500/35 dark:border-emerald-500/25 hover:border-emerald-500/60'
                         : 'border-slate-200/70 dark:border-slate-800/80 hover:border-orange-500/50'
@@ -1066,8 +1064,9 @@ export const LogView: React.FC = () => {
                     cardRefs.current[draft.logUuid] = el;
                   }}
                   onTouchStart={handleWorkoutCardTouchStart}
+                  onTouchMove={handleWorkoutCardTouchMove}
                   onTouchEnd={(e) => handleWorkoutCardTouchEnd(e, cardIdx)}
-                  className={`rounded-3xl bg-white dark:bg-slate-900 border transition-all overflow-hidden ${
+                  className={`touch-pan-y rounded-3xl bg-white dark:bg-slate-900 border transition-all overflow-hidden ${
                     draft.isSaved
                       ? draft.status === 'completed'
                         ? 'border-emerald-500/35 dark:border-emerald-500/25'
@@ -1573,7 +1572,79 @@ export const LogView: React.FC = () => {
                         );
                       })()}
 
-                      {/* Exercise List */}
+                      {/* Exercise List (Ultra-compact checklist for Mobility / Flow workouts) */}
+                      {isMobilityFlowWorkout ? (
+                        <div className="rounded-2xl border border-slate-200/70 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/25 divide-y divide-slate-200/60 dark:divide-slate-800/70">
+                          {draft.exercises.map((ex, exIdx) => {
+                            const exKey = `${draft.logUuid}_${exIdx}`;
+                            const rawCueNote =
+                              (ex.exerciseNotes && !ex.exerciseNotes.startsWith('Target:')
+                                ? ex.exerciseNotes
+                                : '') ||
+                              preset?.exercises?.[exIdx]?.baseNotes ||
+                              '';
+                            const cueNote = filterNoteForWeek(rawCueNote, activeWeekNumber);
+                            return (
+                              <div
+                                key={`${ex.exerciseUuid}-${exIdx}`}
+                                className="px-3 py-2.5 flex items-start gap-2.5 min-w-0"
+                              >
+                                <button
+                                  type="button"
+                                  aria-label={
+                                    ex.isCompleted ? 'Mark movement incomplete' : 'Mark movement done'
+                                  }
+                                  onClick={() =>
+                                    updateDraftWorkout(draft.logUuid, (curr) => {
+                                      const next = [...curr.exercises];
+                                      next[exIdx] = {
+                                        ...next[exIdx],
+                                        isCompleted: !next[exIdx].isCompleted,
+                                      };
+                                      return { ...curr, exercises: next };
+                                    })
+                                  }
+                                  className={`mt-0.5 w-5 h-5 rounded-md border flex items-center justify-center shrink-0 transition-colors ${
+                                    ex.isCompleted
+                                      ? 'bg-emerald-500 border-emerald-500 text-white'
+                                      : 'bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-600 text-transparent hover:border-emerald-500'
+                                  }`}
+                                >
+                                  <Check className="w-3.5 h-3.5" />
+                                </button>
+
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span
+                                      className={`text-xs font-bold leading-snug ${
+                                        ex.isCompleted
+                                          ? 'line-through text-slate-400 dark:text-slate-500'
+                                          : 'text-slate-900 dark:text-slate-100'
+                                      }`}
+                                    >
+                                      {exIdx + 1}. {ex.exerciseName}
+                                    </span>
+                                    {ex.side && (
+                                      <span className="px-1.5 py-0.5 rounded bg-orange-500/15 text-orange-600 dark:text-orange-400 text-[10px] font-bold shrink-0">
+                                        {ex.side}
+                                      </span>
+                                    )}
+                                  </div>
+                                  {cueNote && (
+                                    <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-snug mt-0.5">
+                                      {cueNote}
+                                    </p>
+                                  )}
+                                </div>
+
+                                <div className="shrink-0">
+                                  {renderExerciseMenu(draft, exIdx, exKey, true)}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : (
                       <div className="space-y-3.5">
                         {(() => {
                           const renderLoggedExerciseCard = (
@@ -1584,7 +1655,9 @@ export const LogView: React.FC = () => {
                             const ghost = getGhostExerciseData(
                               draft.presetUuid,
                               ex.exerciseUuid,
-                              draft.logUuid
+                              draft.logUuid,
+                              ex.exerciseName,
+                              ex.trackingType
                             );
                             const ghostEx = ghost?.exercise;
                             const workoutHasLadder = draft.exercises.some(
@@ -2983,6 +3056,7 @@ export const LogView: React.FC = () => {
                           });
                         })()}
                       </div>
+                      )}
 
                       {/* Add Exercise On-the-Fly Button & Update Preset Toggle */}
                       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -3049,60 +3123,108 @@ export const LogView: React.FC = () => {
                           className="w-full px-3.5 py-2 text-xs rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/80 text-slate-800 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:border-orange-500"
                         />
 
-                        <div className="flex flex-wrap items-center justify-end gap-2">
-                          <button
-                            type="button"
-                            data-tooltip="Log workout as incomplete"
-                            title="Log workout as incomplete"
-                            onClick={async () => {
-                              const res = await saveDraftWorkout(
-                                draft.logUuid,
-                                'did_not_complete',
-                                draft.updatePresetOnSave
-                              );
-                              if (res.ok) {
-                                triggerToast('Saved as Incomplete');
-                              } else {
-                                triggerToast(
-                                  `Cloud sync error: ${res.error || 'Saved locally only'}`,
-                                  true
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          {isMobilityFlowWorkout && (
+                            <div className="flex items-center gap-1.5 mr-auto">
+                              <label className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                                Flow Duration (min)
+                              </label>
+                              <input
+                                type="number"
+                                min={0}
+                                value={
+                                  draft.exercises[0]?.durationSec && draft.exercises[0].durationSec > 0
+                                    ? Math.round(draft.exercises[0].durationSec / 60)
+                                    : ''
+                                }
+                                placeholder="0"
+                                onChange={(e) => {
+                                  const mins = Math.max(0, parseInt(e.target.value, 10) || 0);
+                                  updateDraftWorkout(draft.logUuid, (curr) => {
+                                    if (curr.exercises.length === 0) return curr;
+                                    const next = [...curr.exercises];
+                                    next[0] = { ...next[0], durationSec: mins * 60 };
+                                    return { ...curr, exercises: next };
+                                  });
+                                }}
+                                className="w-16 px-2.5 py-1.5 text-xs font-mono font-bold tabular-nums rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-center focus:outline-none focus:border-orange-500"
+                              />
+                            </div>
+                          )}
+                          <div className="flex flex-wrap items-center justify-end gap-2 ml-auto">
+                            <button
+                              type="button"
+                              data-tooltip="Log workout as incomplete"
+                              title="Log workout as incomplete"
+                              onClick={async () => {
+                                const res = await saveDraftWorkout(
+                                  draft.logUuid,
+                                  'did_not_complete',
+                                  draft.updatePresetOnSave
                                 );
-                              }
-                            }}
-                            className="px-3.5 py-2 rounded-2xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300 font-semibold text-xs inline-flex items-center gap-1.5 transition-colors"
-                          >
-                            <XCircle className="w-4 h-4" />
-                            Incomplete
-                          </button>
+                                if (res.ok) {
+                                  triggerToast('Saved as Incomplete');
+                                } else {
+                                  triggerToast(
+                                    `Cloud sync error: ${res.error || 'Saved locally only'}`,
+                                    true
+                                  );
+                                }
+                              }}
+                              className="px-3.5 py-2 rounded-2xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300 font-semibold text-xs inline-flex items-center gap-1.5 transition-colors"
+                            >
+                              <XCircle className="w-4 h-4" />
+                              Incomplete
+                            </button>
 
-                          <button
-                            type="button"
-                            data-tooltip="Save completed workout to History"
-                            title="Save completed workout to History"
-                            onClick={async () => {
-                              const res = await saveDraftWorkout(
-                                draft.logUuid,
-                                'completed',
-                                draft.updatePresetOnSave
-                              );
-                              setCollapsedCards((prev) => ({
-                                ...prev,
-                                [draft.logUuid]: true,
-                              }));
-                              if (res.ok) {
-                                triggerToast(`Completed & Saved "${draft.workoutTitleSnapshot}"!`);
-                              } else {
-                                triggerToast(
-                                  `Cloud sync error: ${res.error || 'Saved locally only'}`,
-                                  true
+                            <button
+                              type="button"
+                              data-tooltip="Save completed workout to History"
+                              title="Save completed workout to History"
+                              onClick={async () => {
+                                if (isMobilityFlowWorkout) {
+                                  updateDraftWorkout(draft.logUuid, (curr) => ({
+                                    ...curr,
+                                    exercises: curr.exercises.map((ex) => ({
+                                      ...ex,
+                                      isCompleted: true,
+                                    })),
+                                  }));
+                                }
+                                const res = await saveDraftWorkout(
+                                  draft.logUuid,
+                                  'completed',
+                                  draft.updatePresetOnSave
                                 );
-                              }
-                            }}
-                            className="px-5 py-2.5 rounded-2xl bg-orange-500 hover:bg-orange-600 text-white font-bold text-xs inline-flex items-center gap-1.5 transition-all"
-                          >
-                            <Save className="w-4 h-4" />
-                            {draft.isSaved ? 'Update Saved Log' : 'Complete Workout'}
-                          </button>
+                                setCollapsedCards((prev) => ({
+                                  ...prev,
+                                  [draft.logUuid]: true,
+                                }));
+                                if (res.ok) {
+                                  triggerToast(`Completed & Saved "${draft.workoutTitleSnapshot}"!`);
+                                } else {
+                                  triggerToast(
+                                    `Cloud sync error: ${res.error || 'Saved locally only'}`,
+                                    true
+                                  );
+                                }
+                              }}
+                              className="px-5 py-2.5 rounded-2xl bg-orange-500 hover:bg-orange-600 text-white font-bold text-xs inline-flex items-center gap-1.5 transition-all"
+                            >
+                              {isMobilityFlowWorkout ? (
+                                <Check className="w-4 h-4" />
+                              ) : (
+                                <Save className="w-4 h-4" />
+                              )}
+                              {isMobilityFlowWorkout
+                                ? draft.isSaved
+                                  ? 'Update Saved Flow'
+                                  : 'Complete Flow'
+                                : draft.isSaved
+                                ? 'Update Saved Log'
+                                : 'Complete Workout'}
+                            </button>
+                          </div>
                         </div>
                       </div>
                     </div>

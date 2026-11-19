@@ -141,7 +141,9 @@ interface WorkoutStoreState {
   getGhostExerciseData: (
     presetUuid: string,
     exerciseUuid: string,
-    excludeLogUuid?: string
+    excludeLogUuid?: string,
+    exerciseName?: string,
+    trackingType?: string
   ) => GhostExerciseData | null;
   getExerciseHistory: (
     exerciseUuid: string,
@@ -1264,22 +1266,42 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         }
       },
 
-      getGhostExerciseData: (presetUuid, exerciseUuid, excludeLogUuid) => {
+      getGhostExerciseData: (
+        presetUuid,
+        exerciseUuid,
+        excludeLogUuid,
+        exerciseName,
+        trackingType
+      ) => {
+        if (trackingType === 'mobility') return null;
+
+        const normalizedName = (exerciseName || '').trim().toLowerCase();
         const completedLogs = get()
-          .logs.filter(
-            (l) =>
-              l.status === 'completed' &&
-              l.logUuid !== excludeLogUuid &&
-              l.exerciseUuids.includes(exerciseUuid)
-          )
+          .logs.filter((l) => {
+            if (l.status !== 'completed' || l.logUuid === excludeLogUuid) return false;
+            if (normalizedName) {
+              return l.exercises.some(
+                (e) =>
+                  e.trackingType !== 'mobility' &&
+                  (e.exerciseName || '').trim().toLowerCase() === normalizedName
+              );
+            }
+            return l.exerciseUuids.includes(exerciseUuid);
+          })
           .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
 
         if (completedLogs.length === 0) return null;
 
-        // Priority 1: Match same presetUuid + exerciseUuid
+        // Priority 1: Match same presetUuid + normalized name
         const samePresetLog = completedLogs.find((l) => l.presetUuid === presetUuid);
         const chosenLog = samePresetLog || completedLogs[0];
-        const matchedEx = chosenLog.exercises.find((e) => e.exerciseUuid === exerciseUuid);
+        const matchedEx = normalizedName
+          ? chosenLog.exercises.find(
+              (e) =>
+                e.trackingType !== 'mobility' &&
+                (e.exerciseName || '').trim().toLowerCase() === normalizedName
+            )
+          : chosenLog.exercises.find((e) => e.exerciseUuid === exerciseUuid);
         if (!matchedEx) return null;
 
         return {
