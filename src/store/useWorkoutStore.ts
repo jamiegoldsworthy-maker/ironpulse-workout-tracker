@@ -84,6 +84,8 @@ interface WorkoutStoreState {
 
   // Active Navigation & Log Floor state
   activeTab: 'log' | 'plan' | 'library' | 'history' | 'settings';
+  editingPresetUuid: string | null;
+  presetEditorReturnTab: 'log' | 'plan' | 'library' | 'history' | 'settings' | null;
   viewportMode: 'auto' | 'mobile' | 'desktop';
   logLayoutMode: 'list' | 'cards';
   logDensityMode: 'compact' | 'detailed';
@@ -96,6 +98,11 @@ interface WorkoutStoreState {
 
   // Navigation & Theme
   setActiveTab: (tab: 'log' | 'plan' | 'library' | 'history' | 'settings') => void;
+  openPresetEditor: (
+    presetUuid: string,
+    returnTab?: 'log' | 'plan' | 'library' | 'history' | 'settings'
+  ) => void;
+  clearPresetEditor: () => void;
   setViewportMode: (mode: 'auto' | 'mobile' | 'desktop') => void;
   setLogLayoutMode: (mode: 'list' | 'cards') => void;
   setLogDensityMode: (mode: 'compact' | 'detailed') => void;
@@ -533,6 +540,12 @@ function collectUsedCategories(
 
 const EMPTY_SESSION_UUID = 'ses-initial';
 
+function sortPresetsAlphabetically(presets: WorkoutPreset[]): WorkoutPreset[] {
+  return [...presets].sort((a, b) =>
+    (a.title || '').localeCompare(b.title || '', undefined, { sensitivity: 'base' })
+  );
+}
+
 export const useWorkoutStore = create<WorkoutStoreState>()(
   persist(
     (set, get) => ({
@@ -550,6 +563,8 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
       hasCompletedCloudBootstrap: false,
 
       activeTab: 'log',
+      editingPresetUuid: null,
+      presetEditorReturnTab: null,
       viewportMode: 'auto',
       logLayoutMode: 'list',
       logDensityMode: 'detailed',
@@ -572,6 +587,17 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
       },
 
       setActiveTab: (tab) => set({ activeTab: tab }),
+      openPresetEditor: (presetUuid, returnTab) =>
+        set({
+          editingPresetUuid: presetUuid,
+          presetEditorReturnTab: returnTab || null,
+          activeTab: 'library',
+        }),
+      clearPresetEditor: () =>
+        set({
+          editingPresetUuid: null,
+          presetEditorReturnTab: null,
+        }),
       setViewportMode: (mode) => set({ viewportMode: mode }),
       setLogLayoutMode: (mode) => set({ logLayoutMode: mode }),
       setLogDensityMode: (mode) => set({ logDensityMode: mode }),
@@ -1524,9 +1550,11 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           }
         }
 
-        const nextPresets = exists
-          ? state.presets.map((p) => (p.presetUuid === cleanPreset.presetUuid ? cleanPreset : p))
-          : [cleanPreset, ...state.presets];
+        const nextPresets = sortPresetsAlphabetically(
+          exists
+            ? state.presets.map((p) => (p.presetUuid === cleanPreset.presetUuid ? cleanPreset : p))
+            : [cleanPreset, ...state.presets]
+        );
 
         set({ presets: nextPresets, exercises: nextExercises });
         if (state.authUser) {
@@ -2165,7 +2193,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
 
         set({
           exercises: nextExercises,
-          presets: nextPresets,
+          presets: sortPresetsAlphabetically(nextPresets),
           programs: nextPrograms,
           schedules: nextSchedules,
         });
@@ -2632,7 +2660,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           },
           onPresets: (remotePresets) => {
             if (remotePresets.length > 0 || get().hasCompletedCloudBootstrap) {
-              set({ presets: remotePresets, syncStatus: 'synced' });
+              set({ presets: sortPresetsAlphabetically(remotePresets), syncStatus: 'synced' });
             }
           },
           onPrograms: (remotePrograms) => {
@@ -2845,7 +2873,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
 
           set({
             exercises: nextExercises,
-            presets: nextPresets,
+            presets: sortPresetsAlphabetically(nextPresets),
             programs: nextPrograms,
             schedules: scheduleMap,
             logs: nextLogs,
@@ -2999,7 +3027,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         );
         set({
           exercises: SEED_EXERCISES,
-          presets: SEED_PRESETS,
+          presets: sortPresetsAlphabetically(SEED_PRESETS),
           programs: SEED_PROGRAMS,
           schedules: SEED_SCHEDULES,
           logs: SEED_LOGS,
@@ -3012,7 +3040,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         if (state.authUser) {
           pushAllLocalDataToFirestore(state.authUser.uid, {
             exercises: SEED_EXERCISES,
-            presets: SEED_PRESETS,
+            presets: sortPresetsAlphabetically(SEED_PRESETS),
             programs: SEED_PROGRAMS,
             schedules: SEED_SCHEDULES,
             logs: SEED_LOGS,

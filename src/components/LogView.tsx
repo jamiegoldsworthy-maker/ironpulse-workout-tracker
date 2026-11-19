@@ -21,6 +21,8 @@ import {
   Search,
   SlidersHorizontal,
   ArrowRightLeft,
+  ArrowUp,
+  ArrowDown,
   Save,
   MoreHorizontal,
   AlertTriangle,
@@ -32,6 +34,7 @@ import {
   DistanceUnit,
   LoadType,
   LoggedExercise,
+  PresetExercise,
   TrackingType,
 } from '../types/workout';
 import {
@@ -88,6 +91,9 @@ export const LogView: React.FC = () => {
     startCircuitTimer,
     setTimerRounds,
     upsertGlobalExercise,
+    upsertPreset,
+    openPresetEditor,
+    timer,
   } = useWorkoutStore();
 
   const [collapsedCards, setCollapsedCards] = useState<Record<string, boolean>>({});
@@ -97,8 +103,31 @@ export const LogView: React.FC = () => {
   >({});
   const [activeCardIdx, setActiveCardIdx] = useState<number>(0);
   const [editMenuOpen, setEditMenuOpen] = useState<boolean>(false);
+  const [openExerciseMenuKey, setOpenExerciseMenuKey] = useState<string | null>(null);
+  const [modifiedStructureLogUuids, setModifiedStructureLogUuids] = useState<
+    Record<string, boolean>
+  >({});
   const editMenuRef = useRef<HTMLDivElement>(null);
   const touchStartXRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!openExerciseMenuKey) return;
+    const handleOutside = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (!target?.closest('[data-exercise-menu]')) {
+        setOpenExerciseMenuKey(null);
+      }
+    };
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpenExerciseMenuKey(null);
+    };
+    document.addEventListener('mousedown', handleOutside);
+    document.addEventListener('keydown', handleEsc);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      document.removeEventListener('keydown', handleEsc);
+    };
+  }, [openExerciseMenuKey]);
 
   useEffect(() => {
     if (!editMenuOpen) return;
@@ -158,6 +187,171 @@ export const LogView: React.FC = () => {
   const triggerToast = (msg: string, isError = false) => {
     setToastState({ msg, isError });
     setTimeout(() => setToastState(null), isError ? 4500 : 2600);
+  };
+
+  const moveExerciseInDraft = (logUuid: string, fromIdx: number, dir: -1 | 1) => {
+    const toIdx = fromIdx + dir;
+    updateDraftWorkout(logUuid, (curr) => {
+      if (toIdx < 0 || toIdx >= curr.exercises.length) return curr;
+      const next = [...curr.exercises];
+      const [moved] = next.splice(fromIdx, 1);
+      next.splice(toIdx, 0, moved);
+      return { ...curr, exercises: next };
+    });
+    setModifiedStructureLogUuids((prev) => ({ ...prev, [logUuid]: true }));
+  };
+
+  const removeExerciseFromDraft = (logUuid: string, exIdx: number) => {
+    updateDraftWorkout(logUuid, (curr) => ({
+      ...curr,
+      exercises: curr.exercises.filter((_, i) => i !== exIdx),
+    }));
+    setModifiedStructureLogUuids((prev) => ({ ...prev, [logUuid]: true }));
+  };
+
+  const pushDraftStructureToPreset = (draft: DraftWorkoutCard) => {
+    const sourcePreset = presets.find((p) => p.presetUuid === draft.presetUuid);
+    if (!sourcePreset) return;
+    const nextExercises: PresetExercise[] = draft.exercises.map((ex) => {
+      const existing = sourcePreset.exercises.find(
+        (pe) => pe.exerciseUuid === ex.exerciseUuid
+      );
+      return {
+        exerciseUuid: ex.exerciseUuid,
+        exerciseName: ex.exerciseName,
+        category: ex.category,
+        trackingType: ex.trackingType,
+        loadType: ex.loadType,
+        metricType: ex.metricType,
+        defaultWeight: ex.weight,
+        secondaryWeightKg: ex.secondaryWeightKg,
+        defaultSets: ex.sets?.length || existing?.defaultSets || 3,
+        defaultReps: ex.targetRepsLabel || existing?.defaultReps || '10',
+        repScheme: ex.repScheme || existing?.repScheme,
+        side: ex.side,
+        isPerSide: ex.isPerSide,
+        groupId: ex.groupId,
+        cardioMode: ex.mode || existing?.cardioMode,
+        defaultDistanceUnit: ex.distanceUnit || existing?.defaultDistanceUnit,
+        defaultDurationMin:
+          ex.trackingType === 'mobility' && ex.durationSec
+            ? Math.round(ex.durationSec / 60)
+            : existing?.defaultDurationMin,
+        baseNotes: existing?.baseNotes,
+      };
+    });
+    upsertPreset({
+      ...sourcePreset,
+      exercises: nextExercises,
+    });
+    setModifiedStructureLogUuids((prev) => ({ ...prev, [draft.logUuid]: false }));
+    triggerToast(`Updated "${sourcePreset.title}" preset`);
+  };
+
+  const renderExerciseMenu = (
+    draft: DraftWorkoutCard,
+    exIdx: number,
+    exKey: string,
+    isCompactRow: boolean
+  ) => {
+    const isOpen = openExerciseMenuKey === exKey;
+    return (
+      <div className="relative" data-exercise-menu>
+        <button
+          type="button"
+          data-tooltip="Exercise options (Swap, Reorder, Remove)"
+          title="Exercise options"
+          onClick={(e) => {
+            e.stopPropagation();
+            setOpenExerciseMenuKey(isOpen ? null : exKey);
+          }}
+          className={`${
+            isCompactRow
+              ? 'p-1 rounded-lg'
+              : 'p-1.5 rounded-xl'
+          } bg-white dark:bg-slate-800 border border-slate-200/80 dark:border-slate-700 text-slate-500 hover:text-orange-500 transition-colors`}
+        >
+          <MoreHorizontal className={isCompactRow ? 'w-3.5 h-3.5' : 'w-4 h-4'} />
+        </button>
+
+        {isOpen && (
+          <div className="absolute right-0 mt-1.5 w-48 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 shadow-xl p-1.5 z-40 space-y-0.5">
+            <button
+              type="button"
+              onClick={() => {
+                setOpenExerciseMenuKey(null);
+                setExercisePickerModal({
+                  open: true,
+                  logUuid: draft.logUuid,
+                  swapExerciseIndex: exIdx,
+                });
+              }}
+              className="w-full px-2.5 py-2 rounded-xl text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-2 transition-colors"
+            >
+              <ArrowRightLeft className="w-3.5 h-3.5 text-orange-500 shrink-0" />
+              Swap Exercise
+            </button>
+
+            <button
+              type="button"
+              disabled={exIdx === 0}
+              onClick={() => {
+                setOpenExerciseMenuKey(null);
+                moveExerciseInDraft(draft.logUuid, exIdx, -1);
+              }}
+              className="w-full px-2.5 py-2 rounded-xl text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-35 disabled:pointer-events-none flex items-center gap-2 transition-colors"
+            >
+              <ArrowUp className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+              Move Up
+            </button>
+
+            <button
+              type="button"
+              disabled={exIdx >= draft.exercises.length - 1}
+              onClick={() => {
+                setOpenExerciseMenuKey(null);
+                moveExerciseInDraft(draft.logUuid, exIdx, 1);
+              }}
+              className="w-full px-2.5 py-2 rounded-xl text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-35 disabled:pointer-events-none flex items-center gap-2 transition-colors"
+            >
+              <ArrowDown className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+              Move Down
+            </button>
+
+            {isCompactRow && (
+              <button
+                type="button"
+                onClick={() => {
+                  setOpenExerciseMenuKey(null);
+                  setExpandedCompactExercises((prev) => ({
+                    ...prev,
+                    [exKey]: true,
+                  }));
+                }}
+                className="w-full px-2.5 py-2 rounded-xl text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-2 transition-colors"
+              >
+                <ChevronDown className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                Expand Details &amp; Sets
+              </button>
+            )}
+
+            <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
+
+            <button
+              type="button"
+              onClick={() => {
+                setOpenExerciseMenuKey(null);
+                removeExerciseFromDraft(draft.logUuid, exIdx);
+              }}
+              className="w-full px-2.5 py-2 rounded-xl text-left text-xs font-semibold text-rose-600 dark:text-rose-400 hover:bg-rose-500/10 flex items-center gap-2 transition-colors"
+            >
+              <Trash2 className="w-3.5 h-3.5 shrink-0" />
+              Remove Exercise
+            </button>
+          </div>
+        )}
+      </div>
+    );
   };
 
   const todayIso = getTodayIsoDate();
@@ -373,7 +567,11 @@ export const LogView: React.FC = () => {
   }, [logLayoutMode, draftWorkouts, activeCardIdx]);
 
   return (
-    <div className="space-y-4 pb-40 md:pb-24 min-w-0 max-w-full">
+    <div
+      className={`space-y-4 min-w-0 max-w-full ${
+        timer.isOpen ? 'pb-48 md:pb-36' : 'pb-24'
+      }`}
+    >
       {/* Toast Notification */}
       {toastState && (
         <div
@@ -853,6 +1051,18 @@ export const LogView: React.FC = () => {
                               </span>
                             </button>
                           )}
+
+                        {preset && (
+                          <button
+                            type="button"
+                            data-tooltip="Edit source workout preset"
+                            title="Edit Preset"
+                            onClick={() => openPresetEditor(preset.presetUuid, 'log')}
+                            className="p-1.5 rounded-xl text-slate-500 hover:text-orange-500 hover:bg-orange-500/10 transition-colors"
+                          >
+                            <Pencil className="w-4 h-4" />
+                          </button>
+                        )}
 
                         <button
                           type="button"
@@ -1452,20 +1662,7 @@ export const LogView: React.FC = () => {
                                       <History className="w-3.5 h-3.5" />
                                     </button>
 
-                                    <button
-                                      type="button"
-                                      data-tooltip="Expand exercise details & notes"
-                                      title="Expand exercise details & notes"
-                                      onClick={() =>
-                                        setExpandedCompactExercises((prev) => ({
-                                          ...prev,
-                                          [exKey]: true,
-                                        }))
-                                      }
-                                      className="p-1 rounded-lg bg-white dark:bg-slate-800 border border-slate-200/70 dark:border-slate-700 text-slate-500 hover:text-orange-500 transition-colors"
-                                    >
-                                      <MoreHorizontal className="w-3.5 h-3.5" />
-                                    </button>
+                                    {renderExerciseMenu(draft, exIdx, exKey, true)}
                                   </div>
                                 </div>
 
@@ -1777,36 +1974,7 @@ export const LogView: React.FC = () => {
                                       <History className="w-4 h-4" />
                                     </button>
 
-                                    <button
-                                      type="button"
-                                      data-tooltip="Swap this exercise"
-                                      title="Swap this exercise"
-                                      onClick={() =>
-                                        setExercisePickerModal({
-                                          open: true,
-                                          logUuid: draft.logUuid,
-                                          swapExerciseIndex: exIdx,
-                                        })
-                                      }
-                                      className="p-1.5 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-500 hover:text-slate-900 dark:hover:text-white transition-colors"
-                                    >
-                                      <ArrowRightLeft className="w-3.5 h-3.5" />
-                                    </button>
-
-                                    <button
-                                      type="button"
-                                      data-tooltip="Remove exercise from this workout"
-                                      title="Remove exercise from this workout"
-                                      onClick={() =>
-                                        updateDraftWorkout(draft.logUuid, (curr) => ({
-                                          ...curr,
-                                          exercises: curr.exercises.filter((_, i) => i !== exIdx),
-                                        }))
-                                      }
-                                      className="p-1.5 rounded-xl text-slate-400 hover:text-rose-500 transition-colors"
-                                    >
-                                      <Trash2 className="w-3.5 h-3.5" />
-                                    </button>
+                                    {renderExerciseMenu(draft, exIdx, exKey, false)}
 
                                     {logDensityMode === 'compact' && (
                                       <button
@@ -2718,18 +2886,30 @@ export const LogView: React.FC = () => {
 
                       {/* Add Exercise On-the-Fly Button & Update Preset Toggle */}
                       <div className="flex flex-wrap items-center justify-between gap-2">
-                        <button
-                          type="button"
-                          data-tooltip="Add another exercise to this workout"
-                          title="Add another exercise to this workout"
-                          onClick={() =>
-                            setExercisePickerModal({ open: true, logUuid: draft.logUuid })
-                          }
-                          className="px-3.5 py-2 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 hover:border-orange-500 text-xs font-semibold text-slate-600 dark:text-slate-300 hover:text-orange-500 inline-flex items-center gap-1.5 transition-colors"
-                        >
-                          <Plus className="w-4 h-4" />
-                          Add Exercise
-                        </button>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            data-tooltip="Add another exercise to this workout"
+                            title="Add another exercise to this workout"
+                            onClick={() =>
+                              setExercisePickerModal({ open: true, logUuid: draft.logUuid })
+                            }
+                            className="px-3.5 py-2 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 hover:border-orange-500 text-xs font-semibold text-slate-600 dark:text-slate-300 hover:text-orange-500 inline-flex items-center gap-1.5 transition-colors"
+                          >
+                            <Plus className="w-4 h-4" />
+                            Add Exercise
+                          </button>
+
+                          {preset && modifiedStructureLogUuids[draft.logUuid] && (
+                            <button
+                              type="button"
+                              onClick={() => pushDraftStructureToPreset(draft)}
+                              className="px-3 py-1.5 rounded-xl bg-orange-500/12 hover:bg-orange-500 hover:text-white text-orange-600 dark:text-orange-400 text-xs font-bold transition-colors"
+                            >
+                              Update Preset
+                            </button>
+                          )}
+                        </div>
 
                         {logDensityMode !== 'compact' && (
                           <label
@@ -3068,12 +3248,21 @@ export const LogView: React.FC = () => {
                     updateDraftWorkout(exercisePickerModal.logUuid, (curr) => {
                       const next = [...curr.exercises];
                       if (exercisePickerModal.swapExerciseIndex !== undefined) {
-                        next[exercisePickerModal.swapExerciseIndex] = newLogged;
+                        const existingGroupId =
+                          next[exercisePickerModal.swapExerciseIndex]?.groupId;
+                        next[exercisePickerModal.swapExerciseIndex] = {
+                          ...newLogged,
+                          groupId: existingGroupId,
+                        };
                       } else {
                         next.push(newLogged);
                       }
                       return { ...curr, exercises: next };
                     });
+                    setModifiedStructureLogUuids((prev) => ({
+                      ...prev,
+                      [exercisePickerModal.logUuid]: true,
+                    }));
                     setExercisePickerModal({ open: false, logUuid: '' });
                   }}
                   className="px-3 py-1.5 rounded-xl bg-orange-500 text-white text-xs font-bold"
@@ -3123,12 +3312,21 @@ export const LogView: React.FC = () => {
                       updateDraftWorkout(exercisePickerModal.logUuid, (curr) => {
                         const next = [...curr.exercises];
                         if (exercisePickerModal.swapExerciseIndex !== undefined) {
-                          next[exercisePickerModal.swapExerciseIndex] = newLogged;
+                          const existingGroupId =
+                            next[exercisePickerModal.swapExerciseIndex]?.groupId;
+                          next[exercisePickerModal.swapExerciseIndex] = {
+                            ...newLogged,
+                            groupId: existingGroupId,
+                          };
                         } else {
                           next.push(newLogged);
                         }
                         return { ...curr, exercises: next };
                       });
+                      setModifiedStructureLogUuids((prev) => ({
+                        ...prev,
+                        [exercisePickerModal.logUuid]: true,
+                      }));
                       setExercisePickerModal({ open: false, logUuid: '' });
                     }}
                     className="p-3 rounded-2xl border border-slate-200/80 dark:border-slate-800 hover:border-orange-500 flex items-center justify-between cursor-pointer"
