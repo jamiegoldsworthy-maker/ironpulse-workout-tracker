@@ -24,6 +24,10 @@ import {
   Save,
   LayoutList,
   GalleryHorizontalEnd,
+  MoreHorizontal,
+  AlertTriangle,
+  Minimize2,
+  Maximize2,
 } from 'lucide-react';
 import { DraftWorkoutCard, useWorkoutStore } from '../store/useWorkoutStore';
 import {
@@ -66,6 +70,8 @@ export const LogView: React.FC = () => {
     draftWorkouts,
     logLayoutMode,
     setLogLayoutMode,
+    logDensityMode,
+    setLogDensityMode,
     presets,
     exercises: globalExercises,
     schedules,
@@ -85,6 +91,9 @@ export const LogView: React.FC = () => {
 
   const [collapsedCards, setCollapsedCards] = useState<Record<string, boolean>>({});
   const [collapsedGuidance, setCollapsedGuidance] = useState<Record<string, boolean>>({});
+  const [expandedCompactExercises, setExpandedCompactExercises] = useState<
+    Record<string, boolean>
+  >({});
   const [activeCardIdx, setActiveCardIdx] = useState<number>(0);
   const touchStartXRef = useRef<number | null>(null);
 
@@ -122,10 +131,10 @@ export const LogView: React.FC = () => {
 
   const [activeSetOverrideKey, setActiveSetOverrideKey] = useState<string | null>(null);
 
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
-  const triggerToast = (msg: string) => {
-    setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 2600);
+  const [toastState, setToastState] = useState<{ msg: string; isError?: boolean } | null>(null);
+  const triggerToast = (msg: string, isError = false) => {
+    setToastState({ msg, isError });
+    setTimeout(() => setToastState(null), isError ? 4500 : 2600);
   };
 
   const todayIso = getTodayIsoDate();
@@ -299,17 +308,27 @@ export const LogView: React.FC = () => {
   }, [logLayoutMode, draftWorkouts, activeCardIdx]);
 
   return (
-    <div className="space-y-4 pb-40 md:pb-24">
+    <div className="space-y-4 pb-40 md:pb-24 min-w-0 max-w-full">
       {/* Toast Notification */}
-      {toastMessage && (
-        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-2xl bg-slate-900 dark:bg-orange-500 text-white text-xs font-bold shadow-lg flex items-center gap-2 animate-in fade-in slide-in-from-top-2">
-          <CheckCircle2 className="w-4 h-4 text-orange-400 dark:text-white" />
-          {toastMessage}
+      {toastState && (
+        <div
+          className={`fixed top-16 left-1/2 -translate-x-1/2 z-50 max-w-[92vw] px-4 py-2 rounded-2xl text-white text-xs font-bold shadow-lg flex items-center gap-2 animate-in fade-in slide-in-from-top-2 ${
+            toastState.isError
+              ? 'bg-rose-600 dark:bg-rose-600'
+              : 'bg-slate-900 dark:bg-orange-500'
+          }`}
+        >
+          {toastState.isError ? (
+            <AlertTriangle className="w-4 h-4 shrink-0 text-white" />
+          ) : (
+            <CheckCircle2 className="w-4 h-4 shrink-0 text-orange-400 dark:text-white" />
+          )}
+          <span className="truncate">{toastState.msg}</span>
         </div>
       )}
 
       {/* Top Date & Session Control Bar */}
-      <div className="bg-white dark:bg-slate-900 rounded-3xl p-4 border border-slate-200/80 dark:border-slate-800 shadow-xs space-y-3">
+      <div className="bg-white dark:bg-slate-900 rounded-3xl p-3.5 sm:p-4 border border-slate-200/70 dark:border-slate-800/80 space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           {/* Date Stepper */}
           <div className="flex items-center gap-1.5">
@@ -369,18 +388,50 @@ export const LogView: React.FC = () => {
             )}
           </div>
 
-          {/* Right: List vs Swipeable Cards Toggle + Volume Summary */}
-          <div className="flex items-center gap-2">
+          {/* Right: Compact/Detailed + List/Cards Toggles + Volume Summary */}
+          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+            {/* Compact vs Detailed Density Switcher */}
+            <div className="inline-flex rounded-xl bg-slate-100 dark:bg-slate-800 p-0.5 border border-slate-200/60 dark:border-slate-700/60">
+              <button
+                type="button"
+                data-tooltip="Compact view — fits more exercises on screen"
+                title="Compact view — fits more exercises on screen"
+                onClick={() => setLogDensityMode('compact')}
+                className={`px-2 sm:px-2.5 py-1.5 rounded-lg text-[11px] font-bold inline-flex items-center gap-1 transition-all ${
+                  logDensityMode === 'compact'
+                    ? 'bg-orange-500 text-white'
+                    : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                <Minimize2 className="w-3.5 h-3.5" />
+                <span>Compact</span>
+              </button>
+              <button
+                type="button"
+                data-tooltip="Detailed view — shows ghost stats, overrides & notes"
+                title="Detailed view — shows ghost stats, overrides & notes"
+                onClick={() => setLogDensityMode('detailed')}
+                className={`px-2 sm:px-2.5 py-1.5 rounded-lg text-[11px] font-bold inline-flex items-center gap-1 transition-all ${
+                  logDensityMode === 'detailed'
+                    ? 'bg-orange-500 text-white'
+                    : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                <Maximize2 className="w-3.5 h-3.5" />
+                <span>Detailed</span>
+              </button>
+            </div>
+
             {/* List vs Swipeable Cards View Switcher */}
-            <div className="inline-flex rounded-xl bg-slate-100 dark:bg-slate-800 p-0.5 border border-slate-200/70 dark:border-slate-700/70">
+            <div className="inline-flex rounded-xl bg-slate-100 dark:bg-slate-800 p-0.5 border border-slate-200/60 dark:border-slate-700/60">
               <button
                 type="button"
                 data-tooltip="Stacked List View"
                 title="Stacked List View"
                 onClick={() => setLogLayoutMode('list')}
-                className={`px-2.5 py-1.5 rounded-lg text-xs font-bold inline-flex items-center gap-1 transition-all ${
+                className={`px-2 sm:px-2.5 py-1.5 rounded-lg text-[11px] font-bold inline-flex items-center gap-1 transition-all ${
                   logLayoutMode === 'list'
-                    ? 'bg-orange-500 text-white shadow-2xs'
+                    ? 'bg-orange-500 text-white'
                     : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
                 }`}
               >
@@ -392,9 +443,9 @@ export const LogView: React.FC = () => {
                 data-tooltip="Swipeable Workout Cards View"
                 title="Swipeable Workout Cards View"
                 onClick={() => setLogLayoutMode('cards')}
-                className={`px-2.5 py-1.5 rounded-lg text-xs font-bold inline-flex items-center gap-1 transition-all ${
+                className={`px-2 sm:px-2.5 py-1.5 rounded-lg text-[11px] font-bold inline-flex items-center gap-1 transition-all ${
                   logLayoutMode === 'cards'
-                    ? 'bg-orange-500 text-white shadow-2xs'
+                    ? 'bg-orange-500 text-white'
                     : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
                 }`}
               >
@@ -425,18 +476,18 @@ export const LogView: React.FC = () => {
             onClick={() => {
               const count = loadProgrammedForDate(activeDate);
               if (count > 0) {
-                triggerToast(`Loaded ${count} programmed workout(s)`);
+                triggerToast(`Loaded ${count} scheduled workout(s)`);
               } else if (scheduledForActiveDate.length > 0) {
-                triggerToast('Programmed workouts are already loaded below');
+                triggerToast('Today’s scheduled workouts are already loaded');
               } else {
                 triggerToast('No workouts scheduled on this date — pick a workout!');
                 setPresetPickerModal({ open: true, mode: 'add' });
               }
             }}
-            className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-2xl bg-orange-500 hover:bg-orange-600 text-white font-semibold text-xs shadow-sm shadow-orange-500/20 transition-all"
+            className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-2xl bg-orange-500 hover:bg-orange-600 text-white font-semibold text-xs transition-all"
           >
             <Sparkles className="w-4 h-4" />
-            Load Programmed
+            Load Today&apos;s Plan
             {scheduledForActiveDate.length > 0 && (
               <span className="ml-0.5 px-1.5 py-0.2 rounded-full bg-white/20 text-[11px] font-mono tabular-nums">
                 {scheduledForActiveDate.length}
@@ -452,7 +503,7 @@ export const LogView: React.FC = () => {
             className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-2xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 font-semibold text-xs transition-colors"
           >
             <RefreshCw className="w-3.5 h-3.5 text-orange-500" />
-            Swap / Ad-Hoc Workout
+            Switch Workout
           </button>
 
           {draftWorkouts.length > 0 && (
@@ -463,10 +514,10 @@ export const LogView: React.FC = () => {
               onClick={() => {
                 setPresetPickerModal({ open: true, mode: 'chain' });
               }}
-              className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-2xl border border-dashed border-orange-500/50 hover:border-orange-500 bg-orange-500/[0.04] hover:bg-orange-500/10 text-orange-600 dark:text-orange-400 font-semibold text-xs transition-colors"
+              className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-2xl border border-dashed border-orange-500/40 hover:border-orange-500 bg-orange-500/[0.04] hover:bg-orange-500/10 text-orange-600 dark:text-orange-400 font-semibold text-xs transition-colors"
             >
               <Link2 className="w-3.5 h-3.5" />
-              Chain Another Workout
+              + Add Workout
             </button>
           )}
         </div>
@@ -585,26 +636,26 @@ export const LogView: React.FC = () => {
               return (
                 <div
                   key={draft.logUuid}
-                  className={`rounded-3xl bg-white dark:bg-slate-900 border transition-all shadow-xs overflow-hidden ${
+                  className={`rounded-3xl bg-white dark:bg-slate-900 border transition-all overflow-hidden ${
                     draft.isSaved
                       ? draft.status === 'completed'
-                        ? 'border-emerald-500/40 dark:border-emerald-500/30'
-                        : 'border-amber-500/40'
-                      : 'border-slate-200/90 dark:border-slate-800'
+                        ? 'border-emerald-500/35 dark:border-emerald-500/25'
+                        : 'border-amber-500/35'
+                      : 'border-slate-200/70 dark:border-slate-800/80'
                   }`}
                 >
                   {/* Workout Card Header */}
-                  <div className="p-4 sm:px-5 bg-slate-50/70 dark:bg-slate-800/40 border-b border-slate-200/60 dark:border-slate-800 space-y-2">
+                  <div className="p-3.5 sm:px-5 bg-slate-50/50 dark:bg-slate-800/30 border-b border-slate-200/50 dark:border-slate-800/70 space-y-2">
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <span className="font-mono text-[11px] font-bold px-2 py-0.5 rounded-lg bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 tabular-nums">
-                          {draft.displayId}
-                        </span>
-                        <span className="text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-lg bg-orange-500/15 text-orange-600 dark:text-orange-400">
+                      <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+                        <span className="text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-lg bg-orange-500/12 text-orange-600 dark:text-orange-400">
                           {draft.slotRole || `Workout #${cardIdx + 1}`}
                         </span>
-                        <span className="text-[11px] font-semibold px-2 py-0.5 rounded-lg bg-slate-200/70 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                        <span className="text-[11px] font-semibold px-2 py-0.5 rounded-lg bg-slate-200/60 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
                           {draft.workoutType}
+                        </span>
+                        <span className="font-mono text-[10px] font-medium px-1.5 py-0.5 rounded-md text-slate-400 dark:text-slate-500 tabular-nums">
+                          #{draft.displayId.replace(/^ID-/i, '')}
                         </span>
                         {draft.isSaved && (
                           <span
@@ -1096,11 +1147,292 @@ export const LogView: React.FC = () => {
                             effectiveFormatMode === 'circuit' &&
                             !workoutHasLadder &&
                             ex.trackingType !== 'cardio';
+                          const exKey = `${draft.logUuid}_${exIdx}`;
+                          const isCompactCard =
+                            logDensityMode === 'compact' &&
+                            !expandedCompactExercises[exKey] &&
+                            ex.trackingType !== 'cardio';
+
+                          if (isCompactCard) {
+                            return (
+                              <div
+                                key={`${ex.exerciseUuid}-${exIdx}`}
+                                className="p-2.5 sm:p-3 rounded-2xl bg-slate-50/60 dark:bg-slate-800/25 border border-slate-200/60 dark:border-slate-800/70 space-y-2 min-w-0"
+                              >
+                                {/* Single-Line Compact Header */}
+                                <div className="flex items-center justify-between gap-1.5 min-w-0">
+                                  <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                                    <span className="w-5 h-5 rounded-full bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-slate-100 text-[10px] font-bold flex items-center justify-center shrink-0 tabular-nums">
+                                      {exIdx + 1}
+                                    </span>
+                                    {ex.side && (
+                                      <span className="px-1.5 py-0.5 rounded bg-orange-500 text-white text-[9px] font-bold shrink-0">
+                                        {ex.side}
+                                      </span>
+                                    )}
+                                    <h3 className="font-display font-bold text-sm text-slate-900 dark:text-slate-100 truncate">
+                                      {ex.exerciseName}
+                                    </h3>
+                                    {ex.isPerSide && (
+                                      <span className="text-[10px] font-mono font-bold text-orange-500 shrink-0">
+                                        ×2
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  <div className="flex items-center gap-1 shrink-0">
+                                    {/* Inline Weight Pill */}
+                                    {ex.loadType === 'bodyweight' || ex.loadType === 'none' ? (
+                                      <span className="px-2 py-0.5 rounded-lg bg-slate-200/70 dark:bg-slate-800 text-[11px] font-mono font-semibold text-slate-600 dark:text-slate-300">
+                                        {ex.loadType === 'bodyweight' ? 'BW' : '—'}
+                                      </span>
+                                    ) : (
+                                      <label className="inline-flex items-center px-1.5 py-0.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-700 text-[11px] font-mono font-bold">
+                                        {ex.loadType === 'double_kg' && (
+                                          <span className="text-orange-500 mr-0.5">2×</span>
+                                        )}
+                                        <input
+                                          type="number"
+                                          step="0.5"
+                                          min={0}
+                                          title="Weight (kg)"
+                                          value={ex.weight || ''}
+                                          placeholder={String(ghostEx?.weight ?? 16)}
+                                          onChange={(e) => {
+                                            const val = parseFloat(e.target.value) || 0;
+                                            updateDraftWorkout(draft.logUuid, (curr) => {
+                                              const next = [...curr.exercises];
+                                              next[exIdx] = { ...next[exIdx], weight: val };
+                                              return { ...curr, exercises: next };
+                                            });
+                                          }}
+                                          className="w-9 bg-transparent text-center text-slate-900 dark:text-slate-100 focus:outline-none tabular-nums"
+                                        />
+                                        <span className="text-slate-400 text-[10px]">kg</span>
+                                      </label>
+                                    )}
+
+                                    {ghostEx && (
+                                      <button
+                                        type="button"
+                                        data-tooltip="Fill sets & weight from your last session"
+                                        title="Fill sets & weight from your last session"
+                                        onClick={() =>
+                                          handleAcceptGhostForExercise(draft, exIdx, ghostEx)
+                                        }
+                                        className="px-1.5 py-1 rounded-lg bg-orange-500/10 hover:bg-orange-500 text-orange-600 dark:text-orange-400 hover:text-white text-[10px] font-bold inline-flex items-center gap-0.5 transition-colors"
+                                      >
+                                        <Check className="w-3 h-3" />
+                                        <span className="hidden sm:inline">Fill Last</span>
+                                      </button>
+                                    )}
+
+                                    <button
+                                      type="button"
+                                      data-tooltip="View past performances of this exercise"
+                                      title="View past performances of this exercise"
+                                      onClick={() =>
+                                        setHistoryModalState({
+                                          exerciseUuid: ex.exerciseUuid,
+                                          exerciseName: ex.exerciseName,
+                                          presetUuid: draft.presetUuid,
+                                        })
+                                      }
+                                      className="p-1 rounded-lg bg-white dark:bg-slate-800 border border-slate-200/70 dark:border-slate-700 text-slate-500 hover:text-orange-500 transition-colors"
+                                    >
+                                      <History className="w-3.5 h-3.5" />
+                                    </button>
+
+                                    <button
+                                      type="button"
+                                      data-tooltip="Expand exercise details & notes"
+                                      title="Expand exercise details & notes"
+                                      onClick={() =>
+                                        setExpandedCompactExercises((prev) => ({
+                                          ...prev,
+                                          [exKey]: true,
+                                        }))
+                                      }
+                                      className="p-1 rounded-lg bg-white dark:bg-slate-800 border border-slate-200/70 dark:border-slate-700 text-slate-500 hover:text-orange-500 transition-colors"
+                                    >
+                                      <MoreHorizontal className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
+                                </div>
+
+                                {/* Compact Sets / Complex / Ladder Row */}
+                                {isComplexMode ? (
+                                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                                    {ex.repScheme && ex.repScheme.schemeType !== 'fixed' ? (
+                                      <div className="flex items-center gap-1.5 font-mono text-[11px]">
+                                        <span className="px-1.5 py-0.5 rounded bg-orange-500/15 text-orange-600 dark:text-orange-400 font-bold">
+                                          {ex.repScheme.schemeType === 'pyramid'
+                                            ? `${ex.repScheme.ladderStart}→${ex.repScheme.ladderEnd}→${ex.repScheme.ladderStart}`
+                                            : `${ex.repScheme.ladderStart}→${ex.repScheme.ladderEnd}`}
+                                        </span>
+                                        <span className="text-slate-500">
+                                          {ex.sets.length} rungs •{' '}
+                                          <strong className="text-slate-900 dark:text-slate-100">
+                                            {ex.totalReps} reps
+                                          </strong>
+                                        </span>
+                                      </div>
+                                    ) : (
+                                      <div className="flex items-center gap-1.5">
+                                        <span className="text-[11px] text-slate-500">Reps/rd:</span>
+                                        <input
+                                          type="number"
+                                          min={1}
+                                          value={ex.repsPerRound ?? 1}
+                                          onChange={(e) => {
+                                            const rpr = Math.max(
+                                              1,
+                                              parseInt(e.target.value, 10) || 1
+                                            );
+                                            const completed = draft.completedRounds ?? 0;
+                                            updateDraftWorkout(draft.logUuid, (curr) => {
+                                              const next = [...curr.exercises];
+                                              next[exIdx] = {
+                                                ...next[exIdx],
+                                                repsPerRound: rpr,
+                                                sets: Array.from(
+                                                  { length: completed },
+                                                  (_, i) => ({
+                                                    setNumber: i + 1,
+                                                    reps: rpr,
+                                                  })
+                                                ),
+                                              };
+                                              return { ...curr, exercises: next };
+                                            });
+                                          }}
+                                          className="w-11 h-8 text-xs font-mono font-bold text-center rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700"
+                                        />
+                                        <span className="text-[11px] font-mono text-slate-500 tabular-nums">
+                                          = {ex.totalReps}r
+                                        </span>
+                                      </div>
+                                    )}
+
+                                    <div className="flex items-center gap-1 ml-auto">
+                                      <span className="text-[10px] font-mono text-slate-400">
+                                        RIR
+                                      </span>
+                                      <input
+                                        type="number"
+                                        min={0}
+                                        max={10}
+                                        value={ex.rir ?? ''}
+                                        placeholder={
+                                          ghostEx?.rir !== undefined ? String(ghostEx.rir) : '2'
+                                        }
+                                        onChange={(e) => {
+                                          const val =
+                                            e.target.value === ''
+                                              ? undefined
+                                              : Math.max(0, parseInt(e.target.value, 10) || 0);
+                                          updateDraftWorkout(draft.logUuid, (curr) => {
+                                            const next = [...curr.exercises];
+                                            next[exIdx] = { ...next[exIdx], rir: val };
+                                            return { ...curr, exercises: next };
+                                          });
+                                        }}
+                                        className="w-9 h-8 rounded-lg text-center font-mono text-xs font-bold tabular-nums bg-amber-500/10 border border-amber-500/25 text-amber-800 dark:text-amber-300 focus:outline-none focus:ring-1 focus:ring-orange-500"
+                                      />
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div className="flex flex-wrap items-center gap-1.5">
+                                    {(ex.sets || []).map((setObj, sIdx) => {
+                                      const ghostSet = ghostEx?.sets?.[sIdx];
+                                      const ghostRepPlaceholder = ghostSet
+                                        ? String(ghostSet.reps)
+                                        : ghostEx?.sets?.[0]
+                                        ? String(ghostEx.sets[0].reps)
+                                        : String(sIdx + 1);
+                                      return (
+                                        <input
+                                          key={sIdx}
+                                          type="number"
+                                          inputMode="numeric"
+                                          min={0}
+                                          title={`${isCircuitMode ? 'Round' : 'Set'} ${sIdx + 1} reps`}
+                                          value={setObj.reps === 0 ? '' : setObj.reps}
+                                          placeholder={ghostRepPlaceholder}
+                                          onChange={(e) =>
+                                            handleSetRepChange(draft, exIdx, sIdx, e.target.value)
+                                          }
+                                          className={`w-10 h-9 rounded-xl text-center font-mono text-xs font-bold tabular-nums border transition-all focus:outline-none focus:ring-2 focus:ring-orange-500 ${
+                                            setObj.reps > 0
+                                              ? 'bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100'
+                                              : 'bg-slate-100/80 dark:bg-slate-900/50 border-dashed border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 placeholder:text-slate-400/60'
+                                          }`}
+                                        />
+                                      );
+                                    })}
+
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        handleAddSetBox(
+                                          draft,
+                                          exIdx,
+                                          ghostEx?.sets?.[0]?.reps || 0
+                                        )
+                                      }
+                                      title="Add Set"
+                                      className="w-8 h-9 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 hover:border-orange-500 hover:text-orange-500 flex items-center justify-center text-slate-400"
+                                    >
+                                      <Plus className="w-3.5 h-3.5" />
+                                    </button>
+                                    {(ex.sets || []).length > 1 && (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleRemoveLastSetBox(draft, exIdx)}
+                                        title="Remove Last Set"
+                                        className="w-7 h-9 rounded-xl border border-dashed border-slate-200 dark:border-slate-800 hover:border-rose-400 hover:text-rose-500 flex items-center justify-center text-slate-400"
+                                      >
+                                        <Minus className="w-3 h-3" />
+                                      </button>
+                                    )}
+
+                                    <div className="flex items-center gap-1 ml-auto">
+                                      <span className="text-[10px] font-mono text-slate-400">
+                                        RIR
+                                      </span>
+                                      <input
+                                        type="number"
+                                        min={0}
+                                        max={10}
+                                        title="Reps in Reserve"
+                                        value={ex.rir ?? ''}
+                                        placeholder={
+                                          ghostEx?.rir !== undefined ? String(ghostEx.rir) : '2'
+                                        }
+                                        onChange={(e) => {
+                                          const val =
+                                            e.target.value === ''
+                                              ? undefined
+                                              : Math.max(0, parseInt(e.target.value, 10) || 0);
+                                          updateDraftWorkout(draft.logUuid, (curr) => {
+                                            const next = [...curr.exercises];
+                                            next[exIdx] = { ...next[exIdx], rir: val };
+                                            return { ...curr, exercises: next };
+                                          });
+                                        }}
+                                        className="w-9 h-9 rounded-xl text-center font-mono text-xs font-bold tabular-nums bg-amber-500/10 border border-amber-500/25 text-amber-800 dark:text-amber-300 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                                      />
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          }
 
                           return (
                             <div
                               key={`${ex.exerciseUuid}-${exIdx}`}
-                              className="p-3.5 sm:p-4 rounded-2xl bg-slate-50/70 dark:bg-slate-800/30 border border-slate-200/80 dark:border-slate-800/90 space-y-3"
+                              className="p-3.5 sm:p-4 rounded-2xl bg-slate-50/70 dark:bg-slate-800/30 border border-slate-200/70 dark:border-slate-800/80 space-y-3"
                             >
                               {/* Exercise Row Header */}
                               <div className="space-y-1.5">
@@ -1177,6 +1509,23 @@ export const LogView: React.FC = () => {
                                     >
                                       <Trash2 className="w-3.5 h-3.5" />
                                     </button>
+
+                                    {logDensityMode === 'compact' && (
+                                      <button
+                                        type="button"
+                                        data-tooltip="Collapse back to compact row"
+                                        title="Collapse back to compact row"
+                                        onClick={() =>
+                                          setExpandedCompactExercises((prev) => ({
+                                            ...prev,
+                                            [exKey]: false,
+                                          }))
+                                        }
+                                        className="px-2 py-1 rounded-xl bg-slate-200/70 dark:bg-slate-700/70 text-[10px] font-bold text-slate-600 dark:text-slate-300 hover:text-orange-500 transition-colors"
+                                      >
+                                        Compact
+                                      </button>
+                                    )}
                                   </div>
                                 </div>
 
@@ -1918,30 +2267,32 @@ export const LogView: React.FC = () => {
                           Add Exercise
                         </button>
 
-                        <label
-                          title="Also save any added/changed exercises back to your Library template"
-                          className="flex items-center gap-1.5 text-xs font-medium text-slate-500 dark:text-slate-400 cursor-pointer"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={Boolean(draft.updatePresetOnSave)}
-                            onChange={(e) => {
-                              const checked = e.target.checked;
-                              updateDraftWorkout(draft.logUuid, (curr) => ({
-                                ...curr,
-                                updatePresetOnSave: checked,
-                              }));
-                            }}
-                            className="rounded border-slate-300 text-orange-500 focus:ring-orange-500"
-                          />
-                          Save changes to Library template
-                        </label>
+                        {logDensityMode !== 'compact' && (
+                          <label
+                            title="Also save any added/changed exercises back to your Library template"
+                            className="flex items-center gap-1.5 text-xs font-medium text-slate-500 dark:text-slate-400 cursor-pointer"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={Boolean(draft.updatePresetOnSave)}
+                              onChange={(e) => {
+                                const checked = e.target.checked;
+                                updateDraftWorkout(draft.logUuid, (curr) => ({
+                                  ...curr,
+                                  updatePresetOnSave: checked,
+                                }));
+                              }}
+                              className="rounded border-slate-300 text-orange-500 focus:ring-orange-500"
+                            />
+                            Save changes to Library template
+                          </label>
+                        )}
                       </div>
 
                       {/* Workout Session Notes & Completion Controls */}
-                      <div className="pt-3 border-t border-slate-200/70 dark:border-slate-800 space-y-3">
+                      <div className="pt-3 border-t border-slate-200/60 dark:border-slate-800/80 space-y-3">
                         <textarea
-                          rows={2}
+                          rows={logDensityMode === 'compact' ? 1 : 2}
                           value={draft.sessionNotes || ''}
                           placeholder="Workout notes (how it felt, energy, grip, weather, etc.)..."
                           onChange={(e) => {
@@ -1951,7 +2302,7 @@ export const LogView: React.FC = () => {
                               sessionNotes: val,
                             }));
                           }}
-                          className="w-full px-3.5 py-2.5 text-xs rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:border-orange-500"
+                          className="w-full px-3.5 py-2 text-xs rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/80 text-slate-800 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:border-orange-500"
                         />
 
                         <div className="flex flex-wrap items-center justify-end gap-2">
@@ -1959,33 +2310,47 @@ export const LogView: React.FC = () => {
                             type="button"
                             data-tooltip="Log workout as incomplete"
                             title="Log workout as incomplete"
-                            onClick={() => {
-                              saveDraftWorkout(
+                            onClick={async () => {
+                              const res = await saveDraftWorkout(
                                 draft.logUuid,
                                 'did_not_complete',
                                 draft.updatePresetOnSave
                               );
-                              triggerToast(`Saved as Did Not Complete`);
+                              if (res.ok) {
+                                triggerToast('Saved as Incomplete');
+                              } else {
+                                triggerToast(
+                                  `Cloud sync error: ${res.error || 'Saved locally only'}`,
+                                  true
+                                );
+                              }
                             }}
                             className="px-3.5 py-2 rounded-2xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300 font-semibold text-xs inline-flex items-center gap-1.5 transition-colors"
                           >
                             <XCircle className="w-4 h-4" />
-                            Did Not Complete
+                            Incomplete
                           </button>
 
                           <button
                             type="button"
                             data-tooltip="Save completed workout to History"
                             title="Save completed workout to History"
-                            onClick={() => {
-                              saveDraftWorkout(
+                            onClick={async () => {
+                              const res = await saveDraftWorkout(
                                 draft.logUuid,
                                 'completed',
                                 draft.updatePresetOnSave
                               );
-                              triggerToast(`Completed & Saved "${draft.workoutTitleSnapshot}"!`);
+                              if (res.ok) {
+                                triggerToast(`Completed & Saved "${draft.workoutTitleSnapshot}"!`);
+                              } else {
+                                triggerToast(
+                                  `Cloud sync error: ${res.error || 'Saved locally only'}`,
+                                  true
+                                );
+                              }
                             }}
-                            className="px-5 py-2.5 rounded-2xl bg-orange-500 hover:bg-orange-600 text-white font-bold text-xs inline-flex items-center gap-1.5 shadow-md shadow-orange-500/20 transition-all"
+                            className="px-5 py-2.5 rounded-2xl bg-orange-500 hover:bg-orange-600 text-white font-bold text-xs inline-flex items-center gap-1.5 transition-all"
                           >
                             <Save className="w-4 h-4" />
                             {draft.isSaved ? 'Update Saved Log' : 'Complete Workout'}
@@ -2009,9 +2374,9 @@ export const LogView: React.FC = () => {
               <div>
                 <h3 className="font-display font-bold text-base text-slate-900 dark:text-slate-100">
                   {presetPickerModal.mode === 'swap'
-                    ? 'Swap Workout'
+                    ? 'Switch Workout'
                     : presetPickerModal.mode === 'chain'
-                    ? 'Chain Another Workout'
+                    ? 'Add Workout'
                     : 'Choose Workout'}
                 </h3>
                 <p className="text-xs text-slate-500 dark:text-slate-400">
@@ -2029,7 +2394,7 @@ export const LogView: React.FC = () => {
 
             <div className="p-4 border-b border-slate-100 dark:border-slate-800 space-y-3">
               <div className="flex flex-wrap items-center gap-2">
-                <div className="relative flex-1 min-w-[200px]">
+                <div className="relative flex-1 min-w-0 w-full sm:w-auto">
                   <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                   <input
                     type="text"

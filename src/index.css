@@ -3,6 +3,13 @@
 @tailwind utilities;
 
 @layer base {
+  html,
+  body,
+  #root {
+    max-width: 100vw;
+    overflow-x: hidden;
+  }
+
   body {
     font-family: 'Inter', system-ui, -apple-system, sans-serif;
     -webkit-tap-highlight-color: transparent;
@@ -27,6 +34,7 @@
    When troubleshooting Mobile view on a wide laptop screen, prevent desktop
    media-query grid columns from squishing content inside the 420px phone frame */
 .force-mobile-view .md\:grid-cols-2,
+.force-mobile-view .sm\:grid-cols-2,
 .force-mobile-view .lg\:grid-cols-12,
 .force-mobile-view .sm\:grid-cols-3,
 .force-mobile-view .sm\:grid-cols-4,

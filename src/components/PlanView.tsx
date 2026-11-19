@@ -557,7 +557,7 @@ export const PlanView: React.FC = () => {
                           value={inlinePresetSearch}
                           onChange={(e) => setInlinePresetSearch(e.target.value)}
                           placeholder="Search preset to add to this day..."
-                          className="flex-1 min-w-[180px] px-3 py-1.5 text-xs rounded-xl bg-slate-100 dark:bg-slate-800 focus:outline-none focus:ring-1 focus:ring-orange-500"
+                          className="min-w-0 w-full sm:w-auto sm:flex-1 px-3 py-1.5 text-xs rounded-xl bg-slate-100 dark:bg-slate-800 focus:outline-none focus:ring-1 focus:ring-orange-500"
                         />
                         <button
                           type="button"

@@ -11,6 +11,8 @@ import {
   Cloud,
   Smartphone,
   Laptop,
+  AlertTriangle,
+  X,
 } from 'lucide-react';
 import { useWorkoutStore } from '../store/useWorkoutStore';
 import { ThemeMode } from '../types/workout';
@@ -42,6 +44,9 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
     meta,
     setTheme,
     authUser,
+    syncStatus,
+    lastSyncError,
+    clearSyncError,
     timer,
   } = useWorkoutStore();
 
@@ -74,7 +79,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
 
   return (
     <div
-      className={`min-h-screen transition-all ${
+      className={`min-h-screen w-full max-w-full overflow-x-hidden transition-all ${
         isForcedMobile
           ? 'bg-slate-900/95 py-3 px-2 flex flex-col items-center justify-start'
           : 'bg-slate-50 dark:bg-slate-950'
@@ -220,24 +225,48 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
                 type="button"
                 onClick={() => setActiveTab('settings')}
                 data-tooltip={
-                  authUser
+                  syncStatus === 'error'
+                    ? `Sync error: ${lastSyncError || 'Check Settings'}`
+                    : authUser
                     ? `Signed in as ${authUser.email}`
                     : 'Offline-first mode — click to configure Cloud Sync'
                 }
                 data-tooltip-pos="bottom"
                 title={
-                  authUser
+                  syncStatus === 'error'
+                    ? `Sync error: ${lastSyncError || 'Check Settings'}`
+                    : authUser
                     ? `Signed in as ${authUser.email}`
                     : 'Offline-first mode — click to open Sync settings'
                 }
                 className={`px-2.5 py-1.5 rounded-xl text-[11px] font-semibold inline-flex items-center gap-1 border transition-colors ${
-                  authUser
-                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-600 dark:text-emerald-400'
-                    : 'bg-slate-100 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-orange-500'
+                  syncStatus === 'error'
+                    ? 'bg-rose-500/10 border-rose-500/30 text-rose-600 dark:text-rose-400'
+                    : syncStatus === 'syncing'
+                    ? 'bg-orange-500/10 border-orange-500/30 text-orange-600 dark:text-orange-400'
+                    : authUser
+                    ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-600 dark:text-emerald-400'
+                    : 'bg-slate-100 dark:bg-slate-800 border-slate-200/70 dark:border-slate-700/70 text-slate-600 dark:text-slate-300 hover:border-orange-500'
                 }`}
               >
-                <Cloud className="w-3.5 h-3.5 text-orange-500" />
-                <span>{authUser ? 'Synced' : 'Offline'}</span>
+                <Cloud
+                  className={`w-3.5 h-3.5 ${
+                    syncStatus === 'error'
+                      ? 'text-rose-500'
+                      : syncStatus === 'syncing'
+                      ? 'text-orange-500 animate-pulse'
+                      : 'text-orange-500'
+                  }`}
+                />
+                <span>
+                  {syncStatus === 'error'
+                    ? 'Sync Error'
+                    : syncStatus === 'syncing'
+                    ? 'Syncing'
+                    : authUser
+                    ? 'Synced'
+                    : 'Offline'}
+                </span>
               </button>
 
               {/* Theme Switcher Button */}
@@ -247,7 +276,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
                 data-tooltip={`Theme: ${meta.theme} (click to switch)`}
                 data-tooltip-pos="bottom"
                 title={`Current theme: ${meta.theme} (click to cycle Light / Dark / System)`}
-                className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:text-orange-500 border border-slate-200/70 dark:border-slate-700/70 transition-colors"
+                className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:text-orange-500 border border-slate-200/60 dark:border-slate-700/60 transition-colors"
               >
                 {meta.theme === 'light' ? (
                   <Sun className="w-4 h-4 text-orange-500" />
@@ -262,10 +291,29 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
 
           {/* Main View Content */}
           <main
-            className={`flex-1 w-full mx-auto px-3 sm:px-5 pt-3.5 ${
+            className={`flex-1 w-full min-w-0 overflow-x-hidden mx-auto px-3 sm:px-5 pt-3.5 ${
               isForcedMobile ? 'max-w-full' : 'max-w-5xl'
             }`}
           >
+            {lastSyncError && (
+              <div className="mb-3 rounded-2xl bg-rose-500/10 border border-rose-500/25 px-3.5 py-2.5 flex items-start justify-between gap-2 text-xs text-rose-700 dark:text-rose-300">
+                <div className="flex items-start gap-2 min-w-0">
+                  <AlertTriangle className="w-4 h-4 shrink-0 text-rose-500 mt-0.5" />
+                  <div className="min-w-0 break-words">
+                    <span className="font-semibold">Cloud Sync failed: </span>
+                    <span>{lastSyncError}</span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={clearSyncError}
+                  aria-label="Dismiss sync error"
+                  className="p-1 rounded-lg hover:bg-rose-500/15 shrink-0 text-rose-500"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
             {children}
           </main>
 

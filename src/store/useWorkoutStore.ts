@@ -37,6 +37,7 @@ import {
   pullAllUserCollections,
   pushAllLocalDataToFirestore,
   removeFirestoreDoc,
+  subscribeToUserCollections,
   upsertFirestoreDoc,
 } from '../services/firebase';
 
@@ -78,6 +79,7 @@ interface WorkoutStoreState {
   activeTab: 'log' | 'plan' | 'library' | 'history' | 'settings';
   viewportMode: 'auto' | 'mobile' | 'desktop';
   logLayoutMode: 'list' | 'cards';
+  logDensityMode: 'compact' | 'detailed';
   activeDate: string;
   activeSessionGroupUuid: string;
   draftWorkouts: DraftWorkoutCard[];
@@ -89,6 +91,8 @@ interface WorkoutStoreState {
   setActiveTab: (tab: 'log' | 'plan' | 'library' | 'history' | 'settings') => void;
   setViewportMode: (mode: 'auto' | 'mobile' | 'desktop') => void;
   setLogLayoutMode: (mode: 'list' | 'cards') => void;
+  setLogDensityMode: (mode: 'compact' | 'detailed') => void;
+  clearSyncError: () => void;
   setTheme: (theme: ThemeMode) => void;
   setDefaultAutoStartRestTimer: (enabled: boolean) => void;
   setDefaultDistanceUnit: (unit: DistanceUnit) => void;
@@ -115,8 +119,8 @@ interface WorkoutStoreState {
     logUuid: string,
     status?: 'completed' | 'did_not_complete',
     alsoUpdatePreset?: boolean
-  ) => void;
-  saveAllDraftWorkouts: () => void;
+  ) => Promise<{ ok: boolean; error?: string }>;
+  saveAllDraftWorkouts: () => Promise<void>;
 
   // Ghost Text & History Lookup
   getGhostExerciseData: (
@@ -191,6 +195,7 @@ interface WorkoutStoreState {
   setAuthUser: (
     user: { uid: string; email: string | null; displayName: string | null; photoURL: string | null } | null
   ) => void;
+  startRealtimeSync: (uid: string) => () => void;
   syncWithFirestore: () => Promise<void>;
   pushLocalToCloud: () => Promise<void>;
   resetToDemoSeed: () => void;
@@ -400,6 +405,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
       activeTab: 'log',
       viewportMode: 'auto',
       logLayoutMode: 'list',
+      logDensityMode: 'detailed',
       activeDate: getTodayIsoDate(),
       activeSessionGroupUuid: initialFloor.sessionGroupUuid,
       draftWorkouts: initialFloor.drafts,
@@ -421,12 +427,17 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
       setActiveTab: (tab) => set({ activeTab: tab }),
       setViewportMode: (mode) => set({ viewportMode: mode }),
       setLogLayoutMode: (mode) => set({ logLayoutMode: mode }),
+      setLogDensityMode: (mode) => set({ logDensityMode: mode }),
+      clearSyncError: () => set({ lastSyncError: undefined, syncStatus: get().authUser ? 'synced' : 'local' }),
 
       setTheme: (theme) => {
         const nextMeta = { ...get().meta, theme, updatedAt: new Date().toISOString() };
         set({ meta: nextMeta });
         if (get().authUser) {
-          upsertFirestoreDoc('wt_meta', get().authUser!.uid, nextMeta).catch(() => {});
+          upsertFirestoreDoc('wt_meta', get().authUser!.uid, nextMeta, get().authUser!.uid).catch((err) => {
+            console.error('[Sync] Failed to save theme to Firestore:', err);
+            set({ syncStatus: 'error', lastSyncError: err?.message || 'Failed to sync preferences' });
+          });
         }
       },
 
@@ -438,7 +449,10 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         };
         set({ meta: nextMeta });
         if (get().authUser) {
-          upsertFirestoreDoc('wt_meta', get().authUser!.uid, nextMeta).catch(() => {});
+          upsertFirestoreDoc('wt_meta', get().authUser!.uid, nextMeta, get().authUser!.uid).catch((err) => {
+            console.error('[Sync] Failed to save timer pref to Firestore:', err);
+            set({ syncStatus: 'error', lastSyncError: err?.message || 'Failed to sync preferences' });
+          });
         }
       },
 
@@ -450,7 +464,10 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         };
         set({ meta: nextMeta });
         if (get().authUser) {
-          upsertFirestoreDoc('wt_meta', get().authUser!.uid, nextMeta).catch(() => {});
+          upsertFirestoreDoc('wt_meta', get().authUser!.uid, nextMeta, get().authUser!.uid).catch((err) => {
+            console.error('[Sync] Failed to save distance unit to Firestore:', err);
+            set({ syncStatus: 'error', lastSyncError: err?.message || 'Failed to sync preferences' });
+          });
         }
       },
 
@@ -462,7 +479,10 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         };
         set({ meta: nextMeta });
         if (get().authUser) {
-          upsertFirestoreDoc('wt_meta', get().authUser!.uid, nextMeta).catch(() => {});
+          upsertFirestoreDoc('wt_meta', get().authUser!.uid, nextMeta, get().authUser!.uid).catch((err) => {
+            console.error('[Sync] Failed to save active program to Firestore:', err);
+            set({ syncStatus: 'error', lastSyncError: err?.message || 'Failed to sync active program' });
+          });
         }
       },
 
@@ -738,14 +758,17 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         });
 
         if (state.authUser) {
-          removeFirestoreDoc('wt_logs', logUuid).catch(() => {});
+          removeFirestoreDoc('wt_logs', logUuid).catch((err) => {
+            console.error('[Sync] Failed to delete log from Firestore:', err);
+            set({ syncStatus: 'error', lastSyncError: err?.message || 'Failed to delete log from cloud' });
+          });
         }
       },
 
-      saveDraftWorkout: (logUuid, statusOverride, alsoUpdatePreset) => {
+      saveDraftWorkout: async (logUuid, statusOverride, alsoUpdatePreset) => {
         const state = get();
         const draftIdx = state.draftWorkouts.findIndex((d) => d.logUuid === logUuid);
-        if (draftIdx === -1) return;
+        if (draftIdx === -1) return { ok: false, error: 'Workout card not found' };
 
         const draft = state.draftWorkouts[draftIdx];
         const finalStatus = statusOverride || draft.status || 'completed';
@@ -843,6 +866,9 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
               defaultSets: Math.max(1, lex.sets.length || lex.roundsCompleted || 1),
               defaultReps:
                 lex.sets.length > 0 && lex.sets[0].reps > 0 ? String(lex.sets[0].reps) : '10',
+              repScheme: lex.repScheme,
+              side: lex.side,
+              isPerSide: lex.isPerSide,
               cardioMode: lex.mode,
               defaultDistanceUnit: lex.distanceUnit,
               baseNotes: lex.exerciseNotes,
@@ -871,28 +897,47 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
 
         if (state.authUser) {
           const uid = state.authUser.uid;
-          upsertFirestoreDoc('wt_logs', logRecord.logUuid, logRecord).catch(() => {});
-          upsertFirestoreDoc('wt_meta', uid, nextMeta).catch(() => {});
-          if (nextSchedules[draft.date]) {
-            upsertFirestoreDoc(
-              'wt_schedule',
-              `${uid}_${draft.date}`,
-              nextSchedules[draft.date]
-            ).catch(() => {});
-          }
-          if (alsoUpdatePreset || draft.updatePresetOnSave) {
-            const updatedPre = nextPresets.find((p) => p.presetUuid === draft.presetUuid);
-            if (updatedPre) {
-              upsertFirestoreDoc('wt_presets', updatedPre.presetUuid, updatedPre).catch(() => {});
+          set({ syncStatus: 'syncing', lastSyncError: undefined });
+          try {
+            const writes: Promise<void>[] = [
+              upsertFirestoreDoc('wt_logs', logRecord.logUuid, logRecord, uid),
+              upsertFirestoreDoc('wt_meta', uid, nextMeta, uid),
+            ];
+            if (nextSchedules[draft.date]) {
+              writes.push(
+                upsertFirestoreDoc(
+                  'wt_schedule',
+                  `${uid}_${draft.date}`,
+                  nextSchedules[draft.date],
+                  uid
+                )
+              );
             }
+            if (alsoUpdatePreset || draft.updatePresetOnSave) {
+              const updatedPre = nextPresets.find((p) => p.presetUuid === draft.presetUuid);
+              if (updatedPre) {
+                writes.push(
+                  upsertFirestoreDoc('wt_presets', updatedPre.presetUuid, updatedPre, uid)
+                );
+              }
+            }
+            await Promise.all(writes);
+            set({ syncStatus: 'synced', lastSyncError: undefined });
+            return { ok: true };
+          } catch (err: any) {
+            const msg = err?.message || 'Cloud sync failed while saving workout log';
+            console.error('[Sync] saveDraftWorkout Firestore error:', err);
+            set({ syncStatus: 'error', lastSyncError: msg });
+            return { ok: false, error: msg };
           }
         }
+        return { ok: true };
       },
 
-      saveAllDraftWorkouts: () => {
+      saveAllDraftWorkouts: async () => {
         const drafts = get().draftWorkouts;
         for (const d of drafts) {
-          get().saveDraftWorkout(d.logUuid, d.status);
+          await get().saveDraftWorkout(d.logUuid, d.status);
         }
       },
 
@@ -1144,7 +1189,11 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
 
         set({ presets: nextPresets, exercises: nextExercises });
         if (state.authUser) {
-          upsertFirestoreDoc('wt_presets', cleanPreset.presetUuid, cleanPreset).catch(() => {});
+          const uid = state.authUser.uid;
+          upsertFirestoreDoc('wt_presets', cleanPreset.presetUuid, cleanPreset, uid).catch((err) => {
+            console.error('[Sync] Failed to save preset:', err);
+            set({ syncStatus: 'error', lastSyncError: err?.message || 'Failed to sync preset' });
+          });
         }
       },
 
@@ -1168,7 +1217,10 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         const state = get();
         set({ presets: state.presets.filter((p) => p.presetUuid !== presetUuid) });
         if (state.authUser) {
-          removeFirestoreDoc('wt_presets', presetUuid).catch(() => {});
+          removeFirestoreDoc('wt_presets', presetUuid).catch((err) => {
+            console.error('[Sync] Failed to delete preset:', err);
+            set({ syncStatus: 'error', lastSyncError: err?.message || 'Failed to delete preset' });
+          });
         }
       },
 
@@ -1187,7 +1239,10 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           : [clean, ...state.exercises];
         set({ exercises: nextExercises });
         if (state.authUser) {
-          upsertFirestoreDoc('wt_exercises', clean.exerciseUuid, clean).catch(() => {});
+          upsertFirestoreDoc('wt_exercises', clean.exerciseUuid, clean, state.authUser.uid).catch((err) => {
+            console.error('[Sync] Failed to save exercise:', err);
+            set({ syncStatus: 'error', lastSyncError: err?.message || 'Failed to sync exercise' });
+          });
         }
       },
 
@@ -1206,7 +1261,10 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           : [clean, ...state.programs];
         set({ programs: nextPrograms });
         if (state.authUser) {
-          upsertFirestoreDoc('wt_programs', clean.programUuid, clean).catch(() => {});
+          upsertFirestoreDoc('wt_programs', clean.programUuid, clean, state.authUser.uid).catch((err) => {
+            console.error('[Sync] Failed to save program:', err);
+            set({ syncStatus: 'error', lastSyncError: err?.message || 'Failed to sync program' });
+          });
         }
       },
 
@@ -1214,7 +1272,10 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         const state = get();
         set({ programs: state.programs.filter((p) => p.programUuid !== programUuid) });
         if (state.authUser) {
-          removeFirestoreDoc('wt_programs', programUuid).catch(() => {});
+          removeFirestoreDoc('wt_programs', programUuid).catch((err) => {
+            console.error('[Sync] Failed to delete program:', err);
+            set({ syncStatus: 'error', lastSyncError: err?.message || 'Failed to delete program' });
+          });
         }
       },
 
@@ -1235,7 +1296,10 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         };
         set({ schedules: nextSchedules });
         if (state.authUser) {
-          upsertFirestoreDoc('wt_schedule', docId, nextSched).catch(() => {});
+          upsertFirestoreDoc('wt_schedule', docId, nextSched, state.authUser.uid).catch((err) => {
+            console.error('[Sync] Failed to save daily schedule:', err);
+            set({ syncStatus: 'error', lastSyncError: err?.message || 'Failed to sync schedule' });
+          });
         }
       },
 
@@ -1354,6 +1418,17 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         }
 
         set({ schedules: nextSchedules });
+        if (state.authUser) {
+          const uid = state.authUser.uid;
+          Promise.all(
+            Object.values(nextSchedules).map((sch) =>
+              upsertFirestoreDoc('wt_schedule', `${uid}_${sch.date}`, sch, uid)
+            )
+          ).catch((err) => {
+            console.error('[Sync] Auto-fill schedule cloud write failed:', err);
+            set({ syncStatus: 'error', lastSyncError: err?.message || 'Failed to sync auto-filled schedule' });
+          });
+        }
         return { daysModified, itemsCreated };
       },
 
@@ -1364,7 +1439,10 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           draftWorkouts: state.draftWorkouts.filter((d) => d.logUuid !== logUuid),
         });
         if (state.authUser) {
-          removeFirestoreDoc('wt_logs', logUuid).catch(() => {});
+          removeFirestoreDoc('wt_logs', logUuid).catch((err) => {
+            console.error('[Sync] Failed to delete log:', err);
+            set({ syncStatus: 'error', lastSyncError: err?.message || 'Failed to delete log from cloud' });
+          });
         }
       },
 
@@ -1541,6 +1619,20 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           schedules: nextSchedules,
         });
 
+        if (state.authUser) {
+          pushAllLocalDataToFirestore(state.authUser.uid, {
+            exercises: nextExercises,
+            presets: nextPresets,
+            programs: nextPrograms,
+            schedules: nextSchedules,
+            logs: state.logs,
+            meta: state.meta,
+          }).catch((err) => {
+            console.error('[Sync] Failed to push AI import to Firestore:', err);
+            set({ syncStatus: 'error', lastSyncError: err?.message || 'Failed to sync AI import' });
+          });
+        }
+
         return { presetsCount, programsCount, scheduleDaysCount };
       },
 
@@ -1573,23 +1665,125 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           }
         }
 
+        const nextMeta = {
+          ...state.meta,
+          nextLogSequenceNumber: maxSeq,
+          updatedAt: new Date().toISOString(),
+        };
+
         set({
           exercises: mergedExercises,
           presets: mergedPresets,
           logs: mergedLogs,
-          meta: {
-            ...state.meta,
-            nextLogSequenceNumber: maxSeq,
-            updatedAt: new Date().toISOString(),
-          },
+          meta: nextMeta,
         });
+
+        if (state.authUser) {
+          pushAllLocalDataToFirestore(state.authUser.uid, {
+            exercises: mergedExercises,
+            presets: mergedPresets,
+            programs: state.programs,
+            schedules: state.schedules,
+            logs: mergedLogs,
+            meta: nextMeta,
+          }).catch((err) => {
+            console.error('[Sync] Failed to push legacy import to Firestore:', err);
+            set({ syncStatus: 'error', lastSyncError: err?.message || 'Failed to sync imported logs' });
+          });
+        }
       },
 
       setAuthUser: (user) => {
-        set({ authUser: user, syncStatus: user ? 'synced' : 'local' });
+        set({ authUser: user, syncStatus: user ? 'syncing' : 'local', lastSyncError: undefined });
         if (user) {
           get().syncWithFirestore();
         }
+      },
+
+      startRealtimeSync: (uid) => {
+        return subscribeToUserCollections(uid, {
+          onExercises: (remoteExercises) => {
+            if (remoteExercises.length > 0) {
+              set({ exercises: remoteExercises, syncStatus: 'synced' });
+            }
+          },
+          onPresets: (remotePresets) => {
+            if (remotePresets.length > 0) {
+              set({ presets: remotePresets, syncStatus: 'synced' });
+            }
+          },
+          onPrograms: (remotePrograms) => {
+            if (remotePrograms.length > 0) {
+              set({ programs: remotePrograms, syncStatus: 'synced' });
+            }
+          },
+          onSchedules: (remoteSchedules) => {
+            if (remoteSchedules.length > 0) {
+              const scheduleMap: Record<string, DailySchedule> = { ...get().schedules };
+              for (const sch of remoteSchedules) {
+                if (sch.date) scheduleMap[sch.date] = sch;
+              }
+              set({ schedules: scheduleMap, syncStatus: 'synced' });
+            }
+          },
+          onLogs: (remoteLogs) => {
+            const sortedRemote = [...remoteLogs].sort(
+              (a, b) =>
+                (b.date || '').localeCompare(a.date || '') ||
+                (b.updatedAt || b.createdAt || '').localeCompare(
+                  a.updatedAt || a.createdAt || ''
+                )
+            );
+            const state = get();
+            if (sortedRemote.length === 0 && state.logs.length > 0) {
+              return;
+            }
+
+            // Refresh saved draft cards for activeDate while keeping any unsaved in-progress drafts
+            const unsavedDrafts = state.draftWorkouts.filter((d) => !d.isSaved);
+            const remoteForActiveDate = sortedRemote
+              .filter((l) => l.date === state.activeDate)
+              .sort((a, b) => (a.chainOrderIndex ?? 0) - (b.chainOrderIndex ?? 0))
+              .map((l, idx) => {
+                const daySchedule = state.schedules[state.activeDate];
+                const linkedSched = daySchedule?.items.find(
+                  (it) => it.linkedLogUuid === l.logUuid || it.scheduleItemUuid === l.scheduleItemUuid
+                );
+                return {
+                  ...l,
+                  isSaved: true,
+                  coachNotes: linkedSched?.coachNotes,
+                  slotRole: linkedSched?.slotRole || (idx === 0 ? 'Primary' : `Workout #${idx + 1}`),
+                  updatePresetOnSave: false,
+                } as DraftWorkoutCard;
+              });
+
+            const savedIds = new Set(remoteForActiveDate.map((d) => d.logUuid));
+            const mergedDrafts = [
+              ...remoteForActiveDate,
+              ...unsavedDrafts.filter((d) => !savedIds.has(d.logUuid)),
+            ];
+
+            set({
+              logs: sortedRemote,
+              draftWorkouts: mergedDrafts.length > 0 ? mergedDrafts : state.draftWorkouts,
+              syncStatus: 'synced',
+              lastSyncError: undefined,
+            });
+          },
+          onMeta: (remoteMeta) => {
+            if (remoteMeta) {
+              set({ meta: { ...get().meta, ...remoteMeta }, syncStatus: 'synced' });
+            }
+          },
+          onError: (col, err) => {
+            console.error(`[Sync] Realtime subscription error on ${col}:`, err);
+            set({
+              syncStatus: 'error',
+              lastSyncError: `Realtime sync error (${col}): ${err.message}`,
+            });
+          },
+        });
       },
 
       syncWithFirestore: async () => {
@@ -1607,7 +1801,6 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
             remote.presets.length > 0 || remote.logs.length > 0 || remote.programs.length > 0;
 
           if (!hasRemoteData) {
-            // First time signing in on this Firebase project: push local seed/data up
             await pushAllLocalDataToFirestore(user.uid, {
               exercises: get().exercises,
               presets: get().presets,
@@ -1627,16 +1820,51 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
             }
           }
 
+          const sortedLogs = [...remote.logs].sort(
+            (a, b) =>
+              (b.date || '').localeCompare(a.date || '') ||
+              (b.updatedAt || b.createdAt || '').localeCompare(
+                a.updatedAt || a.createdAt || ''
+              )
+          );
+
+          const state = get();
+          const nextExercises = remote.exercises.length > 0 ? remote.exercises : state.exercises;
+          const nextPresets = remote.presets.length > 0 ? remote.presets : state.presets;
+          const nextPrograms = remote.programs.length > 0 ? remote.programs : state.programs;
+          const nextLogs = sortedLogs.length > 0 ? sortedLogs : state.logs;
+          const nextMeta = remote.meta ? { ...state.meta, ...remote.meta } : state.meta;
+
+          // Also refresh drafts for activeDate from pulled remote logs if user hasn't started unsaved edits
+          const hasUnsavedEdits = state.draftWorkouts.some((d) => !d.isSaved);
+          const refreshedFloor = !hasUnsavedEdits
+            ? buildInitialDraftsForDate(
+                state.activeDate,
+                nextLogs,
+                scheduleMap,
+                nextPresets,
+                nextMeta
+              )
+            : null;
+
           set({
-            exercises: remote.exercises.length > 0 ? remote.exercises : get().exercises,
-            presets: remote.presets.length > 0 ? remote.presets : get().presets,
-            programs: remote.programs.length > 0 ? remote.programs : get().programs,
+            exercises: nextExercises,
+            presets: nextPresets,
+            programs: nextPrograms,
             schedules: scheduleMap,
-            logs: remote.logs.length > 0 ? remote.logs : get().logs,
-            meta: remote.meta ? { ...get().meta, ...remote.meta } : get().meta,
+            logs: nextLogs,
+            meta: nextMeta,
+            ...(refreshedFloor
+              ? {
+                  activeSessionGroupUuid: refreshedFloor.sessionGroupUuid,
+                  draftWorkouts: refreshedFloor.drafts,
+                }
+              : {}),
             syncStatus: 'synced',
+            lastSyncError: undefined,
           });
         } catch (err: any) {
+          console.error('[Sync] syncWithFirestore error:', err);
           set({
             syncStatus: 'error',
             lastSyncError: err?.message || 'Firestore sync failed',
@@ -1657,8 +1885,9 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
             logs: state.logs,
             meta: state.meta,
           });
-          set({ syncStatus: 'synced' });
+          set({ syncStatus: 'synced', lastSyncError: undefined });
         } catch (err: any) {
+          console.error('[Sync] pushLocalToCloud error:', err);
           set({
             syncStatus: 'error',
             lastSyncError: err?.message || 'Push to Firestore failed',
@@ -1699,6 +1928,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         meta: state.meta,
         viewportMode: state.viewportMode,
         logLayoutMode: state.logLayoutMode,
+        logDensityMode: state.logDensityMode,
         activeDate: state.activeDate,
         activeSessionGroupUuid: state.activeSessionGroupUuid,
         draftWorkouts: state.draftWorkouts,

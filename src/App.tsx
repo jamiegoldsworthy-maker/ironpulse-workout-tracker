@@ -9,7 +9,7 @@ import { useWorkoutStore } from './store/useWorkoutStore';
 import { initFirebaseServices, subscribeToAuthChanges } from './services/firebase';
 
 export const App: React.FC = () => {
-  const { activeTab, meta, setAuthUser } = useWorkoutStore();
+  const { activeTab, meta, authUser, setAuthUser, startRealtimeSync } = useWorkoutStore();
 
   useEffect(() => {
     const root = document.documentElement;
@@ -48,6 +48,12 @@ export const App: React.FC = () => {
     });
     return () => unsubscribe();
   }, [setAuthUser]);
+
+  useEffect(() => {
+    if (!authUser?.uid) return;
+    const stopRealtime = startRealtimeSync(authUser.uid);
+    return () => stopRealtime();
+  }, [authUser?.uid, startRealtimeSync]);
 
   return (
     <Layout>

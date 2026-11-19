@@ -16,10 +16,12 @@ import {
   setDoc,
   deleteDoc,
   getDocs,
+  onSnapshot,
   query,
   where,
   Firestore,
   writeBatch,
+  Unsubscribe,
 } from 'firebase/firestore';
 
 export interface FirebaseConfigInput {
@@ -31,7 +33,43 @@ export interface FirebaseConfigInput {
   appId: string;
 }
 
+export type WtCollectionName =
+  | 'wt_meta'
+  | 'wt_exercises'
+  | 'wt_presets'
+  | 'wt_programs'
+  | 'wt_schedule'
+  | 'wt_logs';
+
 const RUNTIME_CONFIG_KEY = 'wt_firebase_config_override';
+
+/**
+ * Recursively strips `undefined` values and converts non-finite numbers (`NaN`, `Infinity`)
+ * so Firestore `setDoc` / `writeBatch` never fails due to unsupported field values.
+ */
+export function sanitizeForFirestore<T>(value: T): T {
+  if (value === null || value === undefined) {
+    return null as unknown as T;
+  }
+  if (typeof value === 'number') {
+    return (Number.isFinite(value) ? value : 0) as unknown as T;
+  }
+  if (Array.isArray(value)) {
+    return value
+      .filter((item) => item !== undefined)
+      .map((item) => sanitizeForFirestore(item)) as unknown as T;
+  }
+  if (typeof value === 'object') {
+    const out: Record<string, any> = {};
+    for (const [k, v] of Object.entries(value as Record<string, any>)) {
+      if (v !== undefined) {
+        out[k] = sanitizeForFirestore(v);
+      }
+    }
+    return out as T;
+  }
+  return value;
+}
 
 export function getEffectiveFirebaseConfig(): FirebaseConfigInput | null {
   try {
@@ -68,7 +106,6 @@ export function getEffectiveFirebaseConfig(): FirebaseConfigInput | null {
 
 export function saveRuntimeFirebaseConfig(configJson: string): boolean {
   try {
-    // Allow pasting either strict JSON or JS object snippet from Firebase Console
     const cleaned = configJson
       .replace(/const\s+firebaseConfig\s*=\s*/g, '')
       .replace(/;\s*$/g, '')
@@ -113,7 +150,6 @@ export function initFirebaseServices(): {
       if (!persistenceAttempted && dbInstance) {
         persistenceAttempted = true;
         enableIndexedDbPersistence(dbInstance).catch((err) => {
-          // multi-tab or unsupported browser warning is safe to ignore
           console.warn('Firestore IndexedDB persistence notice:', err?.code || err);
         });
       }
@@ -155,34 +191,60 @@ export function subscribeToAuthChanges(callback: (user: User | null) => void): (
 }
 
 export async function upsertFirestoreDoc<T extends Record<string, any>>(
-  collectionName: 'wt_meta' | 'wt_exercises' | 'wt_presets' | 'wt_programs' | 'wt_schedule' | 'wt_logs',
+  collectionName: WtCollectionName,
   docId: string,
-  data: T
+  data: T,
+  explicitUid?: string
 ): Promise<void> {
   const { db, auth } = initFirebaseServices();
-  if (!db || !auth?.currentUser) return;
-  const uid = auth.currentUser.uid;
-  const cleanData = JSON.parse(JSON.stringify({ ...data, uid }));
-  await setDoc(doc(db, collectionName, docId), cleanData, { merge: true });
+  if (!db) {
+    throw new Error('Firestore is not initialized.');
+  }
+  const uid = auth?.currentUser?.uid || explicitUid;
+  if (!uid) {
+    throw new Error(`Cannot write to ${collectionName}/${docId}: user is not signed in.`);
+  }
+  const cleanData = sanitizeForFirestore({ ...data, uid });
+  try {
+    await setDoc(doc(db, collectionName, docId), cleanData, { merge: true });
+  } catch (err) {
+    console.error(`[Firestore] Failed to write ${collectionName}/${docId}:`, err, cleanData);
+    throw err;
+  }
 }
 
 export async function removeFirestoreDoc(
-  collectionName: 'wt_meta' | 'wt_exercises' | 'wt_presets' | 'wt_programs' | 'wt_schedule' | 'wt_logs',
+  collectionName: WtCollectionName,
   docId: string
 ): Promise<void> {
   const { db, auth } = initFirebaseServices();
-  if (!db || !auth?.currentUser) return;
-  await deleteDoc(doc(db, collectionName, docId));
+  if (!db) {
+    throw new Error('Firestore is not initialized.');
+  }
+  if (!auth?.currentUser) {
+    throw new Error(`Cannot delete ${collectionName}/${docId}: user is not signed in.`);
+  }
+  try {
+    await deleteDoc(doc(db, collectionName, docId));
+  } catch (err) {
+    console.error(`[Firestore] Failed to delete ${collectionName}/${docId}:`, err);
+    throw err;
+  }
 }
 
 export async function pullAllUserCollections(uid: string) {
   const { db } = initFirebaseServices();
   if (!db) return null;
 
-  const fetchCol = async <T>(name: string): Promise<T[]> => {
-    const q = query(collection(db, name), where('uid', '==', uid));
-    const snap = await getDocs(q);
-    return snap.docs.map((d) => d.data() as T);
+  const fetchCol = async <T>(name: WtCollectionName): Promise<T[]> => {
+    try {
+      const q = query(collection(db, name), where('uid', '==', uid));
+      const snap = await getDocs(q);
+      return snap.docs.map((d) => d.data() as T);
+    } catch (err) {
+      console.error(`[Firestore] Failed to pull ${name} for uid=${uid}:`, err);
+      throw err;
+    }
   };
 
   const [exercises, presets, programs, schedules, logs, metas] = await Promise.all([
@@ -204,6 +266,71 @@ export async function pullAllUserCollections(uid: string) {
   };
 }
 
+export interface RealtimeSyncCallbacks {
+  onExercises: (items: any[]) => void;
+  onPresets: (items: any[]) => void;
+  onPrograms: (items: any[]) => void;
+  onSchedules: (items: any[]) => void;
+  onLogs: (items: any[]) => void;
+  onMeta: (meta: any | null) => void;
+  onError: (collectionName: WtCollectionName, error: Error) => void;
+}
+
+/**
+ * Attaches real-time Firestore `onSnapshot` listeners filtered solely by `where('uid', '==', uid)`
+ * (sorting is done client-side so no composite indexes are required).
+ */
+export function subscribeToUserCollections(
+  uid: string,
+  callbacks: RealtimeSyncCallbacks
+): () => void {
+  const { db } = initFirebaseServices();
+  if (!db || !uid) return () => {};
+
+  const unsubscribers: Unsubscribe[] = [];
+
+  const watchCollection = (
+    name: Exclude<WtCollectionName, 'wt_meta'>,
+    onData: (docs: any[]) => void
+  ) => {
+    const q = query(collection(db, name), where('uid', '==', uid));
+    const unsub = onSnapshot(
+      q,
+      (snapshot) => {
+        const docs = snapshot.docs.map((d) => d.data());
+        onData(docs);
+      },
+      (err) => {
+        console.error(`[Firestore] Real-time listener error on ${name}:`, err);
+        callbacks.onError(name, err);
+      }
+    );
+    unsubscribers.push(unsub);
+  };
+
+  watchCollection('wt_exercises', callbacks.onExercises);
+  watchCollection('wt_presets', callbacks.onPresets);
+  watchCollection('wt_programs', callbacks.onPrograms);
+  watchCollection('wt_schedule', callbacks.onSchedules);
+  watchCollection('wt_logs', callbacks.onLogs);
+
+  const metaUnsub = onSnapshot(
+    doc(db, 'wt_meta', uid),
+    (snap) => {
+      callbacks.onMeta(snap.exists() ? snap.data() : null);
+    },
+    (err) => {
+      console.error('[Firestore] Real-time listener error on wt_meta:', err);
+      callbacks.onError('wt_meta', err);
+    }
+  );
+  unsubscribers.push(metaUnsub);
+
+  return () => {
+    unsubscribers.forEach((u) => u());
+  };
+}
+
 export async function pushAllLocalDataToFirestore(
   uid: string,
   payload: {
@@ -216,58 +343,67 @@ export async function pushAllLocalDataToFirestore(
   }
 ): Promise<void> {
   const { db } = initFirebaseServices();
-  if (!db) return;
+  if (!db) throw new Error('Firestore is not initialized.');
 
-  const batch = writeBatch(db);
+  try {
+    const operations: Array<{ col: WtCollectionName; id: string; data: any }> = [];
 
-  if (payload.meta) {
-    batch.set(
-      doc(db, 'wt_meta', uid),
-      JSON.parse(JSON.stringify({ ...payload.meta, uid })),
-      { merge: true }
-    );
+    if (payload.meta) {
+      operations.push({
+        col: 'wt_meta',
+        id: uid,
+        data: sanitizeForFirestore({ ...payload.meta, uid }),
+      });
+    }
+    for (const ex of payload.exercises) {
+      operations.push({
+        col: 'wt_exercises',
+        id: ex.exerciseUuid,
+        data: sanitizeForFirestore({ ...ex, uid }),
+      });
+    }
+    for (const pre of payload.presets) {
+      operations.push({
+        col: 'wt_presets',
+        id: pre.presetUuid,
+        data: sanitizeForFirestore({ ...pre, uid }),
+      });
+    }
+    for (const prog of payload.programs) {
+      operations.push({
+        col: 'wt_programs',
+        id: prog.programUuid,
+        data: sanitizeForFirestore({ ...prog, uid }),
+      });
+    }
+    for (const [dateKey, sch] of Object.entries(payload.schedules)) {
+      const docId = `${uid}_${dateKey}`;
+      operations.push({
+        col: 'wt_schedule',
+        id: docId,
+        data: sanitizeForFirestore({ ...sch, scheduleId: docId, uid }),
+      });
+    }
+    for (const log of payload.logs) {
+      operations.push({
+        col: 'wt_logs',
+        id: log.logUuid,
+        data: sanitizeForFirestore({ ...log, uid }),
+      });
+    }
+
+    // Firestore writeBatch has a 500-operation limit per batch
+    const CHUNK_SIZE = 450;
+    for (let i = 0; i < operations.length; i += CHUNK_SIZE) {
+      const batch = writeBatch(db);
+      const chunk = operations.slice(i, i + CHUNK_SIZE);
+      for (const op of chunk) {
+        batch.set(doc(db, op.col, op.id), op.data, { merge: true });
+      }
+      await batch.commit();
+    }
+  } catch (err) {
+    console.error('[Firestore] Batch push failed:', err);
+    throw err;
   }
-
-  for (const ex of payload.exercises) {
-    batch.set(
-      doc(db, 'wt_exercises', ex.exerciseUuid),
-      JSON.parse(JSON.stringify({ ...ex, uid })),
-      { merge: true }
-    );
-  }
-
-  for (const pre of payload.presets) {
-    batch.set(
-      doc(db, 'wt_presets', pre.presetUuid),
-      JSON.parse(JSON.stringify({ ...pre, uid })),
-      { merge: true }
-    );
-  }
-
-  for (const prog of payload.programs) {
-    batch.set(
-      doc(db, 'wt_programs', prog.programUuid),
-      JSON.parse(JSON.stringify({ ...prog, uid })),
-      { merge: true }
-    );
-  }
-
-  for (const [dateKey, sch] of Object.entries(payload.schedules)) {
-    const docId = `${uid}_${dateKey}`;
-    batch.set(
-      doc(db, 'wt_schedule', docId),
-      JSON.parse(JSON.stringify({ ...sch, scheduleId: docId, uid })),
-      { merge: true }
-    );
-  }
-
-  for (const log of payload.logs) {
-    batch.set(
-      doc(db, 'wt_logs', log.logUuid),
-      JSON.parse(JSON.stringify({ ...log, uid })),
-      { merge: true }
-    );
-  }
-
-  await batch.commit();
 }

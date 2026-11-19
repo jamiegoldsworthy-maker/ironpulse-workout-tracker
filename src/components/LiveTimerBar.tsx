@@ -149,15 +149,15 @@ export const LiveTimerBar: React.FC = () => {
     : 'fixed bottom-16 md:bottom-4 left-0 right-0 md:left-60 z-30 px-3 pointer-events-none';
 
   return (
-    <div className={containerPositionClass}>
-      <div className="max-w-3xl mx-auto pointer-events-auto">
+    <div className={`${containerPositionClass} max-w-full overflow-x-hidden`}>
+      <div className="max-w-3xl w-full mx-auto pointer-events-auto">
         <div
-          className={`rounded-2xl shadow-xl border transition-all duration-200 overflow-hidden backdrop-blur-md ${
+          className={`rounded-2xl shadow-lg border transition-all duration-200 overflow-hidden backdrop-blur-md ${
             timer.isRunning
               ? isWorkPhase
-                ? 'bg-orange-600/95 text-white border-orange-400 shadow-orange-500/25'
-                : 'bg-slate-900/95 text-white border-slate-700 shadow-slate-950/40'
-              : 'bg-white/95 dark:bg-slate-900/95 text-slate-900 dark:text-slate-100 border-slate-200/80 dark:border-slate-800'
+                ? 'bg-orange-600/95 text-white border-orange-400/70 shadow-orange-500/20'
+                : 'bg-slate-900/95 text-white border-slate-700/80 shadow-slate-950/30'
+              : 'bg-white/95 dark:bg-slate-900/95 text-slate-900 dark:text-slate-100 border-slate-200/70 dark:border-slate-800/80 shadow-slate-950/10'
           }`}
         >
           {/* Progress Strip */}
@@ -217,14 +217,17 @@ export const LiveTimerBar: React.FC = () => {
                   </div>
                 ) : (
                   <span className="text-[11px] sm:text-xs font-medium opacity-75 truncate">
-                    Rest {meta.defaultAutoStartRestTimer ? '• Auto' : ''}
+                    Rest
+                    {meta.defaultAutoStartRestTimer && (
+                      <span className="hidden sm:inline"> • Auto</span>
+                    )}
                   </span>
                 )}
               </div>
             </div>
 
             {/* Quick Bar Controls */}
-            <div className="flex items-center gap-1 shrink-0">
+            <div className="flex items-center gap-0.5 sm:gap-1 shrink-0">
               {!timer.isRunning && timer.mode === 'rest' && !isForcedMobile && (
                 <div className="hidden sm:flex items-center gap-1 mr-1">
                   {[60, 90, 120].map((sec) => (
@@ -247,10 +250,10 @@ export const LiveTimerBar: React.FC = () => {
                 data-tooltip={timer.isRunning ? 'Pause timer' : 'Start timer'}
                 title={timer.isRunning ? 'Pause timer' : 'Start timer'}
                 onClick={toggleTimerRunning}
-                className={`px-3 py-1.5 rounded-xl font-semibold text-xs flex items-center gap-1.5 transition-all ${
+                className={`px-2.5 sm:px-3 py-1.5 rounded-xl font-semibold text-xs flex items-center gap-1 transition-all ${
                   timer.isRunning
                     ? 'bg-white/20 hover:bg-white/30 text-white'
-                    : 'bg-orange-500 hover:bg-orange-600 text-white shadow-sm'
+                    : 'bg-orange-500 hover:bg-orange-600 text-white'
                 }`}
               >
                 {timer.isRunning ? (
@@ -269,7 +272,7 @@ export const LiveTimerBar: React.FC = () => {
                 onClick={resetTimer}
                 data-tooltip="Reset timer"
                 title="Reset timer"
-                className="p-2 rounded-xl hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
+                className="p-1.5 sm:p-2 rounded-xl hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
               >
                 <RotateCcw className="w-4 h-4" />
               </button>
@@ -279,7 +282,7 @@ export const LiveTimerBar: React.FC = () => {
                 onClick={() => setTimerExpanded(!timer.isExpanded)}
                 data-tooltip={timer.isExpanded ? 'Collapse timer drawer' : 'Timer presets & EMOM'}
                 title={timer.isExpanded ? 'Collapse timer drawer' : 'Expand timer settings'}
-                className="p-2 rounded-xl hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
+                className="p-1.5 sm:p-2 rounded-xl hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
               >
                 {timer.isExpanded ? (
                   <ChevronDown className="w-4 h-4" />

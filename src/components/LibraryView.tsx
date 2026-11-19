@@ -929,7 +929,7 @@ export const LibraryView: React.FC = () => {
                             };
                             setEditingPreset({ ...editingPreset, exercises: next });
                           }}
-                          className="flex-1 min-w-[160px] px-3 py-2 text-xs font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 focus:outline-none focus:border-orange-500"
+                          className="min-w-0 w-full sm:w-auto sm:flex-1 px-3 py-2 text-xs font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 focus:outline-none focus:border-orange-500"
                         />
 
                         <select
