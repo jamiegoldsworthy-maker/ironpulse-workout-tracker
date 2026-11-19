@@ -1265,6 +1265,12 @@ export const LogView: React.FC = () => {
                               !workoutHasLadder &&
                               ex.trackingType !== 'cardio';
                             const exKey = `${draft.logUuid}_${exIdx}`;
+                            const cueNote =
+                              (ex.exerciseNotes && !ex.exerciseNotes.startsWith('Target:')
+                                ? ex.exerciseNotes
+                                : '') ||
+                              preset?.exercises?.[exIdx]?.baseNotes ||
+                              '';
                             const isCompactCard =
                               logDensityMode === 'compact' &&
                               !expandedCompactExercises[exKey] &&
@@ -1424,6 +1430,12 @@ export const LogView: React.FC = () => {
                                     </button>
                                   </div>
                                 </div>
+
+                                {cueNote && (
+                                  <div className="px-2.5 py-1 rounded-lg bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-700 dark:text-amber-300 font-medium truncate" title={cueNote}>
+                                    Coach cue: {cueNote}
+                                  </div>
+                                )}
 
                                 {/* Compact Sets / Complex / Ladder Row */}
                                 {isComplexMode ? (
@@ -1739,6 +1751,11 @@ export const LogView: React.FC = () => {
                                     </span>
                                   )}
                                 </h3>
+                                {cueNote && (
+                                  <div className="mt-1 px-2.5 py-1 rounded-lg bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-700 dark:text-amber-300 font-medium">
+                                    Coach cue: {cueNote}
+                                  </div>
+                                )}
 
                                 {/* Ghost Benchmark Subtitle */}
                                 {ghost && ghostEx && (

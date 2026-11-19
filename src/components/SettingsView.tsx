@@ -16,7 +16,10 @@ import {
   Monitor,
   Upload,
   BookOpen,
+  ClipboardPaste,
 } from 'lucide-react';
+import { ImportAiNotesPatchModal } from './ImportAiNotesPatchModal';
+import { buildAiCoachExportPayload } from '../utils/aiCoachPatch';
 import { useWorkoutStore } from '../store/useWorkoutStore';
 import { AIImportPayload, DistanceUnit, ThemeMode, WorkoutPreset } from '../types/workout';
 import {
@@ -45,6 +48,7 @@ export const SettingsView: React.FC = () => {
   const {
     presets,
     programs,
+    schedules,
     exercises: globalExercises,
     logs,
     meta,
@@ -69,6 +73,7 @@ export const SettingsView: React.FC = () => {
 
   // Sub-mode inside Google Sheet Importer: 'presets' vs 'logs'
   const [sheetImportMode, setSheetImportMode] = useState<'presets' | 'logs'>('presets');
+  const [aiNotesModalOpen, setAiNotesModalOpen] = useState(false);
 
   const [notice, setNotice] = useState<string | null>(null);
   const showNotice = (msg: string) => {
@@ -715,6 +720,38 @@ export const SettingsView: React.FC = () => {
               >
                 Load Sample AI JSON
               </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const activeProg =
+                    programs.find((p) => p.programUuid === meta.activeProgramUuid) ||
+                    programs[0] ||
+                    null;
+                  const payload = buildAiCoachExportPayload({
+                    program: activeProg,
+                    presets,
+                    schedules,
+                  });
+                  try {
+                    await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+                    showNotice('Copied AI Coaching Context');
+                  } catch {
+                    showNotice('Clipboard write blocked by browser.');
+                  }
+                }}
+                className="px-3 py-2 rounded-2xl bg-orange-500/15 text-orange-600 dark:text-orange-400 text-xs font-bold inline-flex items-center gap-1.5 hover:bg-orange-500/20"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                Export for AI Coach
+              </button>
+              <button
+                type="button"
+                onClick={() => setAiNotesModalOpen(true)}
+                className="px-3 py-2 rounded-2xl bg-slate-100 dark:bg-slate-800 text-xs font-semibold hover:text-orange-500 inline-flex items-center gap-1.5"
+              >
+                <ClipboardPaste className="w-3.5 h-3.5" />
+                Import AI Notes Patch
+              </button>
             </div>
           </div>
 
@@ -1064,6 +1101,12 @@ export const SettingsView: React.FC = () => {
           </div>
         </div>
       )}
+
+      <ImportAiNotesPatchModal
+        open={aiNotesModalOpen}
+        onClose={() => setAiNotesModalOpen(false)}
+        onApplied={(summary) => showNotice(summary)}
+      />
     </div>
   );
 };

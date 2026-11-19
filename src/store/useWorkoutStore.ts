@@ -26,6 +26,7 @@ import {
   SEED_PROGRAMS,
   SEED_SCHEDULES,
 } from '../data/seedData';
+import { AiNotesPatchPayload } from '../utils/aiCoachPatch';
 import {
   expandLadderSequence,
   formatDisplayId,
@@ -201,6 +202,17 @@ interface WorkoutStoreState {
     programsCount: number;
     scheduleDaysCount: number;
   };
+  applyAiNotesPatch: (
+    patch: AiNotesPatchPayload,
+    options?: { allowStructuralChanges?: boolean }
+  ) => Promise<{
+    ok: boolean;
+    weeksUpdated: number;
+    presetsUpdated: number;
+    exercisesUpdated: number;
+    schedulesUpdated: number;
+    error?: string;
+  }>;
   commitReconciledLegacyImport: (payload: {
     newExercises: GlobalExercise[];
     newPresets: WorkoutPreset[];
@@ -2153,6 +2165,298 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         }
 
         return { presetsCount, programsCount, scheduleDaysCount };
+      },
+
+      applyAiNotesPatch: async (patch, options) => {
+        const allowStructural = Boolean(options?.allowStructuralChanges);
+        const state = get();
+        const now = new Date().toISOString();
+
+        let weeksUpdated = 0;
+        let presetsUpdated = 0;
+        let exercisesUpdated = 0;
+        let schedulesUpdated = 0;
+
+        const modifiedPrograms: WorkoutProgram[] = [];
+        const modifiedPresets: WorkoutPreset[] = [];
+        const modifiedSchedules: DailySchedule[] = [];
+
+        let nextPrograms = [...state.programs];
+        let nextPresets = [...state.presets];
+        const nextSchedules = { ...state.schedules };
+
+        // 1. Program week focus notes
+        if (patch.program) {
+          const progId =
+            patch.program.programId || patch.program.programUuid || patch.program.id;
+          const weekNotes =
+            patch.program.weekFocusNotes || patch.program.weekProgressionNotes || {};
+          const targetIdx = progId
+            ? nextPrograms.findIndex((p) => p.programUuid === progId || p.slug === progId)
+            : nextPrograms.findIndex((p) => p.programUuid === state.meta.activeProgramUuid);
+
+          if (targetIdx !== -1 && Object.keys(weekNotes).length > 0) {
+            const target = nextPrograms[targetIdx];
+            const mergedWeeks = { ...(target.weekProgressionNotes || {}) };
+            let changed = false;
+            for (const [wk, note] of Object.entries(weekNotes)) {
+              if (typeof note !== 'string') continue;
+              if ((mergedWeeks[wk] || '') !== note) {
+                mergedWeeks[wk] = note;
+                weeksUpdated += 1;
+                changed = true;
+              }
+            }
+            if (changed) {
+              const updatedProg: WorkoutProgram = {
+                ...target,
+                weekProgressionNotes: mergedWeeks,
+                updatedAt: now,
+              };
+              nextPrograms[targetIdx] = updatedProg;
+              modifiedPrograms.push(updatedProg);
+            }
+          }
+        }
+
+        // 2. Preset notes & per-exercise notes (plus optional structural edits)
+        const presetExerciseNoteMap = new Map<string, Map<number, string>>();
+        const presetNoteMap = new Map<string, string>();
+
+        for (const pPatch of patch.presets || []) {
+          const pid = pPatch.presetId || pPatch.presetUuid || pPatch.id;
+          const pIdx = nextPresets.findIndex(
+            (p) =>
+              (pid && (p.presetUuid === pid || p.slug === pid)) ||
+              (pPatch.name && p.title.toLowerCase() === pPatch.name.toLowerCase())
+          );
+          if (pIdx === -1) continue;
+
+          const existingPreset = nextPresets[pIdx];
+          let presetChanged = false;
+
+          const nextPresetNote =
+            typeof pPatch.workoutNotes === 'string'
+              ? pPatch.workoutNotes
+              : typeof pPatch.notes === 'string'
+              ? pPatch.notes
+              : undefined;
+
+          let updatedWorkoutNotes = existingPreset.workoutNotes;
+          if (nextPresetNote !== undefined && nextPresetNote !== (existingPreset.workoutNotes || '')) {
+            updatedWorkoutNotes = nextPresetNote;
+            presetsUpdated += 1;
+            presetChanged = true;
+            presetNoteMap.set(existingPreset.presetUuid, nextPresetNote);
+          }
+
+          let updatedExercises = [...existingPreset.exercises];
+          if (Array.isArray(pPatch.exercises) && pPatch.exercises.length > 0) {
+            updatedExercises = existingPreset.exercises.map((ex, idx) => {
+              const exPatch = pPatch.exercises!.find((ep) => {
+                const epIdx = ep.exerciseIndex ?? ep.index;
+                if (typeof epIdx === 'number' && epIdx === idx) return true;
+                const epUid = ep.exerciseUid || ep.exerciseUuid;
+                if (epUid && epUid === ex.exerciseUuid) return true;
+                if (ep.name && ep.name.toLowerCase() === ex.exerciseName.toLowerCase()) return true;
+                return false;
+              });
+              if (!exPatch) return ex;
+
+              let nextEx = { ...ex };
+              let exChanged = false;
+
+              const nextExNote =
+                typeof exPatch.notes === 'string'
+                  ? exPatch.notes
+                  : typeof exPatch.exerciseNotes === 'string'
+                  ? exPatch.exerciseNotes
+                  : typeof exPatch.baseNotes === 'string'
+                  ? exPatch.baseNotes
+                  : undefined;
+
+              if (nextExNote !== undefined && nextExNote !== (ex.baseNotes || '')) {
+                nextEx.baseNotes = nextExNote;
+                exercisesUpdated += 1;
+                exChanged = true;
+                const mapForPreset =
+                  presetExerciseNoteMap.get(existingPreset.presetUuid) || new Map<number, string>();
+                mapForPreset.set(idx, nextExNote);
+                presetExerciseNoteMap.set(existingPreset.presetUuid, mapForPreset);
+              }
+
+              if (allowStructural) {
+                if (typeof exPatch.sets === 'number' && exPatch.sets > 0 && exPatch.sets !== ex.defaultSets) {
+                  nextEx.defaultSets = exPatch.sets;
+                  exChanged = true;
+                }
+                if (typeof exPatch.weightKg === 'number' && exPatch.weightKg >= 0 && exPatch.weightKg !== ex.defaultWeight) {
+                  nextEx.defaultWeight = exPatch.weightKg;
+                  exChanged = true;
+                }
+                if (
+                  typeof exPatch.secondaryWeightKg === 'number' &&
+                  exPatch.secondaryWeightKg >= 0 &&
+                  exPatch.secondaryWeightKg !== ex.secondaryWeightKg
+                ) {
+                  nextEx.secondaryWeightKg = exPatch.secondaryWeightKg;
+                  exChanged = true;
+                }
+                if (exPatch.loadType && exPatch.loadType !== ex.loadType) {
+                  nextEx.loadType = exPatch.loadType;
+                  exChanged = true;
+                }
+                if (typeof exPatch.targetReps === 'string' && exPatch.targetReps !== ex.defaultReps) {
+                  nextEx.defaultReps = exPatch.targetReps;
+                  exChanged = true;
+                }
+                if (typeof exPatch.name === 'string' && exPatch.name.trim() && exPatch.name !== ex.exerciseName) {
+                  nextEx.exerciseName = exPatch.name.trim();
+                  exChanged = true;
+                }
+              }
+
+              if (exChanged) presetChanged = true;
+              return nextEx;
+            });
+          }
+
+          if (presetChanged) {
+            const updatedPreset: WorkoutPreset = {
+              ...existingPreset,
+              workoutNotes: updatedWorkoutNotes,
+              exercises: updatedExercises,
+              updatedAt: now,
+            };
+            nextPresets[pIdx] = updatedPreset;
+            modifiedPresets.push(updatedPreset);
+          }
+        }
+
+        // 3. Upcoming schedule coachNotes
+        const schedulePatches = patch.upcomingSchedule || patch.schedule || [];
+        const scheduleNoteMap = new Map<string, string>();
+        for (const sPatch of schedulePatches) {
+          const nextNote =
+            typeof sPatch.coachNotes === 'string'
+              ? sPatch.coachNotes
+              : typeof sPatch.notes === 'string'
+              ? sPatch.notes
+              : undefined;
+          if (nextNote === undefined) continue;
+
+          const itemId = sPatch.scheduleItemUuid || sPatch.scheduleId || sPatch.id;
+          const candidateDates = sPatch.date && nextSchedules[sPatch.date] ? [sPatch.date] : Object.keys(nextSchedules);
+
+          for (const d of candidateDates) {
+            const daySch = nextSchedules[d];
+            if (!daySch) continue;
+            let dayChanged = false;
+            const nextItems = daySch.items.map((item) => {
+              const matchesId = itemId && item.scheduleItemUuid === itemId;
+              const matchesDatePreset =
+                Boolean(sPatch.date) &&
+                (sPatch.presetId || sPatch.presetUuid) &&
+                item.presetUuid === (sPatch.presetId || sPatch.presetUuid);
+              if ((matchesId || matchesDatePreset) && (item.coachNotes || '') !== nextNote) {
+                dayChanged = true;
+                schedulesUpdated += 1;
+                scheduleNoteMap.set(item.scheduleItemUuid, nextNote);
+                return { ...item, coachNotes: nextNote };
+              }
+              return item;
+            });
+            if (dayChanged) {
+              const updatedDay: DailySchedule = {
+                ...daySch,
+                items: nextItems,
+                updatedAt: now,
+              };
+              nextSchedules[d] = updatedDay;
+              const existingModIdx = modifiedSchedules.findIndex((ms) => ms.date === d);
+              if (existingModIdx >= 0) modifiedSchedules[existingModIdx] = updatedDay;
+              else modifiedSchedules.push(updatedDay);
+            }
+          }
+        }
+
+        // 4. Refresh active draftWorkouts in memory so cues appear immediately on LogView
+        const nextDraftWorkouts = state.draftWorkouts.map((draft) => {
+          let nextDraft = draft;
+          let draftChanged = false;
+
+          if (draft.scheduleItemUuid && scheduleNoteMap.has(draft.scheduleItemUuid)) {
+            nextDraft = {
+              ...nextDraft,
+              coachNotes: scheduleNoteMap.get(draft.scheduleItemUuid)!,
+            };
+            draftChanged = true;
+          } else if (draft.presetUuid && presetNoteMap.has(draft.presetUuid) && !draft.coachNotes) {
+            nextDraft = {
+              ...nextDraft,
+              coachNotes: presetNoteMap.get(draft.presetUuid)!,
+            };
+            draftChanged = true;
+          }
+
+          if (draft.presetUuid && presetExerciseNoteMap.has(draft.presetUuid)) {
+            const exMap = presetExerciseNoteMap.get(draft.presetUuid)!;
+            const nextDraftExercises = nextDraft.exercises.map((ex, idx) => {
+              if (!exMap.has(idx)) return ex;
+              return { ...ex, exerciseNotes: exMap.get(idx)! };
+            });
+            nextDraft = { ...nextDraft, exercises: nextDraftExercises };
+            draftChanged = true;
+          }
+
+          return draftChanged ? nextDraft : draft;
+        });
+
+        set({
+          programs: nextPrograms,
+          presets: nextPresets,
+          schedules: nextSchedules,
+          draftWorkouts: nextDraftWorkouts,
+        });
+
+        if (state.authUser) {
+          const uid = state.authUser.uid;
+          try {
+            await Promise.all([
+              ...modifiedPrograms.map((p) =>
+                upsertFirestoreDoc('wt_programs', p.programUuid, p, uid)
+              ),
+              ...modifiedPresets.map((p) =>
+                upsertFirestoreDoc('wt_presets', p.presetUuid, p, uid)
+              ),
+              ...modifiedSchedules.map((sch) =>
+                upsertFirestoreDoc('wt_schedule', `${uid}_${sch.date}`, sch, uid)
+              ),
+            ]);
+          } catch (err: any) {
+            console.error('[Sync] Failed to sync AI notes patch:', err);
+            set({
+              syncStatus: 'error',
+              lastSyncError: err?.message || 'Failed to sync AI notes patch',
+            });
+            return {
+              ok: false,
+              weeksUpdated,
+              presetsUpdated,
+              exercisesUpdated,
+              schedulesUpdated,
+              error: err?.message || 'Saved locally, but cloud sync failed.',
+            };
+          }
+        }
+
+        return {
+          ok: true,
+          weeksUpdated,
+          presetsUpdated,
+          exercisesUpdated,
+          schedulesUpdated,
+        };
       },
 
       commitReconciledLegacyImport: ({ newExercises, newPresets, newLogs }) => {

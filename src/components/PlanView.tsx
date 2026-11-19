@@ -18,7 +18,10 @@ import {
   Pencil,
   Copy,
   CalendarX,
+  ClipboardPaste,
 } from 'lucide-react';
+import { ImportAiNotesPatchModal } from './ImportAiNotesPatchModal';
+import { buildAiCoachExportPayload } from '../utils/aiCoachPatch';
 import { useWorkoutStore } from '../store/useWorkoutStore';
 import { ProgramDayTemplate, WorkoutProgram } from '../types/workout';
 import {
@@ -135,6 +138,7 @@ export const PlanView: React.FC = () => {
     open: false,
     title: '',
   });
+  const [aiNotesModalOpen, setAiNotesModalOpen] = useState(false);
 
   useEffect(() => {
     if (!programEditMenuOpen) return;
@@ -1125,6 +1129,40 @@ export const PlanView: React.FC = () => {
 
                         <button
                           type="button"
+                          onClick={async () => {
+                            setProgramEditMenuOpen(false);
+                            const payload = buildAiCoachExportPayload({
+                              program: selectedProgram,
+                              presets,
+                              schedules,
+                            });
+                            try {
+                              await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+                              triggerNotice('Copied AI Coaching Context');
+                            } catch {
+                              triggerNotice('Clipboard blocked — export via Settings > AI Sync');
+                            }
+                          }}
+                          className="w-full px-3 py-2 rounded-xl text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-2 transition-colors"
+                        >
+                          <Sparkles className="w-3.5 h-3.5 text-orange-500 shrink-0" />
+                          Export for AI Coach
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setProgramEditMenuOpen(false);
+                            setAiNotesModalOpen(true);
+                          }}
+                          className="w-full px-3 py-2 rounded-xl text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-2 transition-colors"
+                        >
+                          <ClipboardPaste className="w-3.5 h-3.5 text-orange-500 shrink-0" />
+                          Import AI Notes Patch
+                        </button>
+
+                        <button
+                          type="button"
                           onClick={() => {
                             setProgramEditMenuOpen(false);
                             const confirmed = window.confirm(
@@ -1689,6 +1727,12 @@ export const PlanView: React.FC = () => {
           </div>
         </div>
       )}
+
+      <ImportAiNotesPatchModal
+        open={aiNotesModalOpen}
+        onClose={() => setAiNotesModalOpen(false)}
+        onApplied={(summary) => triggerNotice(summary)}
+      />
     </div>
   );
 };
