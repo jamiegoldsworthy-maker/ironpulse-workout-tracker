@@ -211,7 +211,12 @@ export async function upsertFirestoreDoc<T extends Record<string, any>>(
     updatedAt: collectionName === 'wt_logs' ? nowIso : (data.updatedAt || nowIso),
   });
   try {
-    await setDoc(doc(db, collectionName, docId), cleanData, { merge: true });
+    const docRef = doc(db, collectionName, docId);
+    if (collectionName === 'wt_logs') {
+      await setDoc(docRef, cleanData);
+    } else {
+      await setDoc(docRef, cleanData, { merge: true });
+    }
   } catch (err) {
     console.error(`[Firestore] Failed to write ${collectionName}/${docId}:`, err, cleanData);
     throw err;

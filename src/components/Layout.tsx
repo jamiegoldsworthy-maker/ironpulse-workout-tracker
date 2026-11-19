@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Dumbbell,
   Calendar,
@@ -13,9 +13,13 @@ import {
   Laptop,
   AlertTriangle,
   X,
+  Minimize2,
+  Maximize2,
+  LayoutList,
+  GalleryHorizontalEnd,
+  RefreshCw,
 } from 'lucide-react';
 import { useWorkoutStore } from '../store/useWorkoutStore';
-import { ThemeMode } from '../types/workout';
 import { LiveTimerBar } from './LiveTimerBar';
 
 interface LayoutProps {
@@ -41,20 +45,42 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
     setActiveTab,
     viewportMode,
     setViewportMode,
+    logLayoutMode,
+    setLogLayoutMode,
+    logDensityMode,
+    setLogDensityMode,
     meta,
     setTheme,
     authUser,
     syncStatus,
     lastSyncError,
     clearSyncError,
+    syncWithFirestore,
     timer,
   } = useWorkoutStore();
 
-  const cycleTheme = () => {
-    const order: ThemeMode[] = ['system', 'light', 'dark'];
-    const next = order[(order.indexOf(meta.theme) + 1) % order.length];
-    setTheme(next);
-  };
+  const [cogOpen, setCogOpen] = useState(false);
+  const cogRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!cogOpen) return;
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (cogRef.current && !cogRef.current.contains(e.target as Node)) {
+        setCogOpen(false);
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setCogOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleOutsideClick);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [cogOpen]);
 
   const isForcedMobile = viewportMode === 'mobile';
   const isForcedDesktop = viewportMode === 'desktop';
@@ -184,108 +210,234 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
               </h1>
             </div>
 
-            {/* Right Controls */}
-            <div className="flex items-center gap-1.5 shrink-0">
-              {/* Viewport Mode Toggle */}
-              {!isForcedMobile && (
-                <div className="inline-flex items-center rounded-xl bg-slate-100 dark:bg-slate-800 p-0.5 border border-slate-200/70 dark:border-slate-700/70">
-                  <button
-                    type="button"
-                    onClick={() => setViewportMode('mobile')}
-                    data-tooltip="Preview Mobile Phone View"
-                    data-tooltip-pos="bottom"
-                    title="Preview Mobile Phone View"
-                    className="p-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 text-slate-500 hover:text-slate-900 dark:hover:text-white transition-all"
-                  >
-                    <Smartphone className="w-3.5 h-3.5" />
-                    <span className="hidden sm:inline text-[11px]">Mobile</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setViewportMode(viewportMode === 'desktop' ? 'auto' : 'desktop')
-                    }
-                    data-tooltip="Force Desktop Sidebar View"
-                    data-tooltip-pos="bottom"
-                    title="Force Desktop Sidebar View"
-                    className={`p-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all ${
-                      viewportMode === 'desktop'
-                        ? 'bg-orange-500 text-white shadow-2xs'
-                        : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
-                    }`}
-                  >
-                    <Laptop className="w-3.5 h-3.5" />
-                    <span className="hidden sm:inline text-[11px]">Desktop</span>
-                  </button>
-                </div>
-              )}
-
-              {/* Cloud / Offline Status Pill */}
+            {/* Right Controls: Single Minimal Cog Popover */}
+            <div ref={cogRef} className="relative flex items-center shrink-0">
               <button
                 type="button"
-                onClick={() => setActiveTab('settings')}
-                data-tooltip={
-                  syncStatus === 'error'
-                    ? `Sync error: ${lastSyncError || 'Check Settings'}`
-                    : authUser
-                    ? `Signed in as ${authUser.email}`
-                    : 'Offline-first mode — click to configure Cloud Sync'
-                }
+                onClick={() => setCogOpen((prev) => !prev)}
+                aria-label="View, Theme & Sync Controls"
+                aria-expanded={cogOpen}
+                data-tooltip="View, Theme & Sync"
                 data-tooltip-pos="bottom"
-                title={
-                  syncStatus === 'error'
-                    ? `Sync error: ${lastSyncError || 'Check Settings'}`
-                    : authUser
-                    ? `Signed in as ${authUser.email}`
-                    : 'Offline-first mode — click to open Sync settings'
-                }
-                className={`px-2.5 py-1.5 rounded-xl text-[11px] font-semibold inline-flex items-center gap-1 border transition-colors ${
-                  syncStatus === 'error'
-                    ? 'bg-rose-500/10 border-rose-500/30 text-rose-600 dark:text-rose-400'
-                    : syncStatus === 'syncing'
-                    ? 'bg-orange-500/10 border-orange-500/30 text-orange-600 dark:text-orange-400'
-                    : authUser
-                    ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-600 dark:text-emerald-400'
-                    : 'bg-slate-100 dark:bg-slate-800 border-slate-200/70 dark:border-slate-700/70 text-slate-600 dark:text-slate-300 hover:border-orange-500'
+                title="View, Theme & Sync Controls"
+                className={`relative p-2 rounded-xl border transition-colors ${
+                  cogOpen
+                    ? 'bg-orange-500 text-white border-orange-500'
+                    : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:text-orange-500 border-slate-200/60 dark:border-slate-700/60'
                 }`}
               >
-                <Cloud
-                  className={`w-3.5 h-3.5 ${
-                    syncStatus === 'error'
-                      ? 'text-rose-500'
-                      : syncStatus === 'syncing'
-                      ? 'text-orange-500 animate-pulse'
-                      : 'text-orange-500'
-                  }`}
+                <Settings
+                  className={`w-4 h-4 ${syncStatus === 'syncing' ? 'animate-spin' : ''}`}
                 />
-                <span>
-                  {syncStatus === 'error'
-                    ? 'Sync Error'
-                    : syncStatus === 'syncing'
-                    ? 'Syncing'
-                    : authUser
-                    ? 'Synced'
-                    : 'Offline'}
-                </span>
-              </button>
-
-              {/* Theme Switcher Button */}
-              <button
-                type="button"
-                onClick={cycleTheme}
-                data-tooltip={`Theme: ${meta.theme} (click to switch)`}
-                data-tooltip-pos="bottom"
-                title={`Current theme: ${meta.theme} (click to cycle Light / Dark / System)`}
-                className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:text-orange-500 border border-slate-200/60 dark:border-slate-700/60 transition-colors"
-              >
-                {meta.theme === 'light' ? (
-                  <Sun className="w-4 h-4 text-orange-500" />
-                ) : meta.theme === 'dark' ? (
-                  <Moon className="w-4 h-4 text-orange-400" />
-                ) : (
-                  <Monitor className="w-4 h-4" />
+                {(syncStatus === 'error' || !authUser) && !cogOpen && (
+                  <span
+                    className={`absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full ring-2 ring-white dark:ring-slate-900 ${
+                      syncStatus === 'error' ? 'bg-rose-500' : 'bg-amber-400'
+                    }`}
+                  />
                 )}
               </button>
+
+              {cogOpen && (
+                <div className="absolute right-0 top-full mt-2 w-72 max-w-[calc(100vw-1.5rem)] rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xl p-3.5 space-y-3 z-50">
+                  {/* 1. Density */}
+                  <div className="space-y-1.5">
+                    <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      Density
+                    </span>
+                    <div className="grid grid-cols-2 rounded-xl bg-slate-100 dark:bg-slate-800 p-0.5 border border-slate-200/60 dark:border-slate-700/60">
+                      <button
+                        type="button"
+                        onClick={() => setLogDensityMode('compact')}
+                        className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold inline-flex items-center justify-center gap-1.5 transition-all ${
+                          logDensityMode === 'compact'
+                            ? 'bg-orange-500 text-white'
+                            : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
+                        }`}
+                      >
+                        <Minimize2 className="w-3.5 h-3.5" />
+                        Compact
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setLogDensityMode('detailed')}
+                        className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold inline-flex items-center justify-center gap-1.5 transition-all ${
+                          logDensityMode === 'detailed'
+                            ? 'bg-orange-500 text-white'
+                            : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
+                        }`}
+                      >
+                        <Maximize2 className="w-3.5 h-3.5" />
+                        Detailed
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 2. Layout */}
+                  <div className="space-y-1.5">
+                    <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      Layout
+                    </span>
+                    <div className="grid grid-cols-2 rounded-xl bg-slate-100 dark:bg-slate-800 p-0.5 border border-slate-200/60 dark:border-slate-700/60">
+                      <button
+                        type="button"
+                        onClick={() => setLogLayoutMode('list')}
+                        className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold inline-flex items-center justify-center gap-1.5 transition-all ${
+                          logLayoutMode === 'list'
+                            ? 'bg-orange-500 text-white'
+                            : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
+                        }`}
+                      >
+                        <LayoutList className="w-3.5 h-3.5" />
+                        List
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setLogLayoutMode('cards')}
+                        className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold inline-flex items-center justify-center gap-1.5 transition-all ${
+                          logLayoutMode === 'cards'
+                            ? 'bg-orange-500 text-white'
+                            : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
+                        }`}
+                      >
+                        <GalleryHorizontalEnd className="w-3.5 h-3.5" />
+                        Cards
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 3. Viewport */}
+                  <div className="space-y-1.5">
+                    <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      Viewport
+                    </span>
+                    <div className="grid grid-cols-2 rounded-xl bg-slate-100 dark:bg-slate-800 p-0.5 border border-slate-200/60 dark:border-slate-700/60">
+                      <button
+                        type="button"
+                        onClick={() => setViewportMode('auto')}
+                        className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold inline-flex items-center justify-center gap-1.5 transition-all ${
+                          viewportMode !== 'mobile'
+                            ? 'bg-orange-500 text-white'
+                            : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
+                        }`}
+                      >
+                        <Laptop className="w-3.5 h-3.5" />
+                        Desktop
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setViewportMode('mobile')}
+                        className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold inline-flex items-center justify-center gap-1.5 transition-all ${
+                          viewportMode === 'mobile'
+                            ? 'bg-orange-500 text-white'
+                            : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
+                        }`}
+                      >
+                        <Smartphone className="w-3.5 h-3.5" />
+                        Mobile
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 4. Theme */}
+                  <div className="space-y-1.5">
+                    <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      Theme
+                    </span>
+                    <div className="grid grid-cols-3 rounded-xl bg-slate-100 dark:bg-slate-800 p-0.5 border border-slate-200/60 dark:border-slate-700/60">
+                      <button
+                        type="button"
+                        onClick={() => setTheme('light')}
+                        className={`px-2 py-1.5 rounded-lg text-[11px] font-bold inline-flex items-center justify-center gap-1 transition-all ${
+                          meta.theme === 'light'
+                            ? 'bg-orange-500 text-white'
+                            : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
+                        }`}
+                      >
+                        <Sun className="w-3.5 h-3.5" />
+                        Light
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setTheme('dark')}
+                        className={`px-2 py-1.5 rounded-lg text-[11px] font-bold inline-flex items-center justify-center gap-1 transition-all ${
+                          meta.theme === 'dark'
+                            ? 'bg-orange-500 text-white'
+                            : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
+                        }`}
+                      >
+                        <Moon className="w-3.5 h-3.5" />
+                        Dark
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setTheme('system')}
+                        className={`px-2 py-1.5 rounded-lg text-[11px] font-bold inline-flex items-center justify-center gap-1 transition-all ${
+                          meta.theme === 'system'
+                            ? 'bg-orange-500 text-white'
+                            : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
+                        }`}
+                      >
+                        <Monitor className="w-3.5 h-3.5" />
+                        Device
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 5. Cloud Sync */}
+                  <div className="pt-1 border-t border-slate-100 dark:border-slate-800">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (!authUser) {
+                          setCogOpen(false);
+                          setActiveTab('settings');
+                          return;
+                        }
+                        await syncWithFirestore();
+                      }}
+                      className={`w-full px-3 py-2 rounded-xl text-xs font-bold flex items-center justify-between border transition-colors ${
+                        syncStatus === 'error'
+                          ? 'bg-rose-500/10 border-rose-500/30 text-rose-600 dark:text-rose-400 hover:bg-rose-500/15'
+                          : syncStatus === 'syncing'
+                          ? 'bg-orange-500/10 border-orange-500/30 text-orange-600 dark:text-orange-400'
+                          : authUser
+                          ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/15'
+                          : 'bg-slate-100 dark:bg-slate-800 border-slate-200/70 dark:border-slate-700/70 text-slate-600 dark:text-slate-300 hover:border-orange-500'
+                      }`}
+                    >
+                      <span className="inline-flex items-center gap-2">
+                        <Cloud
+                          className={`w-4 h-4 ${
+                            syncStatus === 'error'
+                              ? 'text-rose-500'
+                              : syncStatus === 'syncing'
+                              ? 'text-orange-500 animate-pulse'
+                              : authUser
+                              ? 'text-emerald-500'
+                              : 'text-slate-400'
+                          }`}
+                        />
+                        <span>
+                          {syncStatus === 'error'
+                            ? 'Sync Error'
+                            : syncStatus === 'syncing'
+                            ? 'Syncing...'
+                            : authUser
+                            ? 'Synced'
+                            : 'Offline'}
+                        </span>
+                      </span>
+                      <span className="inline-flex items-center gap-1 text-[10px] font-semibold opacity-80">
+                        <RefreshCw
+                          className={`w-3 h-3 ${syncStatus === 'syncing' ? 'animate-spin' : ''}`}
+                        />
+                        {authUser ? 'Sync Now' : 'Sign In'}
+                      </span>
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </header>
 

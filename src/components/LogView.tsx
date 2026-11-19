@@ -22,12 +22,9 @@ import {
   SlidersHorizontal,
   ArrowRightLeft,
   Save,
-  LayoutList,
-  GalleryHorizontalEnd,
   MoreHorizontal,
   AlertTriangle,
-  Minimize2,
-  Maximize2,
+  Pencil,
 } from 'lucide-react';
 import { DraftWorkoutCard, useWorkoutStore } from '../store/useWorkoutStore';
 import {
@@ -69,9 +66,7 @@ export const LogView: React.FC = () => {
     activeDate,
     draftWorkouts,
     logLayoutMode,
-    setLogLayoutMode,
     logDensityMode,
-    setLogDensityMode,
     presets,
     exercises: globalExercises,
     schedules,
@@ -95,7 +90,29 @@ export const LogView: React.FC = () => {
     Record<string, boolean>
   >({});
   const [activeCardIdx, setActiveCardIdx] = useState<number>(0);
+  const [editMenuOpen, setEditMenuOpen] = useState<boolean>(false);
+  const editMenuRef = useRef<HTMLDivElement>(null);
   const touchStartXRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!editMenuOpen) return;
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (editMenuRef.current && !editMenuRef.current.contains(e.target as Node)) {
+        setEditMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setEditMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleOutsideClick);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [editMenuOpen]);
 
   // Keep activeCardIdx in bounds when draftWorkouts length changes
   useEffect(() => {
@@ -177,8 +194,59 @@ export const LogView: React.FC = () => {
     [draftWorkouts]
   );
 
-  const toggleCollapse = (logUuid: string) => {
-    setCollapsedCards((prev) => ({ ...prev, [logUuid]: !prev[logUuid] }));
+  const isWorkoutMinimized = (d: DraftWorkoutCard): boolean => {
+    if (collapsedCards[d.logUuid] !== undefined) {
+      return collapsedCards[d.logUuid];
+    }
+    return Boolean(d.isSaved && d.status === 'completed');
+  };
+
+  const toggleCollapse = (logUuid: string, currentlyMinimized: boolean) => {
+    setCollapsedCards((prev) => ({ ...prev, [logUuid]: !currentlyMinimized }));
+  };
+
+  const getWorkoutSummaryMetric = (d: DraftWorkoutCard): string => {
+    if (d.totalSessionVolumeKg > 0) {
+      return `${d.totalSessionVolumeKg.toLocaleString()} kg total`;
+    }
+    const cardioDur = d.exercises.reduce(
+      (sum, ex) => sum + (Number(ex.durationSec) || Number(ex.totalDurationSec) || 0),
+      0
+    );
+    const durSec = cardioDur > 0 ? cardioDur : Number(d.durationSec) || 0;
+    if (durSec > 0) {
+      return `${formatSecondsAsMmSs(durSec)} total`;
+    }
+    return '0 kg total';
+  };
+
+  const loadedScheduleItemIds = useMemo(
+    () => new Set(draftWorkouts.map((d) => d.scheduleItemUuid).filter(Boolean)),
+    [draftWorkouts]
+  );
+
+  const unloadedScheduledCount = useMemo(
+    () =>
+      scheduledForActiveDate.filter(
+        (it) => it.status !== 'skipped' && !loadedScheduleItemIds.has(it.scheduleItemUuid)
+      ).length,
+    [scheduledForActiveDate, loadedScheduleItemIds]
+  );
+
+  const openSwitchWorkoutPicker = () => {
+    if (draftWorkouts.length === 0) {
+      setPresetPickerModal({ open: true, mode: 'add' });
+      return;
+    }
+    const targetDraft =
+      logLayoutMode === 'cards'
+        ? draftWorkouts[Math.min(activeCardIdx, draftWorkouts.length - 1)]
+        : draftWorkouts.find((d) => !isWorkoutMinimized(d)) || draftWorkouts[0];
+    setPresetPickerModal({
+      open: true,
+      mode: 'swap',
+      replaceLogUuid: targetDraft.logUuid,
+    });
   };
 
   const handleSetRepChange = (
@@ -328,10 +396,10 @@ export const LogView: React.FC = () => {
       )}
 
       {/* Top Date & Session Control Bar */}
-      <div className="bg-white dark:bg-slate-900 rounded-3xl p-3.5 sm:p-4 border border-slate-200/70 dark:border-slate-800/80 space-y-3">
+      <div className="bg-white dark:bg-slate-900 rounded-3xl p-3 sm:p-4 border border-slate-200/70 dark:border-slate-800/80 space-y-2.5">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          {/* Date Stepper */}
-          <div className="flex items-center gap-1.5">
+          {/* Date Stepper + Edit Popover Trigger */}
+          <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
             <button
               type="button"
               onClick={() => setActiveDate(shiftIsoDate(activeDate, -1))}
@@ -344,7 +412,7 @@ export const LogView: React.FC = () => {
 
             <label
               title="Click to pick another date"
-              className="relative flex items-center gap-2 px-3.5 py-2 rounded-2xl bg-slate-100/80 hover:bg-slate-200/70 dark:bg-slate-800 dark:hover:bg-slate-700 cursor-pointer transition-colors"
+              className="relative flex items-center gap-2 px-3 py-2 rounded-2xl bg-slate-100/80 hover:bg-slate-200/70 dark:bg-slate-800 dark:hover:bg-slate-700 cursor-pointer transition-colors"
             >
               <Calendar className="w-4 h-4 text-orange-500 shrink-0" />
               <div className="text-left">
@@ -386,141 +454,129 @@ export const LogView: React.FC = () => {
                 Today
               </button>
             )}
+
+            {/* Compact Edit Session Popover */}
+            <div ref={editMenuRef} className="relative">
+              <button
+                type="button"
+                onClick={() => setEditMenuOpen((prev) => !prev)}
+                aria-label="Edit Workout Session"
+                aria-expanded={editMenuOpen}
+                data-tooltip="Load, switch, or add workouts"
+                title="Load, switch, or add workouts"
+                className={`p-2 rounded-2xl border transition-colors inline-flex items-center gap-1 text-xs font-semibold ${
+                  editMenuOpen
+                    ? 'bg-orange-500 text-white border-orange-500'
+                    : 'bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 border-slate-200/60 dark:border-slate-700/60 text-slate-700 dark:text-slate-200'
+                }`}
+              >
+                <Pencil className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Edit</span>
+              </button>
+
+              {editMenuOpen && (
+                <div className="absolute left-0 top-full mt-2 w-56 max-w-[calc(100vw-2rem)] rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xl p-1.5 space-y-1 z-40">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditMenuOpen(false);
+                      const count = loadProgrammedForDate(activeDate);
+                      if (count > 0) {
+                        triggerToast(`Loaded ${count} scheduled workout(s)`);
+                      } else if (scheduledForActiveDate.length > 0) {
+                        triggerToast('Today’s scheduled workouts are already loaded');
+                      } else {
+                        triggerToast('No workouts scheduled on this date — pick a workout!');
+                        setPresetPickerModal({ open: true, mode: 'add' });
+                      }
+                    }}
+                    className="w-full px-3 py-2 rounded-xl text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:bg-orange-500/10 hover:text-orange-600 dark:hover:text-orange-400 flex items-center justify-between gap-2 transition-colors"
+                  >
+                    <span className="inline-flex items-center gap-2">
+                      <Sparkles className="w-3.5 h-3.5 text-orange-500 shrink-0" />
+                      Load Today&apos;s Plan
+                    </span>
+                    {scheduledForActiveDate.length > 0 && (
+                      <span className="px-1.5 py-0.5 rounded-full bg-orange-500/15 text-orange-600 dark:text-orange-400 text-[10px] font-mono tabular-nums">
+                        {scheduledForActiveDate.length}
+                      </span>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditMenuOpen(false);
+                      openSwitchWorkoutPicker();
+                    }}
+                    className="w-full px-3 py-2 rounded-xl text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-2 transition-colors"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5 text-orange-500 shrink-0" />
+                    Switch Workout
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditMenuOpen(false);
+                      setPresetPickerModal({
+                        open: true,
+                        mode: draftWorkouts.length > 0 ? 'chain' : 'add',
+                      });
+                    }}
+                    className="w-full px-3 py-2 rounded-xl text-left text-xs font-semibold text-orange-600 dark:text-orange-400 hover:bg-orange-500/10 flex items-center gap-2 transition-colors"
+                  >
+                    <Link2 className="w-3.5 h-3.5 shrink-0" />
+                    + Add Workout
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
 
-          {/* Right: Compact/Detailed + List/Cards Toggles + Volume Summary */}
-          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-            {/* Compact vs Detailed Density Switcher */}
-            <div className="inline-flex rounded-xl bg-slate-100 dark:bg-slate-800 p-0.5 border border-slate-200/60 dark:border-slate-700/60">
-              <button
-                type="button"
-                data-tooltip="Compact view — fits more exercises on screen"
-                title="Compact view — fits more exercises on screen"
-                onClick={() => setLogDensityMode('compact')}
-                className={`px-2 sm:px-2.5 py-1.5 rounded-lg text-[11px] font-bold inline-flex items-center gap-1 transition-all ${
-                  logDensityMode === 'compact'
-                    ? 'bg-orange-500 text-white'
-                    : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
-                }`}
-              >
-                <Minimize2 className="w-3.5 h-3.5" />
-                <span>Compact</span>
-              </button>
-              <button
-                type="button"
-                data-tooltip="Detailed view — shows ghost stats, overrides & notes"
-                title="Detailed view — shows ghost stats, overrides & notes"
-                onClick={() => setLogDensityMode('detailed')}
-                className={`px-2 sm:px-2.5 py-1.5 rounded-lg text-[11px] font-bold inline-flex items-center gap-1 transition-all ${
-                  logDensityMode === 'detailed'
-                    ? 'bg-orange-500 text-white'
-                    : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
-                }`}
-              >
-                <Maximize2 className="w-3.5 h-3.5" />
-                <span>Detailed</span>
-              </button>
-            </div>
-
-            {/* List vs Swipeable Cards View Switcher */}
-            <div className="inline-flex rounded-xl bg-slate-100 dark:bg-slate-800 p-0.5 border border-slate-200/60 dark:border-slate-700/60">
-              <button
-                type="button"
-                data-tooltip="Stacked List View"
-                title="Stacked List View"
-                onClick={() => setLogLayoutMode('list')}
-                className={`px-2 sm:px-2.5 py-1.5 rounded-lg text-[11px] font-bold inline-flex items-center gap-1 transition-all ${
-                  logLayoutMode === 'list'
-                    ? 'bg-orange-500 text-white'
-                    : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
-                }`}
-              >
-                <LayoutList className="w-3.5 h-3.5" />
-                <span>List</span>
-              </button>
-              <button
-                type="button"
-                data-tooltip="Swipeable Workout Cards View"
-                title="Swipeable Workout Cards View"
-                onClick={() => setLogLayoutMode('cards')}
-                className={`px-2 sm:px-2.5 py-1.5 rounded-lg text-[11px] font-bold inline-flex items-center gap-1 transition-all ${
-                  logLayoutMode === 'cards'
-                    ? 'bg-orange-500 text-white'
-                    : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'
-                }`}
-              >
-                <GalleryHorizontalEnd className="w-3.5 h-3.5" />
-                <span>Cards</span>
-              </button>
-            </div>
-
-            {draftWorkouts.length > 0 && (
-              <div
-                title="Total volume lifted across today's workouts"
-                className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-2xl bg-slate-100 dark:bg-slate-800 text-xs font-mono tabular-nums"
-              >
-                <span className="font-bold text-orange-600 dark:text-orange-400">
-                  {sessionTotalVolume.toLocaleString()} kg
-                </span>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Load / Override / Chain Action Buttons */}
-        <div className="flex flex-wrap items-center gap-2 pt-1">
-          <button
-            type="button"
-            data-tooltip="Load workouts scheduled on the calendar for this date"
-            title="Load workouts scheduled on the calendar for this date"
-            onClick={() => {
-              const count = loadProgrammedForDate(activeDate);
-              if (count > 0) {
-                triggerToast(`Loaded ${count} scheduled workout(s)`);
-              } else if (scheduledForActiveDate.length > 0) {
-                triggerToast('Today’s scheduled workouts are already loaded');
-              } else {
-                triggerToast('No workouts scheduled on this date — pick a workout!');
-                setPresetPickerModal({ open: true, mode: 'add' });
-              }
-            }}
-            className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-2xl bg-orange-500 hover:bg-orange-600 text-white font-semibold text-xs transition-all"
-          >
-            <Sparkles className="w-4 h-4" />
-            Load Today&apos;s Plan
-            {scheduledForActiveDate.length > 0 && (
-              <span className="ml-0.5 px-1.5 py-0.2 rounded-full bg-white/20 text-[11px] font-mono tabular-nums">
-                {scheduledForActiveDate.length}
-              </span>
-            )}
-          </button>
-
-          <button
-            type="button"
-            data-tooltip="Pick any workout from your library"
-            title="Pick any workout from your library"
-            onClick={() => setPresetPickerModal({ open: true, mode: 'add' })}
-            className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-2xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 font-semibold text-xs transition-colors"
-          >
-            <RefreshCw className="w-3.5 h-3.5 text-orange-500" />
-            Switch Workout
-          </button>
-
+          {/* Right: Session Volume Summary */}
           {draftWorkouts.length > 0 && (
-            <button
-              type="button"
-              data-tooltip="Add a follow-up workout (e.g. Core or Mobility) to this session"
-              title="Add a follow-up workout (e.g. Core or Mobility) to this session"
-              onClick={() => {
-                setPresetPickerModal({ open: true, mode: 'chain' });
-              }}
-              className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-2xl border border-dashed border-orange-500/40 hover:border-orange-500 bg-orange-500/[0.04] hover:bg-orange-500/10 text-orange-600 dark:text-orange-400 font-semibold text-xs transition-colors"
+            <div
+              title="Total volume lifted across today's workouts"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-2xl bg-slate-100 dark:bg-slate-800 text-xs font-mono tabular-nums shrink-0"
             >
-              <Link2 className="w-3.5 h-3.5" />
-              + Add Workout
-            </button>
+              <span className="font-bold text-orange-600 dark:text-orange-400">
+                {sessionTotalVolume.toLocaleString()} kg
+              </span>
+            </div>
           )}
         </div>
+
+        {/* Direct Default Action when appropriate (no workouts loaded or unloaded scheduled plan exists) */}
+        {(draftWorkouts.length === 0 || unloadedScheduledCount > 0) && (
+          <div className="flex flex-wrap items-center gap-2 pt-0.5">
+            <button
+              type="button"
+              data-tooltip="Load workouts scheduled on the calendar for this date"
+              title="Load workouts scheduled on the calendar for this date"
+              onClick={() => {
+                const count = loadProgrammedForDate(activeDate);
+                if (count > 0) {
+                  triggerToast(`Loaded ${count} scheduled workout(s)`);
+                } else if (scheduledForActiveDate.length > 0) {
+                  triggerToast('Today’s scheduled workouts are already loaded');
+                } else {
+                  triggerToast('No workouts scheduled on this date — pick a workout!');
+                  setPresetPickerModal({ open: true, mode: 'add' });
+                }
+              }}
+              className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-2xl bg-orange-500 hover:bg-orange-600 text-white font-semibold text-xs transition-all"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              Load Today&apos;s Plan
+              {scheduledForActiveDate.length > 0 && (
+                <span className="ml-0.5 px-1.5 py-0.2 rounded-full bg-white/20 text-[11px] font-mono tabular-nums">
+                  {scheduledForActiveDate.length}
+                </span>
+              )}
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Empty State */}
@@ -629,9 +685,94 @@ export const LogView: React.FC = () => {
             className="space-y-4"
           >
             {visibleWorkouts.map(({ draft, originalIdx: cardIdx }) => {
-              const isCollapsed =
-                logLayoutMode === 'list' && Boolean(collapsedCards[draft.logUuid]);
+              const isCollapsed = isWorkoutMinimized(draft);
               const preset = presets.find((p) => p.presetUuid === draft.presetUuid);
+
+              if (isCollapsed) {
+                return (
+                  <div
+                    key={draft.logUuid}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => toggleCollapse(draft.logUuid, true)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        toggleCollapse(draft.logUuid, true);
+                      }
+                    }}
+                    title="Tap to expand workout details & sets"
+                    className={`rounded-3xl bg-white dark:bg-slate-900 border transition-all overflow-hidden cursor-pointer ${
+                      draft.isSaved && draft.status === 'completed'
+                        ? 'border-emerald-500/35 dark:border-emerald-500/25 hover:border-emerald-500/60'
+                        : 'border-slate-200/70 dark:border-slate-800/80 hover:border-orange-500/50'
+                    }`}
+                  >
+                    <div className="p-3.5 sm:px-5 bg-slate-50/50 dark:bg-slate-800/30 space-y-1.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+                          <span className="text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-lg bg-orange-500/12 text-orange-600 dark:text-orange-400">
+                            {draft.slotRole || `Workout #${cardIdx + 1}`}
+                          </span>
+                          <span className="text-[11px] font-semibold px-2 py-0.5 rounded-lg bg-slate-200/60 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                            {draft.workoutType}
+                          </span>
+                          <span className="font-mono text-[10px] font-medium px-1.5 py-0.5 rounded-md text-slate-400 dark:text-slate-500 tabular-nums">
+                            #{draft.displayId.replace(/^ID-/i, '')}
+                          </span>
+                          {draft.isSaved ? (
+                            <span
+                              className={`inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-lg ${
+                                draft.status === 'completed'
+                                  ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                                  : 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+                              }`}
+                            >
+                              <CheckCircle2 className="w-3 h-3" />
+                              {draft.status === 'completed' ? 'Saved' : 'Incomplete'}
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400">
+                              <span className="w-1.5 h-1.5 rounded-full bg-orange-500" />
+                              In Progress
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-1 shrink-0">
+                          <span
+                            className="p-1.5 rounded-xl text-slate-500 hover:bg-slate-200/60 dark:hover:bg-slate-800"
+                            aria-label="Expand workout"
+                          >
+                            <ChevronDown className="w-4 h-4" />
+                          </span>
+                          <button
+                            type="button"
+                            data-tooltip="Remove workout from today's session"
+                            title="Remove workout from today's session"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              removeDraftWorkout(draft.logUuid);
+                            }}
+                            className="p-1.5 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-500/10 transition-colors"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-baseline justify-between gap-2">
+                        <h2 className="font-display font-extrabold text-base sm:text-lg text-slate-900 dark:text-slate-100 truncate">
+                          {draft.workoutTitleSnapshot}
+                        </h2>
+                        <span className="text-xs font-mono font-bold text-orange-600 dark:text-orange-400 tabular-nums shrink-0">
+                          {getWorkoutSummaryMetric(draft)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              }
 
               return (
                 <div
@@ -734,34 +875,28 @@ export const LogView: React.FC = () => {
                           <Trash2 className="w-4 h-4" />
                         </button>
 
-                        {logLayoutMode === 'list' && (
-                          <button
-                            type="button"
-                            data-tooltip={isCollapsed ? 'Expand workout' : 'Collapse workout'}
-                            title={isCollapsed ? 'Expand workout' : 'Collapse workout'}
-                            onClick={() => toggleCollapse(draft.logUuid)}
-                            className="p-1.5 rounded-xl text-slate-500 hover:bg-slate-200/60 dark:hover:bg-slate-800"
-                          >
-                            {isCollapsed ? (
-                              <ChevronDown className="w-5 h-5" />
-                            ) : (
-                              <ChevronUp className="w-5 h-5" />
-                            )}
-                          </button>
-                        )}
+                        <button
+                          type="button"
+                          data-tooltip="Minimize workout card"
+                          title="Minimize workout card"
+                          onClick={() => toggleCollapse(draft.logUuid, false)}
+                          className="p-1.5 rounded-xl text-slate-500 hover:bg-slate-200/60 dark:hover:bg-slate-800"
+                        >
+                          <ChevronUp className="w-5 h-5" />
+                        </button>
                       </div>
                     </div>
 
                     {/* Full-Width Workout Title Row */}
                     <div
-                      onClick={() => logLayoutMode === 'list' && toggleCollapse(draft.logUuid)}
+                      onClick={() => toggleCollapse(draft.logUuid, false)}
                       className="flex flex-wrap items-baseline justify-between gap-2 cursor-pointer select-none"
                     >
                       <h2 className="font-display font-extrabold text-lg sm:text-xl text-slate-900 dark:text-slate-100">
                         {draft.workoutTitleSnapshot}
                       </h2>
                       <span className="text-xs font-mono font-bold text-orange-600 dark:text-orange-400 tabular-nums">
-                        {draft.totalSessionVolumeKg.toLocaleString()} kg total
+                        {getWorkoutSummaryMetric(draft)}
                       </span>
                     </div>
 
@@ -2346,6 +2481,10 @@ export const LogView: React.FC = () => {
                                 'completed',
                                 draft.updatePresetOnSave
                               );
+                              setCollapsedCards((prev) => ({
+                                ...prev,
+                                [draft.logUuid]: true,
+                              }));
                               if (res.ok) {
                                 triggerToast(`Completed & Saved "${draft.workoutTitleSnapshot}"!`);
                               } else {
@@ -2470,11 +2609,19 @@ export const LogView: React.FC = () => {
                             ? `Workout #${draftWorkouts.length + 1}`
                             : undefined,
                       });
+                      if (presetPickerModal.replaceLogUuid) {
+                        const swappedId = presetPickerModal.replaceLogUuid;
+                        setCollapsedCards((prev) => ({ ...prev, [swappedId]: false }));
+                      }
                       if (presetPickerModal.mode === 'chain') {
                         setActiveCardIdx(draftWorkouts.length);
                       }
                       setPresetPickerModal({ open: false, mode: 'add' });
-                      triggerToast(`Loaded ${preset.title}`);
+                      triggerToast(
+                        presetPickerModal.mode === 'swap'
+                          ? `Switched to ${preset.title}`
+                          : `Loaded ${preset.title}`
+                      );
                     }}
                     className="p-3.5 rounded-2xl border border-slate-200/80 dark:border-slate-800 hover:border-orange-500 dark:hover:border-orange-500 bg-slate-50/50 dark:bg-slate-800/40 cursor-pointer transition-all flex items-center justify-between gap-3"
                   >
