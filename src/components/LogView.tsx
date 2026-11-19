@@ -1875,7 +1875,7 @@ export const LogView: React.FC = () => {
                                 )}
 
                                 {cueNote && (
-                                  <div className="px-2.5 py-1 rounded-lg bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-700 dark:text-amber-300 font-medium leading-snug break-words">
+                                  <div className="coach-cue-banner px-2.5 py-1 rounded-lg border text-[11px] font-medium leading-snug break-words">
                                     Coach cue: {cueNote}
                                   </div>
                                 )}
@@ -2256,7 +2256,7 @@ export const LogView: React.FC = () => {
                                     type="button"
                                     onClick={() => setEditingCueKey(exKey)}
                                     title="Tap to edit coaching cue"
-                                    className="mt-1 w-full text-left px-2.5 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/15 border border-amber-500/20 text-[11px] text-amber-700 dark:text-amber-300 font-medium leading-snug break-words transition-colors"
+                                    className="coach-cue-banner mt-1 w-full text-left px-2.5 py-1 rounded-lg border text-[11px] font-medium leading-snug break-words transition-colors"
                                   >
                                     Coach cue: {cueNote}
                                   </button>

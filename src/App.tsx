@@ -14,6 +14,7 @@ export const App: React.FC = () => {
   useEffect(() => {
     const root = document.documentElement;
     const applyTheme = (mode: 'light' | 'dark') => {
+      root.dataset.theme = mode;
       if (mode === 'dark') {
         root.classList.add('dark');
       } else {

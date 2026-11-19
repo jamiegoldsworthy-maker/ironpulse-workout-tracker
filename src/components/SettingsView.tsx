@@ -990,8 +990,8 @@ export const SettingsView: React.FC = () => {
               <div className="grid grid-cols-3 gap-2">
                 {(
                   [
-                    { id: 'light', label: 'Light', icon: Sun },
-                    { id: 'dark', label: 'Dark', icon: Moon },
+                    { id: 'light', label: 'Light Sand', icon: Sun },
+                    { id: 'dark', label: 'Dark Charcoal', icon: Moon },
                     { id: 'system', label: 'System', icon: Monitor },
                   ] as Array<{ id: ThemeMode; label: string; icon: any }>
                 ).map((t) => {

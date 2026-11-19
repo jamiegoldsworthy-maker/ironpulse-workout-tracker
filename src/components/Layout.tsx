@@ -210,8 +210,29 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
               </h1>
             </div>
 
-            {/* Right Controls: Single Minimal Cog Popover */}
-            <div ref={cogRef} className="relative flex items-center shrink-0">
+            {/* Right Controls: Quick Sun/Moon Toggle + Cog Popover */}
+            <div ref={cogRef} className="relative flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  const isCurrentlyDark =
+                    meta.theme === 'dark' ||
+                    (meta.theme === 'system' &&
+                      typeof window !== 'undefined' &&
+                      window.matchMedia('(prefers-color-scheme: dark)').matches);
+                  setTheme(isCurrentlyDark ? 'light' : 'dark');
+                }}
+                aria-label="Toggle Light / Dark Theme"
+                title="Switch Light Sand / Dark Charcoal"
+                className="p-2 rounded-xl border bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:text-orange-500 border-slate-200/60 dark:border-slate-700/60 transition-colors"
+              >
+                {meta.theme === 'light' ? (
+                  <Moon className="w-4 h-4" />
+                ) : (
+                  <Sun className="w-4 h-4" />
+                )}
+              </button>
+
               <button
                 type="button"
                 onClick={() => setCogOpen((prev) => !prev)}

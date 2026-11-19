@@ -1004,7 +1004,7 @@ export const SEED_META: UserMeta = {
   uid: 'local-user',
   nextLogSequenceNumber: 85,
   activeProgramUuid: 'prog-hybrid-kb-ruck',
-  theme: 'system',
+  theme: 'dark',
   defaultAutoStartRestTimer: true,
   defaultDistanceUnit: 'mi',
   updatedAt: NOW_ISO,
