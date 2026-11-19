@@ -190,7 +190,7 @@ export interface LoggedExercise {
   exerciseNotes?: string;
 }
 
-export type LogStatus = 'completed' | 'did_not_complete';
+export type LogStatus = 'in_progress' | 'completed' | 'did_not_complete';
 
 export interface WorkoutLog {
   logUuid: string;

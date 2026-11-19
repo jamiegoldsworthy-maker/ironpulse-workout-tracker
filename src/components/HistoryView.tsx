@@ -70,10 +70,13 @@ export const HistoryView: React.FC = () => {
   const [dateTo, setDateTo] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
-  // Filtered Workout Logs
+  // Filtered Workout Logs (exclude in-progress live drafts until completed/marked incomplete)
   const filteredLogs = useMemo(() => {
     return logs
       .filter((log) => {
+        if (log.status === 'in_progress') {
+          return false;
+        }
         if (selectedProgramUuid !== 'ALL' && log.programUuid !== selectedProgramUuid) {
           return false;
         }

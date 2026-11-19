@@ -6,6 +6,7 @@ import {
   DistanceUnit,
   GhostExerciseData,
   GlobalExercise,
+  LogStatus,
   LoggedExercise,
   PresetExercise,
   ScheduledItem,
@@ -120,6 +121,7 @@ interface WorkoutStoreState {
     status?: 'completed' | 'did_not_complete',
     alsoUpdatePreset?: boolean
   ) => Promise<{ ok: boolean; error?: string }>;
+  syncDraftToFirestore: (logUuid: string) => Promise<{ ok: boolean; error?: string }>;
   saveAllDraftWorkouts: () => Promise<void>;
 
   // Ghost Text & History Lookup
@@ -197,7 +199,7 @@ interface WorkoutStoreState {
   ) => void;
   startRealtimeSync: (uid: string) => () => void;
   syncWithFirestore: () => Promise<void>;
-  pushLocalToCloud: () => Promise<void>;
+  pushLocalToCloud: () => Promise<{ ok: boolean; pushedLogs: number; error?: string }>;
   resetToDemoSeed: () => void;
 }
 
@@ -309,7 +311,7 @@ function createDraftFromPreset(
     completedRounds: formatMode === 'emom_complex' ? 0 : undefined,
     programUuid: options?.programUuid || preset.programIds?.[0],
     scheduleItemUuid: options?.scheduleItemUuid,
-    status: 'completed',
+    status: 'in_progress',
     sessionNotes: '',
     totalSessionVolumeKg: 0,
     exerciseUuids: exercises.map((e) => e.exerciseUuid),
@@ -343,7 +345,7 @@ function buildInitialDraftsForDate(
       );
       return {
         ...JSON.parse(JSON.stringify(l)),
-        isSaved: true,
+        isSaved: l.status === 'completed' || l.status === 'did_not_complete',
         coachNotes: linkedSched?.coachNotes,
         slotRole: linkedSched?.slotRole || (idx === 0 ? 'Primary' : `Chained #${idx + 1}`),
         updatePresetOnSave: false,
@@ -379,6 +381,78 @@ function buildInitialDraftsForDate(
   }
 
   return { sessionGroupUuid: groupUuid, drafts: [] };
+}
+
+const pendingDraftSyncTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+const pendingDraftLogUuids = new Set<string>();
+
+function clearPendingDraftSync(logUuid: string) {
+  if (pendingDraftSyncTimers[logUuid]) {
+    clearTimeout(pendingDraftSyncTimers[logUuid]);
+    delete pendingDraftSyncTimers[logUuid];
+  }
+  pendingDraftLogUuids.delete(logUuid);
+}
+
+function isUserActivelyTyping(): boolean {
+  if (typeof document === 'undefined') return false;
+  const el = document.activeElement;
+  if (!el) return false;
+  const tag = el.tagName?.toUpperCase();
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+}
+
+function draftToWorkoutLog(
+  draft: DraftWorkoutCard,
+  uid: string,
+  fallbackIdx = 0
+): WorkoutLog {
+  const now = new Date().toISOString();
+  const recalcedExercises = draft.exercises.map((ex) => recalculateLoggedExercise(ex));
+  const totalSessionVolumeKg =
+    Math.round(
+      recalcedExercises.reduce((acc, ex) => acc + (Number(ex.totalLoadKg) || 0), 0) * 10
+    ) / 10;
+
+  const effectiveStatus: LogStatus = draft.isSaved
+    ? draft.status === 'did_not_complete'
+      ? 'did_not_complete'
+      : 'completed'
+    : 'in_progress';
+
+  return {
+    logUuid: draft.logUuid,
+    uid,
+    displayId: draft.displayId,
+    legacyId: draft.legacyId,
+    sessionGroupUuid: draft.sessionGroupUuid,
+    chainOrderIndex: draft.chainOrderIndex ?? fallbackIdx,
+    date: draft.date,
+    presetUuid: draft.presetUuid,
+    workoutTitleSnapshot: draft.workoutTitleSnapshot,
+    workoutType: draft.workoutType,
+    formatMode: draft.formatMode,
+    targetRounds: draft.targetRounds,
+    completedRounds: draft.completedRounds,
+    laddersCompleted: draft.laddersCompleted,
+    extraRungs: draft.extraRungs,
+    programUuid: draft.programUuid,
+    scheduleItemUuid: draft.scheduleItemUuid,
+    status: effectiveStatus,
+    sessionNotes: draft.sessionNotes,
+    totalSessionVolumeKg,
+    durationSec: draft.durationSec,
+    exerciseUuids: recalcedExercises.map((e) => e.exerciseUuid),
+    exercises: recalcedExercises,
+    createdAt: draft.createdAt || now,
+    updatedAt: draft.updatedAt || now,
+  };
+}
+
+function upsertLogInArray(logs: WorkoutLog[], record: WorkoutLog): WorkoutLog[] {
+  const idx = logs.findIndex((l) => l.logUuid === record.logUuid);
+  if (idx === -1) return [record, ...logs];
+  return logs.map((l, i) => (i === idx ? record : l));
 }
 
 const initialFloor = buildInitialDraftsForDate(
@@ -607,11 +681,39 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
             }
           }
 
+          let nextLogs = state.logs;
+          const uid = state.authUser?.uid || state.meta.uid;
+          const newRecords = addedDrafts.map((d, i) =>
+            draftToWorkoutLog(d, uid, state.draftWorkouts.length + i)
+          );
+          for (const rec of newRecords) {
+            nextLogs = upsertLogInArray(nextLogs, rec);
+          }
+
           set({
             activeDate: date,
             draftWorkouts: [...state.draftWorkouts, ...addedDrafts],
+            logs: nextLogs,
             timer: nextTimer,
           });
+
+          if (state.authUser) {
+            const authUid = state.authUser.uid;
+            set({ syncStatus: 'syncing', lastSyncError: undefined });
+            Promise.all(
+              newRecords.map((rec) => upsertFirestoreDoc('wt_logs', rec.logUuid, rec, authUid))
+            )
+              .then(() => {
+                set({ syncStatus: 'synced', lastSyncError: undefined });
+              })
+              .catch((err) => {
+                console.error('[Sync] Failed to upsert started scheduled workout(s):', err);
+                set({
+                  syncStatus: 'error',
+                  lastSyncError: err?.message || 'Failed to sync started workout',
+                });
+              });
+          }
         }
         return addedDrafts.length;
       },
@@ -681,7 +783,25 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
             replacement.displayId = existing.displayId;
             const nextDrafts = [...state.draftWorkouts];
             nextDrafts[idx] = replacement;
-            set({ draftWorkouts: nextDrafts });
+            const uid = state.authUser?.uid || state.meta.uid;
+            const logRecord = draftToWorkoutLog(replacement, uid, idx);
+            set({
+              draftWorkouts: nextDrafts,
+              logs: upsertLogInArray(state.logs, logRecord),
+            });
+            if (state.authUser) {
+              clearPendingDraftSync(logRecord.logUuid);
+              set({ syncStatus: 'syncing', lastSyncError: undefined });
+              upsertFirestoreDoc('wt_logs', logRecord.logUuid, logRecord, state.authUser.uid)
+                .then(() => set({ syncStatus: 'synced', lastSyncError: undefined }))
+                .catch((err) => {
+                  console.error('[Sync] Failed to upsert swapped workout to Firestore:', err);
+                  set({
+                    syncStatus: 'error',
+                    lastSyncError: err?.message || 'Failed to sync swapped workout',
+                  });
+                });
+            }
             return;
           }
         }
@@ -705,14 +825,61 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           }
         );
 
+        const uid = state.authUser?.uid || state.meta.uid;
+        const logRecord = draftToWorkoutLog(newDraft, uid, state.draftWorkouts.length);
         set({
           draftWorkouts: [...state.draftWorkouts, newDraft],
+          logs: upsertLogInArray(state.logs, logRecord),
         });
+        if (state.authUser) {
+          clearPendingDraftSync(logRecord.logUuid);
+          set({ syncStatus: 'syncing', lastSyncError: undefined });
+          upsertFirestoreDoc('wt_logs', logRecord.logUuid, logRecord, state.authUser.uid)
+            .then(() => set({ syncStatus: 'synced', lastSyncError: undefined }))
+            .catch((err) => {
+              console.error('[Sync] Failed to upsert new workout to Firestore:', err);
+              set({
+                syncStatus: 'error',
+                lastSyncError: err?.message || 'Failed to sync started workout',
+              });
+            });
+        }
+      },
+
+      syncDraftToFirestore: async (logUuid) => {
+        clearPendingDraftSync(logUuid);
+        const state = get();
+        const draftIdx = state.draftWorkouts.findIndex((d) => d.logUuid === logUuid);
+        if (draftIdx === -1) return { ok: true };
+
+        const draft = state.draftWorkouts[draftIdx];
+        const uid = state.authUser?.uid || state.meta.uid;
+        const logRecord = draftToWorkoutLog(draft, uid, draftIdx);
+
+        set({
+          logs: upsertLogInArray(get().logs, logRecord),
+        });
+
+        if (!state.authUser) return { ok: true };
+
+        set({ syncStatus: 'syncing', lastSyncError: undefined });
+        try {
+          await upsertFirestoreDoc('wt_logs', logRecord.logUuid, logRecord, state.authUser.uid);
+          set({ syncStatus: 'synced', lastSyncError: undefined });
+          return { ok: true };
+        } catch (err: any) {
+          const msg = err?.message || 'Failed to sync in-progress workout';
+          console.error('[Sync] Debounced draft upsert failed:', err);
+          set({ syncStatus: 'error', lastSyncError: msg });
+          return { ok: false, error: msg };
+        }
       },
 
       updateDraftWorkout: (logUuid, updater) => {
         const state = get();
-        const nextDrafts = state.draftWorkouts.map((d) => {
+        let updatedRecord: WorkoutLog | null = null;
+        const uid = state.authUser?.uid || state.meta.uid;
+        const nextDrafts = state.draftWorkouts.map((d, idx) => {
           if (d.logUuid !== logUuid) return d;
           const updated = updater(d);
           const recalcedExercises = updated.exercises.map((ex) => recalculateLoggedExercise(ex));
@@ -720,18 +887,38 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
             (acc, ex) => acc + (Number(ex.totalLoadKg) || 0),
             0
           );
-          return {
+          const nextDraft: DraftWorkoutCard = {
             ...updated,
+            status: updated.isSaved ? updated.status : 'in_progress',
             exercises: recalcedExercises,
             exerciseUuids: recalcedExercises.map((e) => e.exerciseUuid),
             totalSessionVolumeKg: Math.round(totalSessionVolumeKg * 10) / 10,
             updatedAt: new Date().toISOString(),
           };
+          updatedRecord = draftToWorkoutLog(nextDraft, uid, idx);
+          return nextDraft;
         });
-        set({ draftWorkouts: nextDrafts });
+
+        set({
+          draftWorkouts: nextDrafts,
+          ...(updatedRecord ? { logs: upsertLogInArray(state.logs, updatedRecord) } : {}),
+        });
+
+        // Debounce live Firestore sync (~1.5s after user stops editing sets/reps/weights)
+        if (updatedRecord) {
+          if (pendingDraftSyncTimers[logUuid]) {
+            clearTimeout(pendingDraftSyncTimers[logUuid]);
+          }
+          pendingDraftLogUuids.add(logUuid);
+          pendingDraftSyncTimers[logUuid] = setTimeout(() => {
+            delete pendingDraftSyncTimers[logUuid];
+            get().syncDraftToFirestore(logUuid);
+          }, 1500);
+        }
       },
 
       removeDraftWorkout: (logUuid) => {
+        clearPendingDraftSync(logUuid);
         const state = get();
         const target = state.draftWorkouts.find((d) => d.logUuid === logUuid);
         const nextDrafts = state.draftWorkouts.filter((d) => d.logUuid !== logUuid);
@@ -766,12 +953,13 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
       },
 
       saveDraftWorkout: async (logUuid, statusOverride, alsoUpdatePreset) => {
+        clearPendingDraftSync(logUuid);
         const state = get();
         const draftIdx = state.draftWorkouts.findIndex((d) => d.logUuid === logUuid);
         if (draftIdx === -1) return { ok: false, error: 'Workout card not found' };
 
         const draft = state.draftWorkouts[draftIdx];
-        const finalStatus = statusOverride || draft.status || 'completed';
+        const finalStatus = statusOverride || (draft.status === 'did_not_complete' ? 'did_not_complete' : 'completed');
         const now = new Date().toISOString();
 
         const recalcedExercises = draft.exercises.map((ex) => recalculateLoggedExercise(ex));
@@ -782,8 +970,10 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
 
         let nextSeq = state.meta.nextLogSequenceNumber;
         let finalDisplayId = draft.displayId;
-        const alreadyInLogs = state.logs.some((l) => l.logUuid === logUuid);
-        if (!alreadyInLogs) {
+        const alreadyFinalized = state.logs.some(
+          (l) => l.logUuid === logUuid && l.status !== 'in_progress'
+        );
+        if (!alreadyFinalized) {
           finalDisplayId = formatDisplayId(nextSeq);
           nextSeq += 1;
         }
@@ -816,6 +1006,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           updatedAt: now,
         };
 
+        const alreadyInLogs = state.logs.some((l) => l.logUuid === logUuid);
         const nextLogs = alreadyInLogs
           ? state.logs.map((l) => (l.logUuid === logUuid ? logRecord : l))
           : [logRecord, ...state.logs];
@@ -937,7 +1128,10 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
       saveAllDraftWorkouts: async () => {
         const drafts = get().draftWorkouts;
         for (const d of drafts) {
-          await get().saveDraftWorkout(d.logUuid, d.status);
+          await get().saveDraftWorkout(
+            d.logUuid,
+            d.status === 'did_not_complete' ? 'did_not_complete' : 'completed'
+          );
         }
       },
 
@@ -1727,21 +1921,52 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
             }
           },
           onLogs: (remoteLogs) => {
-            const sortedRemote = [...remoteLogs].sort(
+            const state = get();
+            const uid = state.authUser?.uid || state.meta.uid;
+
+            const mergedLogsMap = new Map<string, WorkoutLog>();
+            for (const r of remoteLogs) {
+              mergedLogsMap.set(r.logUuid, r);
+            }
+
+            // Preserve any local drafts that have pending debounced syncs not yet committed
+            for (const pendingId of pendingDraftLogUuids) {
+              const localDraft = state.draftWorkouts.find((d) => d.logUuid === pendingId);
+              if (localDraft) {
+                mergedLogsMap.set(
+                  pendingId,
+                  draftToWorkoutLog(localDraft, uid, localDraft.chainOrderIndex ?? 0)
+                );
+              }
+            }
+
+            const sortedMergedLogs = Array.from(mergedLogsMap.values()).sort(
               (a, b) =>
                 (b.date || '').localeCompare(a.date || '') ||
                 (b.updatedAt || b.createdAt || '').localeCompare(
                   a.updatedAt || a.createdAt || ''
                 )
             );
-            const state = get();
-            if (sortedRemote.length === 0 && state.logs.length > 0) {
+
+            if (remoteLogs.length === 0 && state.logs.length > 0) {
               return;
             }
 
-            // Refresh saved draft cards for activeDate while keeping any unsaved in-progress drafts
-            const unsavedDrafts = state.draftWorkouts.filter((d) => !d.isSaved);
-            const remoteForActiveDate = sortedRemote
+            // Hydrate LogView drafts for activeDate when remote updates arrive,
+            // provided the user isn't actively typing or holding a pending debounced edit.
+            const shouldSkipDraftHydration =
+              isUserActivelyTyping() || pendingDraftLogUuids.size > 0;
+
+            if (shouldSkipDraftHydration) {
+              set({
+                logs: sortedMergedLogs,
+                syncStatus: 'synced',
+                lastSyncError: undefined,
+              });
+              return;
+            }
+
+            const remoteForActiveDate = sortedMergedLogs
               .filter((l) => l.date === state.activeDate)
               .sort((a, b) => (a.chainOrderIndex ?? 0) - (b.chainOrderIndex ?? 0))
               .map((l, idx) => {
@@ -1751,21 +1976,21 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
                 );
                 return {
                   ...l,
-                  isSaved: true,
+                  isSaved: l.status === 'completed' || l.status === 'did_not_complete',
                   coachNotes: linkedSched?.coachNotes,
                   slotRole: linkedSched?.slotRole || (idx === 0 ? 'Primary' : `Workout #${idx + 1}`),
                   updatePresetOnSave: false,
                 } as DraftWorkoutCard;
               });
 
-            const savedIds = new Set(remoteForActiveDate.map((d) => d.logUuid));
-            const mergedDrafts = [
-              ...remoteForActiveDate,
-              ...unsavedDrafts.filter((d) => !savedIds.has(d.logUuid)),
-            ];
+            const remoteIds = new Set(remoteForActiveDate.map((d) => d.logUuid));
+            const localOnlyDrafts = state.draftWorkouts.filter(
+              (d) => d.date === state.activeDate && !d.isSaved && !remoteIds.has(d.logUuid)
+            );
+            const mergedDrafts = [...remoteForActiveDate, ...localOnlyDrafts];
 
             set({
-              logs: sortedRemote,
+              logs: sortedMergedLogs,
               draftWorkouts: mergedDrafts.length > 0 ? mergedDrafts : state.draftWorkouts,
               syncStatus: 'synced',
               lastSyncError: undefined,
@@ -1835,9 +2060,8 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           const nextLogs = sortedLogs.length > 0 ? sortedLogs : state.logs;
           const nextMeta = remote.meta ? { ...state.meta, ...remote.meta } : state.meta;
 
-          // Also refresh drafts for activeDate from pulled remote logs if user hasn't started unsaved edits
-          const hasUnsavedEdits = state.draftWorkouts.some((d) => !d.isSaved);
-          const refreshedFloor = !hasUnsavedEdits
+          // Refresh drafts for activeDate from pulled remote logs unless user is actively typing
+          const refreshedFloor = !isUserActivelyTyping()
             ? buildInitialDraftsForDate(
                 state.activeDate,
                 nextLogs,
@@ -1845,6 +2069,13 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
                 nextPresets,
                 nextMeta
               )
+            : null;
+          const nextIds = new Set((refreshedFloor?.drafts || []).map((d) => d.logUuid));
+          const preservedLocalOnlyDrafts = state.draftWorkouts.filter(
+            (d) => d.date === state.activeDate && !d.isSaved && !nextIds.has(d.logUuid)
+          );
+          const mergedActiveDrafts = refreshedFloor
+            ? [...refreshedFloor.drafts, ...preservedLocalOnlyDrafts]
             : null;
 
           set({
@@ -1854,10 +2085,10 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
             schedules: scheduleMap,
             logs: nextLogs,
             meta: nextMeta,
-            ...(refreshedFloor
+            ...(refreshedFloor && mergedActiveDrafts
               ? {
                   activeSessionGroupUuid: refreshedFloor.sessionGroupUuid,
-                  draftWorkouts: refreshedFloor.drafts,
+                  draftWorkouts: mergedActiveDrafts,
                 }
               : {}),
             syncStatus: 'synced',
@@ -1874,24 +2105,89 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
 
       pushLocalToCloud: async () => {
         const state = get();
-        if (!state.authUser) return;
+        if (!state.authUser) {
+          return { ok: false, pushedLogs: 0, error: 'Sign in with Google first.' };
+        }
+        const uid = state.authUser.uid;
         set({ syncStatus: 'syncing', lastSyncError: undefined });
+
         try {
-          await pushAllLocalDataToFirestore(state.authUser.uid, {
+          // Cancel any pending debounces since we are pushing all drafts immediately
+          for (const d of state.draftWorkouts) {
+            clearPendingDraftSync(d.logUuid);
+          }
+
+          // Collect ALL logs from Zustand AND any active draftWorkouts / localStorage persisted entries
+          const combinedLogsMap = new Map<string, WorkoutLog>();
+          for (const log of state.logs) {
+            combinedLogsMap.set(log.logUuid, { ...log, uid });
+          }
+
+          // Check raw localStorage persisted drafts/logs as fallback so zero device-only drafts are missed
+          try {
+            const raw = localStorage.getItem('ironpulse-workout-tracker-storage-v1');
+            if (raw) {
+              const parsed = JSON.parse(raw);
+              const persistedState = parsed?.state;
+              if (Array.isArray(persistedState?.logs)) {
+                for (const pLog of persistedState.logs as WorkoutLog[]) {
+                  if (pLog?.logUuid && !combinedLogsMap.has(pLog.logUuid)) {
+                    combinedLogsMap.set(pLog.logUuid, { ...pLog, uid });
+                  }
+                }
+              }
+              if (Array.isArray(persistedState?.draftWorkouts)) {
+                (persistedState.draftWorkouts as DraftWorkoutCard[]).forEach((pDraft, idx) => {
+                  if (pDraft?.logUuid && !combinedLogsMap.has(pDraft.logUuid)) {
+                    combinedLogsMap.set(
+                      pDraft.logUuid,
+                      draftToWorkoutLog(pDraft, uid, idx)
+                    );
+                  }
+                });
+              }
+            }
+          } catch {
+            // Ignore malformed localStorage read
+          }
+
+          // Active in-memory draftWorkouts always hold the freshest edits for those cards
+          state.draftWorkouts.forEach((draft, idx) => {
+            combinedLogsMap.set(draft.logUuid, draftToWorkoutLog(draft, uid, idx));
+          });
+
+          const allLocalLogs = Array.from(combinedLogsMap.values()).sort(
+            (a, b) =>
+              (b.date || '').localeCompare(a.date || '') ||
+              (b.updatedAt || b.createdAt || '').localeCompare(
+                a.updatedAt || a.createdAt || ''
+              )
+          );
+
+          // Update local logs store before pushing so local & cloud stay aligned
+          set({ logs: allLocalLogs });
+
+          await pushAllLocalDataToFirestore(uid, {
             exercises: state.exercises,
             presets: state.presets,
             programs: state.programs,
             schedules: state.schedules,
-            logs: state.logs,
-            meta: state.meta,
+            logs: allLocalLogs,
+            meta: { ...state.meta, uid },
           });
-          set({ syncStatus: 'synced', lastSyncError: undefined });
+
+          // Pull & merge remote updates after pushing so cross-device entries converge cleanly
+          await get().syncWithFirestore();
+
+          return { ok: true, pushedLogs: allLocalLogs.length };
         } catch (err: any) {
+          const msg = err?.message || 'Push to Firestore failed';
           console.error('[Sync] pushLocalToCloud error:', err);
           set({
             syncStatus: 'error',
-            lastSyncError: err?.message || 'Push to Firestore failed',
+            lastSyncError: msg,
           });
+          return { ok: false, pushedLogs: 0, error: msg };
         }
       },
 

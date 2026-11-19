@@ -840,17 +840,29 @@ export const SettingsView: React.FC = () => {
                 <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
-                    onClick={() => syncWithFirestore()}
-                    className="px-3 py-2 rounded-xl bg-orange-500 text-white text-xs font-bold inline-flex items-center gap-1.5"
+                    onClick={async () => {
+                      await syncWithFirestore();
+                      showNotice('Synced workouts & schedule with Firestore');
+                    }}
+                    className="px-3 py-2 rounded-xl bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold inline-flex items-center gap-1.5 transition-colors"
                   >
                     <RefreshCw className="w-3.5 h-3.5" /> Sync Now
                   </button>
                   <button
                     type="button"
-                    onClick={() => pushLocalToCloud()}
-                    className="px-3 py-2 rounded-xl bg-slate-900 dark:bg-slate-700 text-white text-xs font-bold inline-flex items-center gap-1.5"
+                    onClick={async () => {
+                      const res = await pushLocalToCloud();
+                      if (res.ok) {
+                        showNotice(
+                          `Force Sync complete — pushed ${res.pushedLogs} workout(s) & drafts to cloud`
+                        );
+                      } else {
+                        showNotice(res.error || 'Force Sync failed');
+                      }
+                    }}
+                    className="px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 dark:bg-slate-700 dark:hover:bg-slate-600 text-white text-xs font-bold inline-flex items-center gap-1.5 transition-colors"
                   >
-                    <Upload className="w-3.5 h-3.5" /> Upload Local Data
+                    <Upload className="w-3.5 h-3.5" /> Force Sync / Push Local Data
                   </button>
                 </div>
               </div>

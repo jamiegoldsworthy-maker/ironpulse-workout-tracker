@@ -657,7 +657,7 @@ export const LogView: React.FC = () => {
                         <span className="font-mono text-[10px] font-medium px-1.5 py-0.5 rounded-md text-slate-400 dark:text-slate-500 tabular-nums">
                           #{draft.displayId.replace(/^ID-/i, '')}
                         </span>
-                        {draft.isSaved && (
+                        {draft.isSaved ? (
                           <span
                             className={`inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-lg ${
                               draft.status === 'completed'
@@ -667,6 +667,11 @@ export const LogView: React.FC = () => {
                           >
                             <CheckCircle2 className="w-3 h-3" />
                             {draft.status === 'completed' ? 'Saved' : 'Incomplete'}
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400">
+                            <span className="w-1.5 h-1.5 rounded-full bg-orange-500" />
+                            In Progress
                           </span>
                         )}
                       </div>
