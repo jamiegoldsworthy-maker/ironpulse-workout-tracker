@@ -204,7 +204,12 @@ export async function upsertFirestoreDoc<T extends Record<string, any>>(
   if (!uid) {
     throw new Error(`Cannot write to ${collectionName}/${docId}: user is not signed in.`);
   }
-  const cleanData = sanitizeForFirestore({ ...data, uid });
+  const nowIso = new Date().toISOString();
+  const cleanData = sanitizeForFirestore({
+    ...data,
+    uid,
+    updatedAt: collectionName === 'wt_logs' ? nowIso : (data.updatedAt || nowIso),
+  });
   try {
     await setDoc(doc(db, collectionName, docId), cleanData, { merge: true });
   } catch (err) {
@@ -346,49 +351,79 @@ export async function pushAllLocalDataToFirestore(
   if (!db) throw new Error('Firestore is not initialized.');
 
   try {
+    const nowIso = new Date().toISOString();
     const operations: Array<{ col: WtCollectionName; id: string; data: any }> = [];
 
     if (payload.meta) {
       operations.push({
         col: 'wt_meta',
         id: uid,
-        data: sanitizeForFirestore({ ...payload.meta, uid }),
+        data: sanitizeForFirestore({
+          ...payload.meta,
+          uid,
+          updatedAt: payload.meta.updatedAt || nowIso,
+        }),
       });
     }
     for (const ex of payload.exercises) {
       operations.push({
         col: 'wt_exercises',
         id: ex.exerciseUuid,
-        data: sanitizeForFirestore({ ...ex, uid }),
+        data: sanitizeForFirestore({
+          ...ex,
+          uid,
+          updatedAt: ex.updatedAt || nowIso,
+        }),
       });
     }
     for (const pre of payload.presets) {
       operations.push({
         col: 'wt_presets',
         id: pre.presetUuid,
-        data: sanitizeForFirestore({ ...pre, uid }),
+        data: sanitizeForFirestore({
+          ...pre,
+          uid,
+          updatedAt: pre.updatedAt || nowIso,
+        }),
       });
     }
     for (const prog of payload.programs) {
       operations.push({
         col: 'wt_programs',
         id: prog.programUuid,
-        data: sanitizeForFirestore({ ...prog, uid }),
+        data: sanitizeForFirestore({
+          ...prog,
+          uid,
+          updatedAt: prog.updatedAt || nowIso,
+        }),
       });
     }
     for (const [dateKey, sch] of Object.entries(payload.schedules)) {
       const docId = `${uid}_${dateKey}`;
+      const stampedItems = Array.isArray(sch?.items)
+        ? sch.items.map((it: any) => ({ ...it, uid }))
+        : [];
       operations.push({
         col: 'wt_schedule',
         id: docId,
-        data: sanitizeForFirestore({ ...sch, scheduleId: docId, uid }),
+        data: sanitizeForFirestore({
+          ...sch,
+          scheduleId: docId,
+          uid,
+          items: stampedItems,
+          updatedAt: sch?.updatedAt || nowIso,
+        }),
       });
     }
     for (const log of payload.logs) {
       operations.push({
         col: 'wt_logs',
         id: log.logUuid,
-        data: sanitizeForFirestore({ ...log, uid }),
+        data: sanitizeForFirestore({
+          ...log,
+          uid,
+          updatedAt: log.updatedAt || nowIso,
+        }),
       });
     }
 

@@ -52,7 +52,7 @@ export const HistoryView: React.FC = () => {
     presets,
     programs,
     exercises: globalExercises,
-    deleteLog,
+    deleteWorkoutLog,
     setActiveDate,
     setActiveTab,
   } = useWorkoutStore();
@@ -526,7 +526,7 @@ export const HistoryView: React.FC = () => {
                           </span>
                           <button
                             type="button"
-                            onClick={() => deleteLog(log.logUuid)}
+                            onClick={() => deleteWorkoutLog(log.logUuid)}
                             className="p-1 text-slate-400 hover:text-rose-500"
                             title="Delete log"
                           >

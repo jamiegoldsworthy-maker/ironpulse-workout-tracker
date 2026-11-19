@@ -75,6 +75,8 @@ interface WorkoutStoreState {
   authUser: { uid: string; email: string | null; displayName: string | null; photoURL: string | null } | null;
   syncStatus: 'local' | 'syncing' | 'synced' | 'error';
   lastSyncError?: string;
+  hasSeeded: boolean;
+  hasCompletedCloudBootstrap: boolean;
 
   // Active Navigation & Log Floor state
   activeTab: 'log' | 'plan' | 'library' | 'history' | 'settings';
@@ -179,7 +181,8 @@ interface WorkoutStoreState {
   ) => { daysModified: number; itemsCreated: number };
 
   // History Log Management
-  deleteLog: (logUuid: string) => void;
+  deleteWorkoutLog: (logUuid: string) => Promise<void>;
+  deleteLog: (logUuid: string) => Promise<void>;
 
   // Bulk Imports (AI JSON & Reconciled Legacy Google Sheet)
   applyAiImportPayload: (payload: AIImportPayload) => {
@@ -455,34 +458,30 @@ function upsertLogInArray(logs: WorkoutLog[], record: WorkoutLog): WorkoutLog[] 
   return logs.map((l, i) => (i === idx ? record : l));
 }
 
-const initialFloor = buildInitialDraftsForDate(
-  getTodayIsoDate(),
-  SEED_LOGS,
-  SEED_SCHEDULES,
-  SEED_PRESETS,
-  SEED_META
-);
+const EMPTY_SESSION_UUID = 'ses-initial';
 
 export const useWorkoutStore = create<WorkoutStoreState>()(
   persist(
     (set, get) => ({
-      exercises: SEED_EXERCISES,
-      presets: SEED_PRESETS,
-      programs: SEED_PROGRAMS,
-      schedules: SEED_SCHEDULES,
-      logs: SEED_LOGS,
+      exercises: [],
+      presets: [],
+      programs: [],
+      schedules: {},
+      logs: [],
       meta: SEED_META,
 
       authUser: null,
       syncStatus: 'local',
+      hasSeeded: false,
+      hasCompletedCloudBootstrap: false,
 
       activeTab: 'log',
       viewportMode: 'auto',
       logLayoutMode: 'list',
       logDensityMode: 'detailed',
       activeDate: getTodayIsoDate(),
-      activeSessionGroupUuid: initialFloor.sessionGroupUuid,
-      draftWorkouts: initialFloor.drafts,
+      activeSessionGroupUuid: EMPTY_SESSION_UUID,
+      draftWorkouts: [],
 
       timer: {
         isOpen: true,
@@ -945,10 +944,28 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         });
 
         if (state.authUser) {
-          removeFirestoreDoc('wt_logs', logUuid).catch((err) => {
-            console.error('[Sync] Failed to delete log from Firestore:', err);
-            set({ syncStatus: 'error', lastSyncError: err?.message || 'Failed to delete log from cloud' });
-          });
+          const uid = state.authUser.uid;
+          set({ syncStatus: 'syncing', lastSyncError: undefined });
+          const ops: Promise<void>[] = [removeFirestoreDoc('wt_logs', logUuid)];
+          if (target?.scheduleItemUuid && nextSchedules[state.activeDate]) {
+            ops.push(
+              upsertFirestoreDoc(
+                'wt_schedule',
+                `${uid}_${state.activeDate}`,
+                nextSchedules[state.activeDate],
+                uid
+              )
+            );
+          }
+          Promise.all(ops)
+            .then(() => set({ syncStatus: 'synced', lastSyncError: undefined }))
+            .catch((err) => {
+              console.error('[Sync] Failed to delete log from Firestore:', err);
+              set({
+                syncStatus: 'error',
+                lastSyncError: err?.message || 'Failed to delete log from cloud',
+              });
+            });
         }
       },
 
@@ -1626,18 +1643,56 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         return { daysModified, itemsCreated };
       },
 
-      deleteLog: (logUuid) => {
+      deleteWorkoutLog: async (logUuid) => {
+        clearPendingDraftSync(logUuid);
         const state = get();
+        const targetLog = state.logs.find((l) => l.logUuid === logUuid);
+        const nextSchedules = { ...state.schedules };
+        if (targetLog?.scheduleItemUuid && nextSchedules[targetLog.date]) {
+          const daySched = nextSchedules[targetLog.date];
+          nextSchedules[targetLog.date] = {
+            ...daySched,
+            items: daySched.items.map((it) =>
+              it.linkedLogUuid === logUuid || it.scheduleItemUuid === targetLog.scheduleItemUuid
+                ? { ...it, status: 'pending', linkedLogUuid: null }
+                : it
+            ),
+            updatedAt: new Date().toISOString(),
+          };
+        }
+
         set({
           logs: state.logs.filter((l) => l.logUuid !== logUuid),
           draftWorkouts: state.draftWorkouts.filter((d) => d.logUuid !== logUuid),
+          schedules: nextSchedules,
         });
+
         if (state.authUser) {
-          removeFirestoreDoc('wt_logs', logUuid).catch((err) => {
-            console.error('[Sync] Failed to delete log:', err);
-            set({ syncStatus: 'error', lastSyncError: err?.message || 'Failed to delete log from cloud' });
-          });
+          const uid = state.authUser.uid;
+          set({ syncStatus: 'syncing', lastSyncError: undefined });
+          try {
+            await removeFirestoreDoc('wt_logs', logUuid);
+            if (targetLog?.scheduleItemUuid && nextSchedules[targetLog.date]) {
+              await upsertFirestoreDoc(
+                'wt_schedule',
+                `${uid}_${targetLog.date}`,
+                nextSchedules[targetLog.date],
+                uid
+              );
+            }
+            set({ syncStatus: 'synced', lastSyncError: undefined });
+          } catch (err: any) {
+            console.error('[Sync] Failed to delete log from Firestore:', err);
+            set({
+              syncStatus: 'error',
+              lastSyncError: err?.message || 'Failed to delete log from cloud',
+            });
+          }
         }
+      },
+
+      deleteLog: async (logUuid) => {
+        return get().deleteWorkoutLog(logUuid);
       },
 
       applyAiImportPayload: (payload) => {
@@ -1888,7 +1943,12 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
       },
 
       setAuthUser: (user) => {
-        set({ authUser: user, syncStatus: user ? 'syncing' : 'local', lastSyncError: undefined });
+        set({
+          authUser: user,
+          syncStatus: user ? 'syncing' : 'local',
+          lastSyncError: undefined,
+          hasCompletedCloudBootstrap: false,
+        });
         if (user) {
           get().syncWithFirestore();
         }
@@ -1897,17 +1957,17 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
       startRealtimeSync: (uid) => {
         return subscribeToUserCollections(uid, {
           onExercises: (remoteExercises) => {
-            if (remoteExercises.length > 0) {
+            if (remoteExercises.length > 0 || get().hasCompletedCloudBootstrap) {
               set({ exercises: remoteExercises, syncStatus: 'synced' });
             }
           },
           onPresets: (remotePresets) => {
-            if (remotePresets.length > 0) {
+            if (remotePresets.length > 0 || get().hasCompletedCloudBootstrap) {
               set({ presets: remotePresets, syncStatus: 'synced' });
             }
           },
           onPrograms: (remotePrograms) => {
-            if (remotePrograms.length > 0) {
+            if (remotePrograms.length > 0 || get().hasCompletedCloudBootstrap) {
               set({ programs: remotePrograms, syncStatus: 'synced' });
             }
           },
@@ -1923,6 +1983,13 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           onLogs: (remoteLogs) => {
             const state = get();
             const uid = state.authUser?.uid || state.meta.uid;
+
+            // Only guard against wiping local logs BEFORE initial cloud bootstrap has finished
+            // (e.g., cached empty snapshot firing before first push). Once bootstrapped, remote
+            // empty array legitimately means all logs were deleted in Firestore.
+            if (remoteLogs.length === 0 && state.logs.length > 0 && !state.hasCompletedCloudBootstrap) {
+              return;
+            }
 
             const mergedLogsMap = new Map<string, WorkoutLog>();
             for (const r of remoteLogs) {
@@ -1947,10 +2014,6 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
                   a.updatedAt || a.createdAt || ''
                 )
             );
-
-            if (remoteLogs.length === 0 && state.logs.length > 0) {
-              return;
-            }
 
             // Hydrate LogView drafts for activeDate when remote updates arrive,
             // provided the user isn't actively typing or holding a pending debounced edit.
@@ -1984,14 +2047,19 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
               });
 
             const remoteIds = new Set(remoteForActiveDate.map((d) => d.logUuid));
+            const previouslySyncedIds = new Set(state.logs.map((l) => l.logUuid));
             const localOnlyDrafts = state.draftWorkouts.filter(
-              (d) => d.date === state.activeDate && !d.isSaved && !remoteIds.has(d.logUuid)
+              (d) =>
+                d.date === state.activeDate &&
+                !d.isSaved &&
+                !remoteIds.has(d.logUuid) &&
+                !previouslySyncedIds.has(d.logUuid)
             );
             const mergedDrafts = [...remoteForActiveDate, ...localOnlyDrafts];
 
             set({
               logs: sortedMergedLogs,
-              draftWorkouts: mergedDrafts.length > 0 ? mergedDrafts : state.draftWorkouts,
+              draftWorkouts: mergedDrafts,
               syncStatus: 'synced',
               lastSyncError: undefined,
             });
@@ -2022,23 +2090,33 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
             return;
           }
 
-          const hasRemoteData =
-            remote.presets.length > 0 || remote.logs.length > 0 || remote.programs.length > 0;
+          const hasRemoteAccountData = Boolean(
+            remote.meta ||
+              remote.presets.length > 0 ||
+              remote.logs.length > 0 ||
+              remote.programs.length > 0 ||
+              remote.exercises.length > 0 ||
+              remote.schedules.length > 0
+          );
 
-          if (!hasRemoteData) {
+          if (!hasRemoteAccountData) {
             await pushAllLocalDataToFirestore(user.uid, {
               exercises: get().exercises,
               presets: get().presets,
               programs: get().programs,
               schedules: get().schedules,
               logs: get().logs,
-              meta: get().meta,
+              meta: { ...get().meta, uid: user.uid },
             });
-            set({ syncStatus: 'synced' });
+            set({
+              syncStatus: 'synced',
+              hasSeeded: true,
+              hasCompletedCloudBootstrap: true,
+            });
             return;
           }
 
-          const scheduleMap: Record<string, DailySchedule> = { ...get().schedules };
+          const scheduleMap: Record<string, DailySchedule> = {};
           for (const sch of remote.schedules) {
             if (sch.date) {
               scheduleMap[sch.date] = sch;
@@ -2057,7 +2135,9 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           const nextExercises = remote.exercises.length > 0 ? remote.exercises : state.exercises;
           const nextPresets = remote.presets.length > 0 ? remote.presets : state.presets;
           const nextPrograms = remote.programs.length > 0 ? remote.programs : state.programs;
-          const nextLogs = sortedLogs.length > 0 ? sortedLogs : state.logs;
+          // NEVER fall back to local/seed logs when the cloud account exists —
+          // if cloud wt_logs is empty, all logs were deleted!
+          const nextLogs = sortedLogs;
           const nextMeta = remote.meta ? { ...state.meta, ...remote.meta } : state.meta;
 
           // Refresh drafts for activeDate from pulled remote logs unless user is actively typing
@@ -2071,8 +2151,13 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
               )
             : null;
           const nextIds = new Set((refreshedFloor?.drafts || []).map((d) => d.logUuid));
+          const previouslySyncedIds = new Set(state.logs.map((l) => l.logUuid));
           const preservedLocalOnlyDrafts = state.draftWorkouts.filter(
-            (d) => d.date === state.activeDate && !d.isSaved && !nextIds.has(d.logUuid)
+            (d) =>
+              d.date === state.activeDate &&
+              !d.isSaved &&
+              !nextIds.has(d.logUuid) &&
+              !previouslySyncedIds.has(d.logUuid)
           );
           const mergedActiveDrafts = refreshedFloor
             ? [...refreshedFloor.drafts, ...preservedLocalOnlyDrafts]
@@ -2093,6 +2178,8 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
               : {}),
             syncStatus: 'synced',
             lastSyncError: undefined,
+            hasSeeded: true,
+            hasCompletedCloudBootstrap: true,
           });
         } catch (err: any) {
           console.error('[Sync] syncWithFirestore error:', err);
@@ -2164,16 +2251,37 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
               )
           );
 
-          // Update local logs store before pushing so local & cloud stay aligned
-          set({ logs: allLocalLogs });
+          const nowIso = new Date().toISOString();
+          const stampedExercises = state.exercises.map((ex) => ({ ...ex, uid }));
+          const stampedPresets = state.presets.map((p) => ({ ...p, uid }));
+          const stampedPrograms = state.programs.map((prog) => ({ ...prog, uid }));
+          const stampedSchedules: Record<string, DailySchedule> = {};
+          for (const [dateKey, sch] of Object.entries(state.schedules)) {
+            stampedSchedules[dateKey] = {
+              ...sch,
+              scheduleId: `${uid}_${dateKey}`,
+              uid,
+              updatedAt: sch.updatedAt || nowIso,
+            };
+          }
+
+          // Update local store with uid-stamped entries before pushing so local & cloud stay aligned
+          set({
+            exercises: stampedExercises,
+            presets: stampedPresets,
+            programs: stampedPrograms,
+            schedules: stampedSchedules,
+            logs: allLocalLogs,
+            hasSeeded: true,
+          });
 
           await pushAllLocalDataToFirestore(uid, {
-            exercises: state.exercises,
-            presets: state.presets,
-            programs: state.programs,
-            schedules: state.schedules,
+            exercises: stampedExercises,
+            presets: stampedPresets,
+            programs: stampedPrograms,
+            schedules: stampedSchedules,
             logs: allLocalLogs,
-            meta: { ...state.meta, uid },
+            meta: { ...state.meta, uid, updatedAt: nowIso },
           });
 
           // Pull & merge remote updates after pushing so cross-device entries converge cleanly
@@ -2193,12 +2301,15 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
 
       resetToDemoSeed: () => {
         const today = getTodayIsoDate();
+        const state = get();
+        const uid = state.authUser?.uid || 'local-user';
+        const seededMeta: UserMeta = { ...SEED_META, uid };
         const floor = buildInitialDraftsForDate(
           today,
           SEED_LOGS,
           SEED_SCHEDULES,
           SEED_PRESETS,
-          SEED_META
+          seededMeta
         );
         set({
           exercises: SEED_EXERCISES,
@@ -2206,11 +2317,28 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           programs: SEED_PROGRAMS,
           schedules: SEED_SCHEDULES,
           logs: SEED_LOGS,
-          meta: SEED_META,
+          meta: seededMeta,
+          hasSeeded: true,
           activeDate: today,
           activeSessionGroupUuid: floor.sessionGroupUuid,
           draftWorkouts: floor.drafts,
         });
+        if (state.authUser) {
+          pushAllLocalDataToFirestore(state.authUser.uid, {
+            exercises: SEED_EXERCISES,
+            presets: SEED_PRESETS,
+            programs: SEED_PROGRAMS,
+            schedules: SEED_SCHEDULES,
+            logs: SEED_LOGS,
+            meta: seededMeta,
+          }).catch((err) => {
+            console.error('[Sync] Failed to push sample data to Firestore:', err);
+            set({
+              syncStatus: 'error',
+              lastSyncError: err?.message || 'Failed to sync sample data',
+            });
+          });
+        }
       },
     }),
     {
@@ -2222,6 +2350,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         schedules: state.schedules,
         logs: state.logs,
         meta: state.meta,
+        hasSeeded: state.hasSeeded,
         viewportMode: state.viewportMode,
         logLayoutMode: state.logLayoutMode,
         logDensityMode: state.logDensityMode,
@@ -2229,6 +2358,30 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         activeSessionGroupUuid: state.activeSessionGroupUuid,
         draftWorkouts: state.draftWorkouts,
       }),
+      onRehydrateStorage: () => (rehydratedState, error) => {
+        if (error || !rehydratedState) return;
+        if (rehydratedState.hasSeeded) return;
+
+        // If user already had persisted presets/programs/logs from before `hasSeeded` existed,
+        // mark seeded without overwriting their logs (e.g. if they deleted seed logs).
+        const hasPriorUserData =
+          rehydratedState.presets.length > 0 ||
+          rehydratedState.programs.length > 0 ||
+          rehydratedState.logs.length > 0 ||
+          rehydratedState.exercises.length > 0;
+
+        if (hasPriorUserData) {
+          queueMicrotask(() => {
+            useWorkoutStore.setState({ hasSeeded: true });
+          });
+          return;
+        }
+
+        // Brand-new offline profile: seed starter data once and mark hasSeeded = true.
+        queueMicrotask(() => {
+          rehydratedState.resetToDemoSeed();
+        });
+      },
     }
   )
 );

@@ -1050,15 +1050,15 @@ export const SettingsView: React.FC = () => {
 
               <button
                 type="button"
-                data-tooltip="Restore initial demo workouts & sample history"
-                title="Restore initial demo workouts & sample history"
+                data-tooltip="Load sample demo workouts & sample history"
+                title="Load sample demo workouts & sample history"
                 onClick={() => {
                   resetToDemoSeed();
-                  showNotice('Restored demo workouts & history');
+                  showNotice('Loaded sample workouts & history');
                 }}
                 className="px-3.5 py-2 rounded-2xl bg-rose-500/10 text-rose-600 dark:text-rose-400 text-xs font-bold ml-auto"
               >
-                Reset Demo Data
+                Load Sample Data
               </button>
             </div>
           </div>
