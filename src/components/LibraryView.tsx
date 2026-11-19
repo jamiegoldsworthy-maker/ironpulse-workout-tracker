@@ -17,11 +17,14 @@ import {
   Link2,
   ChevronDown,
   ChevronUp,
+  Pencil,
+  Check,
 } from 'lucide-react';
 import { useWorkoutStore } from '../store/useWorkoutStore';
 import {
   CardioMode,
   DistanceUnit,
+  ExerciseMetricType,
   ExerciseSide,
   LoadType,
   PresetExercise,
@@ -35,20 +38,11 @@ import {
   expandLadderSequence,
   formatLoadBadge,
   groupConsecutiveExercises,
+  inferDefaultMetricType,
   slugify,
   uuidv4,
 } from '../utils/calculations';
 import { useIsMobileView } from '../utils/useIsMobileView';
-
-const WORKOUT_TYPES: WorkoutType[] = [
-  'Strength',
-  'Conditioning',
-  'Complex',
-  'Circuit/HIIT',
-  'Cardio',
-  'Mobility',
-  'Core',
-];
 
 const CARDIO_MODES: CardioMode[] = ['Ruck', 'Cycle', 'Run', 'Row', 'Swim', 'Other'];
 
@@ -57,12 +51,16 @@ export const LibraryView: React.FC = () => {
     presets,
     programs,
     exercises: globalExercises,
+    categories,
     meta,
     upsertPreset,
     duplicatePreset,
     deletePreset,
     addWorkoutToSession,
     setActiveTab,
+    addCategory,
+    renameCategory,
+    deleteCategory,
   } = useWorkoutStore();
 
   const isMobile = useIsMobileView();
@@ -74,23 +72,31 @@ export const LibraryView: React.FC = () => {
 
   const [editingPreset, setEditingPreset] = useState<WorkoutPreset | null>(null);
   const [tagInput, setTagInput] = useState('');
-  const [presetMetaExpanded, setPresetMetaExpanded] = useState<{
-    programs: boolean;
-    tags: boolean;
-    notes: boolean;
-  }>({ programs: false, tags: false, notes: false });
+  const [activeMetaPanel, setActiveMetaPanel] = useState<
+    'programs' | 'tags' | 'timer' | 'notes' | null
+  >(null);
+  const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
+  const [newCategoryInput, setNewCategoryInput] = useState('');
+  const [renamingCategory, setRenamingCategory] = useState<{
+    oldName: string;
+    value: string;
+  } | null>(null);
   const [expandedExerciseMore, setExpandedExerciseMore] = useState<Record<number, boolean>>({});
+  const [timerDraftInputs, setTimerDraftInputs] = useState<{
+    rounds?: string;
+    workSec?: string;
+    restSec?: string;
+  }>({});
   const [toast, setToast] = useState<string | null>(null);
 
   useEffect(() => {
     if (!editingPreset) return;
-    setPresetMetaExpanded({
-      programs: (editingPreset.programIds?.length || 0) > 0,
-      tags: (editingPreset.tags?.length || 0) > 0,
-      notes: Boolean(editingPreset.workoutNotes?.trim()),
-    });
+    // Always start with Programs, Tags, Timer & Notes collapsed into summary pills
+    setActiveMetaPanel(null);
+    setCategoryManagerOpen(false);
+    setRenamingCategory(null);
     setExpandedExerciseMore({});
-    // Only re-initialize disclosure state when opening a different preset
+    setTimerDraftInputs({});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editingPreset?.presetUuid]);
 
@@ -237,7 +243,7 @@ export const LibraryView: React.FC = () => {
             className="px-3.5 py-2 text-xs font-semibold rounded-2xl bg-slate-100 dark:bg-slate-800 border border-transparent focus:border-orange-500 focus:outline-none"
           >
             <option value="ALL">All Categories</option>
-            {WORKOUT_TYPES.map((wt) => (
+            {categories.map((wt) => (
               <option key={wt} value={wt}>
                 {wt}
               </option>
@@ -316,9 +322,15 @@ export const LibraryView: React.FC = () => {
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
                             <Timer className="w-3 h-3 text-orange-500" />
                             {preset.defaultTimer.mode === 'circuit'
-                              ? `${preset.defaultTimer.rounds || 10}× ${
-                                  preset.defaultTimer.workSec || 60
-                                }s/${preset.defaultTimer.restSec ?? 0}s`
+                              ? (preset.defaultTimer.workSec ?? 60) === 0
+                                ? `${preset.defaultTimer.rounds ?? 0} rnds · ${
+                                    (preset.defaultTimer.restSec ?? 0) === 0
+                                      ? 'No Rest'
+                                      : `${preset.defaultTimer.restSec}s rest`
+                                  }`
+                                : `${preset.defaultTimer.rounds ?? 10}× ${
+                                    preset.defaultTimer.workSec ?? 60
+                                  }s/${preset.defaultTimer.restSec ?? 0}s`
                               : `${preset.defaultTimer.restSec}s Rest`}
                           </span>
                         )}
@@ -463,7 +475,8 @@ export const LibraryView: React.FC = () => {
               </button>
             </div>
 
-            <div className="p-5 overflow-y-auto space-y-5 flex-1">
+            <div className="p-5 overflow-y-auto space-y-4 flex-1">
+              {/* Row 1: Workout Name + Category (with +/Edit Manager) */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="sm:col-span-2">
                   <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300 mb-1">
@@ -480,490 +493,838 @@ export const LibraryView: React.FC = () => {
                         slug: slugify(e.target.value, 'wkt'),
                       })
                     }
-                    className="w-full px-3.5 py-2.5 text-sm font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:border-orange-500"
+                    className="w-full px-3.5 py-2 text-sm font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:border-orange-500"
                   />
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300 mb-1">
                     Category
                   </label>
-                  <select
-                    value={editingPreset.workoutType}
-                    onChange={(e) =>
-                      setEditingPreset({
-                        ...editingPreset,
-                        workoutType: e.target.value as WorkoutType,
-                      })
-                    }
-                    className="w-full px-3.5 py-2.5 text-sm font-semibold rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:border-orange-500"
-                  >
-                    {WORKOUT_TYPES.map((wt) => (
-                      <option key={wt} value={wt}>
-                        {wt}
-                      </option>
-                    ))}
-                  </select>
+                  <div className="flex items-center gap-1.5">
+                    <select
+                      value={editingPreset.workoutType}
+                      onChange={(e) => {
+                        if (e.target.value === '__manage__') {
+                          setCategoryManagerOpen(true);
+                          return;
+                        }
+                        setEditingPreset({
+                          ...editingPreset,
+                          workoutType: e.target.value as WorkoutType,
+                        });
+                      }}
+                      className="flex-1 min-w-0 px-3 py-2 text-sm font-semibold rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:border-orange-500"
+                    >
+                      {categories.map((wt) => (
+                        <option key={wt} value={wt}>
+                          {wt}
+                        </option>
+                      ))}
+                      <option value="__manage__">+ Manage Categories...</option>
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => setCategoryManagerOpen((prev) => !prev)}
+                      data-tooltip="Add or edit custom categories"
+                      title="Add or edit custom categories"
+                      className={`p-2 rounded-xl border transition-colors shrink-0 ${
+                        categoryManagerOpen
+                          ? 'bg-orange-500 text-white border-orange-500'
+                          : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-500 hover:text-orange-500'
+                      }`}
+                    >
+                      <Pencil className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
               </div>
 
-              {/* Compact Inline Disclosure Pills (+ Programs, + Tags, + Notes) */}
-              <div className="space-y-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setPresetMetaExpanded((prev) => ({ ...prev, programs: !prev.programs }))
-                    }
-                    className={`px-2.5 py-1 rounded-xl text-[11px] font-bold inline-flex items-center gap-1.5 border transition-colors ${
-                      presetMetaExpanded.programs || (editingPreset.programIds?.length || 0) > 0
-                        ? 'bg-orange-500/10 border-orange-500/35 text-orange-600 dark:text-orange-400'
-                        : 'bg-slate-100 dark:bg-slate-800 border-slate-200/70 dark:border-slate-700/70 text-slate-600 dark:text-slate-300 hover:border-orange-500'
-                    }`}
-                  >
-                    <span>+ Programs</span>
-                    {(editingPreset.programIds?.length || 0) > 0 && (
-                      <span className="px-1.5 py-0.2 rounded-full bg-orange-500 text-white text-[10px] font-mono tabular-nums">
-                        {editingPreset.programIds.length}
-                      </span>
-                    )}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setPresetMetaExpanded((prev) => ({ ...prev, tags: !prev.tags }))
-                    }
-                    className={`px-2.5 py-1 rounded-xl text-[11px] font-bold inline-flex items-center gap-1.5 border transition-colors ${
-                      presetMetaExpanded.tags || (editingPreset.tags?.length || 0) > 0
-                        ? 'bg-orange-500/10 border-orange-500/35 text-orange-600 dark:text-orange-400'
-                        : 'bg-slate-100 dark:bg-slate-800 border-slate-200/70 dark:border-slate-700/70 text-slate-600 dark:text-slate-300 hover:border-orange-500'
-                    }`}
-                  >
-                    <span>+ Tags</span>
-                    {(editingPreset.tags?.length || 0) > 0 && (
-                      <span className="px-1.5 py-0.2 rounded-full bg-orange-500 text-white text-[10px] font-mono tabular-nums">
-                        {editingPreset.tags.length}
-                      </span>
-                    )}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setPresetMetaExpanded((prev) => ({ ...prev, notes: !prev.notes }))
-                    }
-                    className={`px-2.5 py-1 rounded-xl text-[11px] font-bold inline-flex items-center gap-1.5 border transition-colors ${
-                      presetMetaExpanded.notes || Boolean(editingPreset.workoutNotes?.trim())
-                        ? 'bg-orange-500/10 border-orange-500/35 text-orange-600 dark:text-orange-400'
-                        : 'bg-slate-100 dark:bg-slate-800 border-slate-200/70 dark:border-slate-700/70 text-slate-600 dark:text-slate-300 hover:border-orange-500'
-                    }`}
-                  >
-                    <span>+ Notes</span>
-                    {Boolean(editingPreset.workoutNotes?.trim()) && (
-                      <span className="w-1.5 h-1.5 rounded-full bg-orange-500" />
-                    )}
-                  </button>
-                </div>
-
-                {presetMetaExpanded.programs && (
-                  <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/70 dark:border-slate-800 space-y-1.5">
-                    <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                      Included in Programs
-                    </label>
-                    <div className="flex flex-wrap gap-2">
-                      {programs.map((prog) => {
-                        const checked = editingPreset.programIds?.includes(prog.programUuid);
-                        return (
-                          <label
-                            key={prog.programUuid}
-                            className={`px-2.5 py-1 rounded-xl border text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors ${
-                              checked
-                                ? 'bg-orange-500/15 border-orange-500 text-orange-600 dark:text-orange-400'
-                                : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400'
-                            }`}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              onChange={(e) => {
-                                const nextIds = e.target.checked
-                                  ? [...(editingPreset.programIds || []), prog.programUuid]
-                                  : (editingPreset.programIds || []).filter(
-                                      (id) => id !== prog.programUuid
-                                    );
-                                setEditingPreset({ ...editingPreset, programIds: nextIds });
-                              }}
-                              className="rounded text-orange-500 focus:ring-orange-500"
-                            />
-                            {prog.title}
-                          </label>
-                        );
-                      })}
-                    </div>
+              {/* Custom Categories Manager Mini-Panel */}
+              {categoryManagerOpen && (
+                <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-orange-500/30 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-800 dark:text-slate-100">
+                      Manage Categories
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setCategoryManagerOpen(false)}
+                      className="text-[11px] font-bold text-orange-500 hover:underline"
+                    >
+                      Done
+                    </button>
                   </div>
-                )}
 
-                {presetMetaExpanded.tags && (
-                  <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/70 dark:border-slate-800 space-y-2">
-                    <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                      Tags
-                    </label>
-                    {(editingPreset.tags?.length || 0) > 0 && (
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        {editingPreset.tags?.map((t) => (
-                          <span
-                            key={t}
-                            className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg text-xs font-semibold bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300"
-                          >
-                            <Tag className="w-3 h-3 text-orange-500" />
-                            {t}
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setEditingPreset({
-                                  ...editingPreset,
-                                  tags: editingPreset.tags.filter((x) => x !== t),
-                                })
-                              }
-                              className="text-slate-400 hover:text-rose-500 ml-0.5"
-                            >
-                              ×
-                            </button>
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                    <div className="flex gap-1.5">
-                      <input
-                        type="text"
-                        value={tagInput}
-                        onChange={(e) => setTagInput(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' && tagInput.trim()) {
-                            e.preventDefault();
-                            if (!editingPreset.tags?.includes(tagInput.trim())) {
-                              setEditingPreset({
-                                ...editingPreset,
-                                tags: [...(editingPreset.tags || []), tagInput.trim()],
-                              });
-                            }
-                            setTagInput('');
-                          }
-                        }}
-                        placeholder="Add tag..."
-                        className="flex-1 min-w-0 px-3 py-1.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (!tagInput.trim()) return;
-                          if (!editingPreset.tags?.includes(tagInput.trim())) {
-                            setEditingPreset({
-                              ...editingPreset,
-                              tags: [...(editingPreset.tags || []), tagInput.trim()],
-                            });
-                          }
-                          setTagInput('');
-                        }}
-                        className="px-3 py-1.5 rounded-xl bg-slate-200 dark:bg-slate-700 text-xs font-bold"
-                      >
-                        Add
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {presetMetaExpanded.notes && (
-                  <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/70 dark:border-slate-800 space-y-1">
-                    <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                      Workout Guidance / Progression Notes
-                    </label>
-                    <textarea
-                      rows={2}
-                      value={editingPreset.workoutNotes || ''}
-                      placeholder="e.g. Perform 2 Cleans -> 1 Press -> 3 Front Squats EMOM. Add 1-2 rounds weekly up to 30 mins..."
-                      onChange={(e) =>
-                        setEditingPreset({ ...editingPreset, workoutNotes: e.target.value })
-                      }
-                      className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 focus:outline-none focus:border-orange-500"
+                  <div className="flex gap-1.5">
+                    <input
+                      type="text"
+                      value={newCategoryInput}
+                      onChange={(e) => setNewCategoryInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && newCategoryInput.trim()) {
+                          e.preventDefault();
+                          const val = newCategoryInput.trim();
+                          addCategory(val);
+                          setEditingPreset({ ...editingPreset, workoutType: val });
+                          setNewCategoryInput('');
+                        }
+                      }}
+                      placeholder="New category name (e.g. Loaded Carry)..."
+                      className="flex-1 min-w-0 px-3 py-1.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
                     />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const val = newCategoryInput.trim();
+                        if (!val) return;
+                        addCategory(val);
+                        setEditingPreset({ ...editingPreset, workoutType: val });
+                        setNewCategoryInput('');
+                      }}
+                      className="px-3 py-1.5 rounded-xl bg-orange-500 text-white text-xs font-bold shrink-0"
+                    >
+                      + Add
+                    </button>
                   </div>
-                )}
-              </div>
 
-              {/* Default Structure / Timer Strip */}
-              <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
-
-                {(() => {
-                  const activeFormat: PresetFormatMode =
-                    editingPreset.formatMode ||
-                    (editingPreset.defaultTimer?.mode === 'circuit'
-                      ? editingPreset.defaultTimer.restSec === 0
-                        ? 'emom_complex'
-                        : 'circuit'
-                      : 'standard');
-                  const isIntervalFormat =
-                    activeFormat === 'circuit' || activeFormat === 'emom_complex';
-
-                  const switchFormat = (nextFormat: PresetFormatMode) => {
-                    if (nextFormat === 'standard') {
-                      setEditingPreset({
-                        ...editingPreset,
-                        formatMode: 'standard',
-                        defaultTimer: {
-                          mode: 'rest',
-                          restSec:
-                            editingPreset.defaultTimer?.restSec !== undefined
-                              ? editingPreset.defaultTimer.restSec
-                              : editingPreset.workoutType === 'Cardio'
-                              ? 0
-                              : 60,
-                        },
-                      });
-                    } else if (nextFormat === 'circuit') {
-                      const rounds = editingPreset.defaultTimer?.rounds || 12;
-                      setEditingPreset({
-                        ...editingPreset,
-                        formatMode: 'circuit',
-                        defaultTimer: {
-                          mode: 'circuit',
-                          rounds,
-                          workSec: editingPreset.defaultTimer?.workSec || 40,
-                          restSec:
-                            editingPreset.defaultTimer?.restSec !== undefined &&
-                            editingPreset.defaultTimer.restSec > 0
-                              ? editingPreset.defaultTimer.restSec
-                              : 20,
-                          targetRange: editingPreset.defaultTimer?.targetRange || '12–20 mins',
-                        },
-                      });
-                    } else {
-                      const rounds = editingPreset.defaultTimer?.rounds || 15;
-                      setEditingPreset({
-                        ...editingPreset,
-                        formatMode: 'emom_complex',
-                        defaultTimer: {
-                          mode: 'circuit',
-                          rounds,
-                          workSec: 60,
-                          restSec: 0,
-                          targetRange: editingPreset.defaultTimer?.targetRange || '15–30 mins',
-                        },
-                      });
-                    }
-                  };
-
-                  return (
-                    <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/80 dark:border-slate-700/80 space-y-3">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <span className="text-xs font-bold text-slate-700 dark:text-slate-200 flex items-center gap-1.5">
-                          <Timer className="w-4 h-4 text-orange-500" />
-                          Default Structure & Timer
-                        </span>
-
-                        <div className="inline-flex rounded-xl bg-slate-200/80 dark:bg-slate-900 p-0.5">
-                          {(
-                            [
-                              { id: 'standard', label: 'Standard' },
-                              { id: 'circuit', label: 'Circuit' },
-                              { id: 'emom_complex', label: 'EMOM / Complex' },
-                            ] as Array<{ id: PresetFormatMode; label: string }>
-                          ).map((opt) => (
-                            <button
-                              key={opt.id}
-                              type="button"
-                              onClick={() => switchFormat(opt.id)}
-                              className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all ${
-                                activeFormat === opt.id
-                                  ? 'bg-orange-500 text-white shadow-2xs'
-                                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-                              }`}
-                            >
-                              {opt.label}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-
-                      {isIntervalFormat ? (
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                          <div>
-                            <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
-                              Default Rounds
-                            </label>
-                            <input
-                              type="number"
-                              min={1}
-                              max={100}
-                              value={editingPreset.defaultTimer?.rounds ?? 15}
-                              onChange={(e) => {
-                                const rounds = Math.max(1, parseInt(e.target.value, 10) || 1);
-                                setEditingPreset({
-                                  ...editingPreset,
-                                  defaultTimer: {
-                                    ...(editingPreset.defaultTimer || {
-                                      mode: 'circuit',
-                                      workSec: 60,
-                                      restSec: 0,
-                                    }),
-                                    mode: 'circuit',
-                                    rounds,
-                                  },
-                                  exercises: editingPreset.exercises.map((ex) => ({
-                                    ...ex,
-                                    defaultSets: rounds,
-                                  })),
-                                });
-                              }}
-                              className="w-full px-2.5 py-1.5 text-xs font-mono font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
-                            />
-                          </div>
-
-                          <div>
-                            <label className="block text-[10px] font-semibold text-orange-600 dark:text-orange-400 mb-0.5">
-                              Work (sec)
-                            </label>
-                            <input
-                              type="number"
-                              min={5}
-                              max={3600}
-                              value={editingPreset.defaultTimer?.workSec ?? 60}
-                              onChange={(e) => {
-                                const workSec = Math.max(5, parseInt(e.target.value, 10) || 60);
-                                setEditingPreset({
-                                  ...editingPreset,
-                                  defaultTimer: {
-                                    ...(editingPreset.defaultTimer || {
-                                      mode: 'circuit',
-                                      restSec: 0,
-                                      rounds: 15,
-                                    }),
-                                    mode: 'circuit',
-                                    workSec,
-                                  },
-                                });
-                              }}
-                              className="w-full px-2.5 py-1.5 text-xs font-mono font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
-                            />
-                          </div>
-
-                          <div>
-                            <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
-                              Rest (sec, 0=EMOM)
-                            </label>
-                            <input
-                              type="number"
-                              min={0}
-                              max={3600}
-                              value={editingPreset.defaultTimer?.restSec ?? 0}
-                              onChange={(e) => {
-                                const restSec = Math.max(0, parseInt(e.target.value, 10) || 0);
-                                setEditingPreset({
-                                  ...editingPreset,
-                                  defaultTimer: {
-                                    ...(editingPreset.defaultTimer || {
-                                      mode: 'circuit',
-                                      workSec: 60,
-                                      rounds: 15,
-                                    }),
-                                    mode: 'circuit',
-                                    restSec,
-                                  },
-                                });
-                              }}
-                              className="w-full px-2.5 py-1.5 text-xs font-mono font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
-                            />
-                          </div>
-
-                          <div>
-                            <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
-                              Target Range
-                            </label>
-                            <input
-                              type="text"
-                              value={editingPreset.defaultTimer?.targetRange || ''}
-                              placeholder="e.g. 15–30 mins"
-                              onChange={(e) =>
-                                setEditingPreset({
-                                  ...editingPreset,
-                                  defaultTimer: {
-                                    ...(editingPreset.defaultTimer || {
-                                      mode: 'circuit',
-                                      workSec: 60,
-                                      restSec: 0,
-                                      rounds: 15,
-                                    }),
-                                    mode: 'circuit',
-                                    targetRange: e.target.value,
-                                  },
-                                })
+                  <div className="flex flex-wrap gap-1.5">
+                    {categories.map((cat) =>
+                      renamingCategory?.oldName === cat ? (
+                        <div
+                          key={cat}
+                          className="inline-flex items-center gap-1 bg-white dark:bg-slate-900 border border-orange-500 rounded-xl px-2 py-1"
+                        >
+                          <input
+                            type="text"
+                            autoFocus
+                            value={renamingCategory.value}
+                            onChange={(e) =>
+                              setRenamingCategory({
+                                ...renamingCategory,
+                                value: e.target.value,
+                              })
+                            }
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                const trimmed = renamingCategory.value.trim();
+                                if (trimmed) {
+                                  renameCategory(cat, trimmed);
+                                  if (editingPreset.workoutType === cat) {
+                                    setEditingPreset({
+                                      ...editingPreset,
+                                      workoutType: trimmed,
+                                    });
+                                  }
+                                }
+                                setRenamingCategory(null);
                               }
-                              className="w-full px-2.5 py-1.5 text-xs font-semibold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
-                            />
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="flex flex-wrap items-center gap-3">
-                          <div className="w-36">
-                            <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
-                              Default Rest (sec)
-                            </label>
-                            <input
-                              type="number"
-                              min={0}
-                              max={600}
-                              placeholder="0 (No Rest)"
-                              value={
-                                editingPreset.defaultTimer?.restSec === undefined ||
-                                editingPreset.defaultTimer?.restSec === null
-                                  ? ''
-                                  : editingPreset.defaultTimer.restSec
-                              }
-                              onChange={(e) => {
-                                const raw = e.target.value;
-                                const restSec =
-                                  raw === '' ? 0 : Math.max(0, parseInt(raw, 10) || 0);
-                                setEditingPreset({
-                                  ...editingPreset,
-                                  defaultTimer: { mode: 'rest', restSec },
-                                });
-                              }}
-                              className="w-full px-2.5 py-1.5 text-xs font-mono font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
-                            />
-                          </div>
-
+                            }}
+                            className="w-28 text-xs font-semibold bg-transparent focus:outline-none"
+                          />
                           <button
                             type="button"
                             onClick={() => {
-                              const currentRest = editingPreset.defaultTimer?.restSec ?? 60;
-                              setEditingPreset({
-                                ...editingPreset,
-                                defaultTimer: {
-                                  mode: 'rest',
-                                  restSec: currentRest === 0 ? 60 : 0,
-                                },
-                              });
+                              const trimmed = renamingCategory.value.trim();
+                              if (trimmed) {
+                                renameCategory(cat, trimmed);
+                                if (editingPreset.workoutType === cat) {
+                                  setEditingPreset({
+                                    ...editingPreset,
+                                    workoutType: trimmed,
+                                  });
+                                }
+                              }
+                              setRenamingCategory(null);
                             }}
-                            className={`mt-4 px-2.5 py-1.5 rounded-xl text-[11px] font-bold border transition-colors ${
-                              (editingPreset.defaultTimer?.restSec ?? 60) === 0
-                                ? 'bg-orange-500 text-white border-orange-500'
-                                : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-orange-500'
-                            }`}
+                            className="text-emerald-600 hover:text-emerald-500"
                           >
-                            No Rest (0s)
+                            <Check className="w-3.5 h-3.5" />
                           </button>
-
-                          <span className="text-[11px] text-slate-400 pt-3">
-                            {(editingPreset.defaultTimer?.restSec ?? 60) === 0
-                              ? 'Rest timer pill & auto-countdown disabled (ideal for steady-state cardio).'
-                              : 'Standard straight-set logging with rest countdown between sets.'}
-                          </span>
                         </div>
-                      )}
+                      ) : (
+                        <span
+                          key={cat}
+                          className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-xs font-semibold border ${
+                            editingPreset.workoutType === cat
+                              ? 'bg-orange-500/15 border-orange-500/40 text-orange-600 dark:text-orange-400'
+                              : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300'
+                          }`}
+                        >
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setEditingPreset({ ...editingPreset, workoutType: cat })
+                            }
+                          >
+                            {cat}
+                          </button>
+                          <button
+                            type="button"
+                            title="Rename category"
+                            onClick={() =>
+                              setRenamingCategory({ oldName: cat, value: cat })
+                            }
+                            className="text-slate-400 hover:text-orange-500 ml-0.5"
+                          >
+                            <Pencil className="w-3 h-3" />
+                          </button>
+                          {categories.length > 1 && (
+                            <button
+                              type="button"
+                              title="Delete category"
+                              onClick={() => {
+                                deleteCategory(cat);
+                                if (editingPreset.workoutType === cat) {
+                                  const fallback = categories.find((c) => c !== cat) || 'Strength';
+                                  setEditingPreset({
+                                    ...editingPreset,
+                                    workoutType: fallback,
+                                  });
+                                }
+                              }}
+                              className="text-slate-400 hover:text-rose-500"
+                            >
+                              ×
+                            </button>
+                          )}
+                        </span>
+                      )
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Row 2: Always-Collapsed Summary Chips (Programs, Tags, Timer, Notes) */}
+              {(() => {
+                const selectedProgNames = programs
+                  .filter((p) => editingPreset.programIds?.includes(p.programUuid))
+                  .map((p) => p.title);
+                const progSummary =
+                  selectedProgNames.length > 0 ? selectedProgNames.join(', ') : 'None';
+                const tagsSummary =
+                  (editingPreset.tags?.length || 0) > 0
+                    ? editingPreset.tags.join(', ')
+                    : 'None';
+
+                const activeFormat: PresetFormatMode =
+                  editingPreset.formatMode ||
+                  (editingPreset.defaultTimer?.mode === 'circuit'
+                    ? editingPreset.defaultTimer.restSec === 0
+                      ? 'emom_complex'
+                      : 'circuit'
+                    : 'standard');
+                const rndVal = editingPreset.defaultTimer?.rounds ?? (activeFormat === 'emom_complex' ? 15 : 12);
+                const wrkVal = editingPreset.defaultTimer?.workSec ?? (activeFormat === 'emom_complex' ? 60 : 40);
+                const rstVal = editingPreset.defaultTimer?.restSec ?? (activeFormat === 'circuit' ? 20 : activeFormat === 'emom_complex' ? 0 : 60);
+                const formatPrefix = activeFormat === 'emom_complex' ? 'EMOM' : 'Circuit';
+
+                const timerSummary =
+                  activeFormat === 'standard'
+                    ? `Standard · ${rstVal === 0 ? 'No Rest' : `${rstVal}s`}`
+                    : wrkVal === 0 && rstVal > 0
+                    ? `${formatPrefix} · ${rndVal} rnds · ${rstVal}s rest`
+                    : wrkVal === 0 && rstVal === 0
+                    ? `${formatPrefix} · ${rndVal} rnds · No Rest`
+                    : rstVal === 0
+                    ? `${formatPrefix} · ${rndVal}×${wrkVal}s · No Rest`
+                    : `${formatPrefix} · ${rndVal}×${wrkVal}s/${rstVal}s`;
+
+                const hasNotes = Boolean(editingPreset.workoutNotes?.trim());
+                const isIntervalFormat =
+                  activeFormat === 'circuit' || activeFormat === 'emom_complex';
+
+                const switchFormat = (nextFormat: PresetFormatMode) => {
+                  if (nextFormat === 'standard') {
+                    setEditingPreset({
+                      ...editingPreset,
+                      formatMode: 'standard',
+                      defaultTimer: {
+                        mode: 'rest',
+                        restSec:
+                          editingPreset.defaultTimer?.restSec !== undefined
+                            ? editingPreset.defaultTimer.restSec
+                            : editingPreset.workoutType === 'Cardio'
+                            ? 0
+                            : 60,
+                      },
+                    });
+                  } else if (nextFormat === 'circuit') {
+                    const rounds = editingPreset.defaultTimer?.rounds || 12;
+                    setEditingPreset({
+                      ...editingPreset,
+                      formatMode: 'circuit',
+                      defaultTimer: {
+                        mode: 'circuit',
+                        rounds,
+                        workSec: editingPreset.defaultTimer?.workSec || 40,
+                        restSec:
+                          editingPreset.defaultTimer?.restSec !== undefined &&
+                          editingPreset.defaultTimer.restSec > 0
+                            ? editingPreset.defaultTimer.restSec
+                            : 20,
+                        targetRange: editingPreset.defaultTimer?.targetRange || '12–20 mins',
+                      },
+                    });
+                  } else {
+                    const rounds = editingPreset.defaultTimer?.rounds || 15;
+                    setEditingPreset({
+                      ...editingPreset,
+                      formatMode: 'emom_complex',
+                      defaultTimer: {
+                        mode: 'circuit',
+                        rounds,
+                        workSec: 60,
+                        restSec: 0,
+                        targetRange: editingPreset.defaultTimer?.targetRange || '15–30 mins',
+                      },
+                    });
+                  }
+                };
+
+                return (
+                  <div className="space-y-2.5">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setActiveMetaPanel((p) => (p === 'programs' ? null : 'programs'))
+                        }
+                        className={`max-w-full px-2.5 py-1 rounded-xl text-[11px] font-semibold inline-flex items-center gap-1 border transition-colors ${
+                          activeMetaPanel === 'programs'
+                            ? 'bg-orange-500 text-white border-orange-500'
+                            : 'bg-slate-100 dark:bg-slate-800 border-slate-200/70 dark:border-slate-700/70 text-slate-700 dark:text-slate-200 hover:border-orange-500'
+                        }`}
+                      >
+                        <span className="truncate max-w-[170px]">
+                          Programs: {progSummary}
+                        </span>
+                        {activeMetaPanel === 'programs' ? (
+                          <ChevronUp className="w-3 h-3 shrink-0" />
+                        ) : (
+                          <ChevronDown className="w-3 h-3 shrink-0" />
+                        )}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setActiveMetaPanel((p) => (p === 'tags' ? null : 'tags'))
+                        }
+                        className={`max-w-full px-2.5 py-1 rounded-xl text-[11px] font-semibold inline-flex items-center gap-1 border transition-colors ${
+                          activeMetaPanel === 'tags'
+                            ? 'bg-orange-500 text-white border-orange-500'
+                            : 'bg-slate-100 dark:bg-slate-800 border-slate-200/70 dark:border-slate-700/70 text-slate-700 dark:text-slate-200 hover:border-orange-500'
+                        }`}
+                      >
+                        <span className="truncate max-w-[150px]">Tags: {tagsSummary}</span>
+                        {activeMetaPanel === 'tags' ? (
+                          <ChevronUp className="w-3 h-3 shrink-0" />
+                        ) : (
+                          <ChevronDown className="w-3 h-3 shrink-0" />
+                        )}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setActiveMetaPanel((p) => (p === 'timer' ? null : 'timer'))
+                        }
+                        className={`max-w-full px-2.5 py-1 rounded-xl text-[11px] font-semibold inline-flex items-center gap-1 border transition-colors ${
+                          activeMetaPanel === 'timer'
+                            ? 'bg-orange-500 text-white border-orange-500'
+                            : 'bg-slate-100 dark:bg-slate-800 border-slate-200/70 dark:border-slate-700/70 text-slate-700 dark:text-slate-200 hover:border-orange-500'
+                        }`}
+                      >
+                        <Timer className="w-3 h-3 text-orange-500 shrink-0" />
+                        <span className="truncate">Timer: {timerSummary}</span>
+                        {activeMetaPanel === 'timer' ? (
+                          <ChevronUp className="w-3 h-3 shrink-0" />
+                        ) : (
+                          <ChevronDown className="w-3 h-3 shrink-0" />
+                        )}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setActiveMetaPanel((p) => (p === 'notes' ? null : 'notes'))
+                        }
+                        className={`px-2.5 py-1 rounded-xl text-[11px] font-semibold inline-flex items-center gap-1.5 border transition-colors ${
+                          activeMetaPanel === 'notes'
+                            ? 'bg-orange-500 text-white border-orange-500'
+                            : 'bg-slate-100 dark:bg-slate-800 border-slate-200/70 dark:border-slate-700/70 text-slate-700 dark:text-slate-200 hover:border-orange-500'
+                        }`}
+                      >
+                        <span>Notes</span>
+                        {hasNotes && activeMetaPanel !== 'notes' && (
+                          <span className="w-1.5 h-1.5 rounded-full bg-orange-500 shrink-0" />
+                        )}
+                        {activeMetaPanel === 'notes' ? (
+                          <ChevronUp className="w-3 h-3 shrink-0" />
+                        ) : (
+                          <ChevronDown className="w-3 h-3 shrink-0" />
+                        )}
+                      </button>
                     </div>
-                  );
-                })()}
-              </div>
+
+                    {activeMetaPanel === 'programs' && (
+                      <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/70 dark:border-slate-800 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <label className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                            Included in Programs
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => setActiveMetaPanel(null)}
+                            className="text-[11px] font-bold text-orange-500 hover:underline"
+                          >
+                            Done
+                          </button>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {programs.map((prog) => {
+                            const checked = editingPreset.programIds?.includes(prog.programUuid);
+                            return (
+                              <label
+                                key={prog.programUuid}
+                                className={`px-2.5 py-1 rounded-xl border text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors ${
+                                  checked
+                                    ? 'bg-orange-500/15 border-orange-500 text-orange-600 dark:text-orange-400'
+                                    : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400'
+                                }`}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={(e) => {
+                                    const nextIds = e.target.checked
+                                      ? [...(editingPreset.programIds || []), prog.programUuid]
+                                      : (editingPreset.programIds || []).filter(
+                                          (id) => id !== prog.programUuid
+                                        );
+                                    setEditingPreset({ ...editingPreset, programIds: nextIds });
+                                  }}
+                                  className="rounded text-orange-500 focus:ring-orange-500"
+                                />
+                                {prog.title}
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {activeMetaPanel === 'tags' && (
+                      <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/70 dark:border-slate-800 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <label className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                            Tags
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => setActiveMetaPanel(null)}
+                            className="text-[11px] font-bold text-orange-500 hover:underline"
+                          >
+                            Done
+                          </button>
+                        </div>
+                        {(editingPreset.tags?.length || 0) > 0 && (
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {editingPreset.tags?.map((t) => (
+                              <span
+                                key={t}
+                                className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg text-xs font-semibold bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300"
+                              >
+                                <Tag className="w-3 h-3 text-orange-500" />
+                                {t}
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setEditingPreset({
+                                      ...editingPreset,
+                                      tags: editingPreset.tags.filter((x) => x !== t),
+                                    })
+                                  }
+                                  className="text-slate-400 hover:text-rose-500 ml-0.5"
+                                >
+                                  ×
+                                </button>
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        <div className="flex gap-1.5">
+                          <input
+                            type="text"
+                            value={tagInput}
+                            onChange={(e) => setTagInput(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' && tagInput.trim()) {
+                                e.preventDefault();
+                                if (!editingPreset.tags?.includes(tagInput.trim())) {
+                                  setEditingPreset({
+                                    ...editingPreset,
+                                    tags: [...(editingPreset.tags || []), tagInput.trim()],
+                                  });
+                                }
+                                setTagInput('');
+                              }
+                            }}
+                            placeholder="Add tag..."
+                            className="flex-1 min-w-0 px-3 py-1.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (!tagInput.trim()) return;
+                              if (!editingPreset.tags?.includes(tagInput.trim())) {
+                                setEditingPreset({
+                                  ...editingPreset,
+                                  tags: [...(editingPreset.tags || []), tagInput.trim()],
+                                });
+                              }
+                              setTagInput('');
+                            }}
+                            className="px-3 py-1.5 rounded-xl bg-slate-200 dark:bg-slate-700 text-xs font-bold"
+                          >
+                            Add
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {activeMetaPanel === 'notes' && (
+                      <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/70 dark:border-slate-800 space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <label className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                            Workout Guidance / Progression Notes
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => setActiveMetaPanel(null)}
+                            className="text-[11px] font-bold text-orange-500 hover:underline"
+                          >
+                            Done
+                          </button>
+                        </div>
+                        <textarea
+                          rows={2}
+                          value={editingPreset.workoutNotes || ''}
+                          placeholder="e.g. Perform 2 Cleans -> 1 Press -> 3 Front Squats EMOM. Add 1-2 rounds weekly up to 30 mins..."
+                          onChange={(e) =>
+                            setEditingPreset({ ...editingPreset, workoutNotes: e.target.value })
+                          }
+                          className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 focus:outline-none focus:border-orange-500"
+                        />
+                      </div>
+                    )}
+
+                    {activeMetaPanel === 'timer' && (
+                      <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/80 dark:border-slate-700/80 space-y-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="text-xs font-bold text-slate-700 dark:text-slate-200 flex items-center gap-1.5">
+                            <Timer className="w-4 h-4 text-orange-500" />
+                            Default Structure & Timer
+                          </span>
+
+                          <div className="flex items-center gap-2">
+                            <div className="inline-flex rounded-xl bg-slate-200/80 dark:bg-slate-900 p-0.5">
+                              {(
+                                [
+                                  { id: 'standard', label: 'Standard' },
+                                  { id: 'circuit', label: 'Circuit' },
+                                  { id: 'emom_complex', label: 'EMOM / Complex' },
+                                ] as Array<{ id: PresetFormatMode; label: string }>
+                              ).map((opt) => (
+                                <button
+                                  key={opt.id}
+                                  type="button"
+                                  onClick={() => switchFormat(opt.id)}
+                                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all ${
+                                    activeFormat === opt.id
+                                      ? 'bg-orange-500 text-white shadow-2xs'
+                                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                                  }`}
+                                >
+                                  {opt.label}
+                                </button>
+                              ))}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setActiveMetaPanel(null)}
+                              className="text-[11px] font-bold text-orange-500 hover:underline"
+                            >
+                              Done
+                            </button>
+                          </div>
+                        </div>
+
+                        {isIntervalFormat ? (
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                            <div>
+                              <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
+                                Default Rounds
+                              </label>
+                              <input
+                                type="number"
+                                min={0}
+                                max={100}
+                                value={
+                                  timerDraftInputs.rounds !== undefined
+                                    ? timerDraftInputs.rounds
+                                    : String(editingPreset.defaultTimer?.rounds ?? 15)
+                                }
+                                onChange={(e) => {
+                                  const raw = e.target.value;
+                                  setTimerDraftInputs((prev) => ({ ...prev, rounds: raw }));
+                                  if (raw !== '') {
+                                    const parsed = parseInt(raw, 10);
+                                    const rounds = Number.isNaN(parsed) ? 0 : Math.max(0, parsed);
+                                    setEditingPreset({
+                                      ...editingPreset,
+                                      defaultTimer: {
+                                        ...(editingPreset.defaultTimer || {
+                                          mode: 'circuit',
+                                          workSec: 60,
+                                          restSec: 0,
+                                        }),
+                                        mode: 'circuit',
+                                        rounds,
+                                      },
+                                      exercises: editingPreset.exercises.map((ex) => ({
+                                        ...ex,
+                                        defaultSets: Math.max(1, rounds),
+                                      })),
+                                    });
+                                  }
+                                }}
+                                onBlur={() => {
+                                  const parsed = parseInt(timerDraftInputs.rounds ?? '', 10);
+                                  if (timerDraftInputs.rounds !== undefined) {
+                                    const rounds = Number.isNaN(parsed) ? 0 : Math.max(0, parsed);
+                                    setEditingPreset({
+                                      ...editingPreset,
+                                      defaultTimer: {
+                                        ...(editingPreset.defaultTimer || {
+                                          mode: 'circuit',
+                                          workSec: 60,
+                                          restSec: 0,
+                                        }),
+                                        mode: 'circuit',
+                                        rounds,
+                                      },
+                                    });
+                                    setTimerDraftInputs((prev) => ({ ...prev, rounds: undefined }));
+                                  }
+                                }}
+                                className="w-full px-2.5 py-1.5 text-xs font-mono font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="block text-[10px] font-semibold text-orange-600 dark:text-orange-400 mb-0.5">
+                                Work (sec, 0=Reps)
+                              </label>
+                              <input
+                                type="number"
+                                min={0}
+                                max={3600}
+                                value={
+                                  timerDraftInputs.workSec !== undefined
+                                    ? timerDraftInputs.workSec
+                                    : String(editingPreset.defaultTimer?.workSec ?? 60)
+                                }
+                                onChange={(e) => {
+                                  const raw = e.target.value;
+                                  setTimerDraftInputs((prev) => ({ ...prev, workSec: raw }));
+                                  if (raw !== '') {
+                                    const parsed = parseInt(raw, 10);
+                                    const workSec = Number.isNaN(parsed) ? 0 : Math.max(0, parsed);
+                                    setEditingPreset({
+                                      ...editingPreset,
+                                      defaultTimer: {
+                                        ...(editingPreset.defaultTimer || {
+                                          mode: 'circuit',
+                                          restSec: 0,
+                                          rounds: 15,
+                                        }),
+                                        mode: 'circuit',
+                                        workSec,
+                                      },
+                                    });
+                                  }
+                                }}
+                                onBlur={() => {
+                                  if (timerDraftInputs.workSec !== undefined) {
+                                    const parsed = parseInt(timerDraftInputs.workSec, 10);
+                                    const workSec = Number.isNaN(parsed) ? 0 : Math.max(0, parsed);
+                                    setEditingPreset({
+                                      ...editingPreset,
+                                      defaultTimer: {
+                                        ...(editingPreset.defaultTimer || {
+                                          mode: 'circuit',
+                                          restSec: 0,
+                                          rounds: 15,
+                                        }),
+                                        mode: 'circuit',
+                                        workSec,
+                                      },
+                                    });
+                                    setTimerDraftInputs((prev) => ({ ...prev, workSec: undefined }));
+                                  }
+                                }}
+                                className="w-full px-2.5 py-1.5 text-xs font-mono font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
+                                Rest (sec, 0=EMOM)
+                              </label>
+                              <input
+                                type="number"
+                                min={0}
+                                max={3600}
+                                value={
+                                  timerDraftInputs.restSec !== undefined
+                                    ? timerDraftInputs.restSec
+                                    : String(editingPreset.defaultTimer?.restSec ?? 0)
+                                }
+                                onChange={(e) => {
+                                  const raw = e.target.value;
+                                  setTimerDraftInputs((prev) => ({ ...prev, restSec: raw }));
+                                  if (raw !== '') {
+                                    const parsed = parseInt(raw, 10);
+                                    const restSec = Number.isNaN(parsed) ? 0 : Math.max(0, parsed);
+                                    setEditingPreset({
+                                      ...editingPreset,
+                                      defaultTimer: {
+                                        ...(editingPreset.defaultTimer || {
+                                          mode: 'circuit',
+                                          workSec: 60,
+                                          rounds: 15,
+                                        }),
+                                        mode: 'circuit',
+                                        restSec,
+                                      },
+                                    });
+                                  }
+                                }}
+                                onBlur={() => {
+                                  if (timerDraftInputs.restSec !== undefined) {
+                                    const parsed = parseInt(timerDraftInputs.restSec, 10);
+                                    const restSec = Number.isNaN(parsed) ? 0 : Math.max(0, parsed);
+                                    setEditingPreset({
+                                      ...editingPreset,
+                                      defaultTimer: {
+                                        ...(editingPreset.defaultTimer || {
+                                          mode: 'circuit',
+                                          workSec: 60,
+                                          rounds: 15,
+                                        }),
+                                        mode: 'circuit',
+                                        restSec,
+                                      },
+                                    });
+                                    setTimerDraftInputs((prev) => ({ ...prev, restSec: undefined }));
+                                  }
+                                }}
+                                className="w-full px-2.5 py-1.5 text-xs font-mono font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
+                                Target Range
+                              </label>
+                              <input
+                                type="text"
+                                value={editingPreset.defaultTimer?.targetRange || ''}
+                                placeholder="e.g. 15–30 mins"
+                                onChange={(e) =>
+                                  setEditingPreset({
+                                    ...editingPreset,
+                                    defaultTimer: {
+                                      ...(editingPreset.defaultTimer || {
+                                        mode: 'circuit',
+                                        workSec: 60,
+                                        restSec: 0,
+                                        rounds: 15,
+                                      }),
+                                      mode: 'circuit',
+                                      targetRange: e.target.value,
+                                    },
+                                  })
+                                }
+                                className="w-full px-2.5 py-1.5 text-xs font-semibold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
+                              />
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex flex-wrap items-center gap-3">
+                            <div className="w-36">
+                              <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
+                                Default Rest (sec)
+                              </label>
+                              <input
+                                type="number"
+                                min={0}
+                                max={600}
+                                placeholder="0 (No Rest)"
+                                value={
+                                  editingPreset.defaultTimer?.restSec === undefined ||
+                                  editingPreset.defaultTimer?.restSec === null
+                                    ? ''
+                                    : editingPreset.defaultTimer.restSec
+                                }
+                                onChange={(e) => {
+                                  const raw = e.target.value;
+                                  const restSec =
+                                    raw === '' ? 0 : Math.max(0, parseInt(raw, 10) || 0);
+                                  setEditingPreset({
+                                    ...editingPreset,
+                                    defaultTimer: { mode: 'rest', restSec },
+                                  });
+                                }}
+                                className="w-full px-2.5 py-1.5 text-xs font-mono font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
+                              />
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const currentRest = editingPreset.defaultTimer?.restSec ?? 60;
+                                setEditingPreset({
+                                  ...editingPreset,
+                                  defaultTimer: {
+                                    mode: 'rest',
+                                    restSec: currentRest === 0 ? 60 : 0,
+                                  },
+                                });
+                              }}
+                              className={`mt-4 px-2.5 py-1.5 rounded-xl text-[11px] font-bold border transition-colors ${
+                                (editingPreset.defaultTimer?.restSec ?? 60) === 0
+                                  ? 'bg-orange-500 text-white border-orange-500'
+                                  : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-orange-500'
+                              }`}
+                            >
+                              No Rest (0s)
+                            </button>
+
+                            <span className="text-[11px] text-slate-400 pt-3">
+                              {(editingPreset.defaultTimer?.restSec ?? 60) === 0
+                                ? 'Rest timer pill & auto-countdown disabled.'
+                                : 'Standard straight-set logging with rest countdown between sets.'}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* Exercises List */}
               <div className="space-y-3 pt-2 border-t border-slate-100 dark:border-slate-800">
@@ -1076,12 +1437,18 @@ export const LibraryView: React.FC = () => {
                               const matchedGlobal = globalExercises.find(
                                 (ge) => ge.exerciseName.toLowerCase() === name.toLowerCase()
                               );
+                              const inferredMetric =
+                                matchedGlobal?.metricType || inferDefaultMetricType(name);
                               const next = [...editingPreset.exercises];
                               next[idx] = {
                                 ...pe,
                                 exerciseName: name,
                                 exerciseUuid: matchedGlobal?.exerciseUuid || pe.exerciseUuid,
                                 category: matchedGlobal?.category || pe.category,
+                                metricType:
+                                  inferredMetric !== 'reps'
+                                    ? inferredMetric
+                                    : pe.metricType || 'reps',
                               };
                               setEditingPreset({ ...editingPreset, exercises: next });
                             }}
@@ -1231,7 +1598,7 @@ export const LibraryView: React.FC = () => {
                             </div>
                           </div>
                         ) : (
-                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
                             <div>
                               <label className="block text-[10px] font-semibold text-slate-400 mb-0.5">
                                 Load Style
@@ -1243,7 +1610,7 @@ export const LibraryView: React.FC = () => {
                                   next[idx] = { ...pe, loadType: e.target.value as LoadType };
                                   setEditingPreset({ ...editingPreset, exercises: next });
                                 }}
-                                className="w-full px-2.5 py-1.5 text-xs font-semibold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
+                                className="w-full px-2 py-1.5 text-xs font-semibold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
                               >
                                 <option value="single_kg">1x Single (kg)</option>
                                 <option value="double_kg">2x Double (kg)</option>
@@ -1255,7 +1622,29 @@ export const LibraryView: React.FC = () => {
 
                             <div>
                               <label className="block text-[10px] font-semibold text-slate-400 mb-0.5">
-                                Default Weight (kg)
+                                Metric
+                              </label>
+                              <select
+                                value={pe.metricType || 'reps'}
+                                onChange={(e) => {
+                                  const next = [...editingPreset.exercises];
+                                  next[idx] = {
+                                    ...pe,
+                                    metricType: e.target.value as ExerciseMetricType,
+                                  };
+                                  setEditingPreset({ ...editingPreset, exercises: next });
+                                }}
+                                className="w-full px-2 py-1.5 text-xs font-semibold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
+                              >
+                                <option value="reps">Reps</option>
+                                <option value="distance">Distance (m)</option>
+                                <option value="time">Time (s)</option>
+                              </select>
+                            </div>
+
+                            <div>
+                              <label className="block text-[10px] font-semibold text-slate-400 mb-0.5">
+                                Weight (kg)
                               </label>
                               <input
                                 type="number"
@@ -1270,7 +1659,7 @@ export const LibraryView: React.FC = () => {
                                   };
                                   setEditingPreset({ ...editingPreset, exercises: next });
                                 }}
-                                className="w-full px-2.5 py-1.5 text-xs font-mono font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 disabled:opacity-40"
+                                className="w-full px-2 py-1.5 text-xs font-mono font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 disabled:opacity-40"
                               />
                             </div>
 
@@ -1279,7 +1668,7 @@ export const LibraryView: React.FC = () => {
                                 <label className="block text-[10px] font-semibold text-slate-400 mb-0.5">
                                   Rounds (Synced)
                                 </label>
-                                <div className="px-2.5 py-1.5 text-xs font-mono font-bold rounded-xl border border-orange-500/30 bg-orange-500/10 text-orange-600 dark:text-orange-400 text-center">
+                                <div className="px-2 py-1.5 text-xs font-mono font-bold rounded-xl border border-orange-500/30 bg-orange-500/10 text-orange-600 dark:text-orange-400 text-center">
                                   {syncedRounds} rds
                                 </div>
                               </div>
@@ -1300,25 +1689,39 @@ export const LibraryView: React.FC = () => {
                                     };
                                     setEditingPreset({ ...editingPreset, exercises: next });
                                   }}
-                                  className="w-full px-2.5 py-1.5 text-xs font-mono font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
+                                  className="w-full px-2 py-1.5 text-xs font-mono font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
                                 />
                               </div>
                             )}
 
                             <div>
                               <label className="block text-[10px] font-semibold text-slate-400 mb-0.5">
-                                {isSequenceMode ? 'Reps / Round' : 'Target Reps'}
+                                {(pe.metricType || 'reps') === 'distance'
+                                  ? 'Target Distance (m)'
+                                  : (pe.metricType || 'reps') === 'time'
+                                  ? 'Target Time (s)'
+                                  : isSequenceMode
+                                  ? 'Reps / Round'
+                                  : 'Target Reps'}
                               </label>
                               <input
                                 type="text"
                                 value={pe.defaultReps}
-                                placeholder={isSequenceMode ? 'e.g. 2' : 'e.g. 10 or AMRAP'}
+                                placeholder={
+                                  (pe.metricType || 'reps') === 'distance'
+                                    ? 'e.g. 40'
+                                    : (pe.metricType || 'reps') === 'time'
+                                    ? 'e.g. 45'
+                                    : isSequenceMode
+                                    ? 'e.g. 2'
+                                    : 'e.g. 10 or AMRAP'
+                                }
                                 onChange={(e) => {
                                   const next = [...editingPreset.exercises];
                                   next[idx] = { ...pe, defaultReps: e.target.value };
                                   setEditingPreset({ ...editingPreset, exercises: next });
                                 }}
-                                className="w-full px-2.5 py-1.5 text-xs font-mono font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
+                                className="w-full px-2 py-1.5 text-xs font-mono font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
                               />
                             </div>
                           </div>

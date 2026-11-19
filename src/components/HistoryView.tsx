@@ -27,6 +27,7 @@ import {
 import { useWorkoutStore } from '../store/useWorkoutStore';
 import { WorkoutType } from '../types/workout';
 import {
+  formatExerciseMetricSummary,
   formatLoadBadge,
   formatPace,
   formatReadableDate,
@@ -35,27 +36,19 @@ import {
 } from '../utils/calculations';
 import { useIsMobileView } from '../utils/useIsMobileView';
 
-const WORKOUT_TYPES: Array<'ALL' | WorkoutType> = [
-  'ALL',
-  'Strength',
-  'Conditioning',
-  'Complex',
-  'Circuit/HIIT',
-  'Cardio',
-  'Mobility',
-  'Core',
-];
-
 export const HistoryView: React.FC = () => {
   const {
     logs,
     presets,
     programs,
+    categories,
     exercises: globalExercises,
     deleteWorkoutLog,
     setActiveDate,
     setActiveTab,
   } = useWorkoutStore();
+
+  const WORKOUT_TYPES: Array<'ALL' | WorkoutType> = ['ALL', ...categories];
 
   const isMobile = useIsMobileView();
   const [explorerMode, setExplorerMode] = useState<'workouts' | 'exercises'>('workouts');
@@ -565,12 +558,18 @@ export const HistoryView: React.FC = () => {
                                 <span className="text-slate-500">
                                   [
                                   {ex.sets
-                                    .map((s) =>
-                                      s.weightOverride !== undefined &&
-                                      s.weightOverride !== ex.weight
-                                        ? `${s.reps}@${s.weightOverride}kg`
-                                        : s.reps
-                                    )
+                                    .map((s) => {
+                                      const unitSuffix =
+                                        ex.metricType === 'distance'
+                                          ? 'm'
+                                          : ex.metricType === 'time'
+                                          ? 's'
+                                          : '';
+                                      return s.weightOverride !== undefined &&
+                                        s.weightOverride !== ex.weight
+                                        ? `${s.reps}${unitSuffix}@${s.weightOverride}kg`
+                                        : `${s.reps}${unitSuffix}`;
+                                    })
                                     .join(', ')}
                                   ]
                                 </span>
@@ -580,7 +579,7 @@ export const HistoryView: React.FC = () => {
                                   </span>
                                 )}
                                 <span className="font-bold text-slate-700 dark:text-slate-300">
-                                  = {ex.totalLoadKg.toLocaleString()} kg
+                                  = {formatExerciseMetricSummary(ex)}
                                 </span>
                               </div>
                             )}

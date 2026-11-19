@@ -1,11 +1,16 @@
-export type WorkoutType =
-  | 'Strength'
-  | 'Conditioning'
-  | 'Complex'
-  | 'Circuit/HIIT'
-  | 'Cardio'
-  | 'Mobility'
-  | 'Core';
+export type WorkoutType = string;
+
+export const DEFAULT_WORKOUT_CATEGORIES: string[] = [
+  'Strength',
+  'Cardio',
+  'Conditioning',
+  'Mobility',
+  'Complex',
+  'Circuit/HIIT',
+  'Core',
+];
+
+export type ExerciseMetricType = 'reps' | 'distance' | 'time';
 
 export type TrackingType = 'strength' | 'circuit' | 'cardio';
 
@@ -43,6 +48,7 @@ export interface GlobalExercise {
   trackingType: TrackingType;
   defaultLoadType: LoadType;
   defaultWeight: number;
+  metricType?: ExerciseMetricType;
   cardioMode?: CardioMode | null;
   baseNotes?: string;
   createdAt: string;
@@ -70,6 +76,7 @@ export interface PresetExercise {
   category: string;
   trackingType: TrackingType;
   loadType: LoadType;
+  metricType?: ExerciseMetricType;
   defaultWeight: number;
   defaultSets: number;
   defaultReps: string;
@@ -159,6 +166,7 @@ export interface LoggedExercise {
   category: string;
   trackingType: TrackingType;
   loadType: LoadType;
+  metricType?: ExerciseMetricType;
   weight: number; // Base weight in kg
   side?: ExerciseSide;
   isPerSide?: boolean;
@@ -229,6 +237,7 @@ export interface UserMeta {
   theme: ThemeMode;
   defaultAutoStartRestTimer: boolean;
   defaultDistanceUnit: DistanceUnit;
+  categories?: string[];
   updatedAt: string;
 }
 

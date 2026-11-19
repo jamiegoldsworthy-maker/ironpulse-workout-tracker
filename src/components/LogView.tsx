@@ -37,12 +37,14 @@ import {
 import {
   buildLadderWorkoutSets,
   expandLadderSequence,
+  formatExerciseMetricSummary,
   formatLoadBadge,
   formatPace,
   formatReadableDate,
   formatSecondsAsMmSs,
   getTodayIsoDate,
   groupConsecutiveExercises,
+  inferDefaultMetricType,
   parseMmSsToSeconds,
   recalculateLoggedExercise,
   shiftIsoDate,
@@ -789,8 +791,8 @@ export const LogView: React.FC = () => {
                               onClick={() => {
                                 if (preset.defaultTimer?.mode === 'circuit') {
                                   startCircuitTimer(
-                                    preset.defaultTimer.rounds || 15,
-                                    preset.defaultTimer.workSec || 60,
+                                    preset.defaultTimer.rounds ?? 15,
+                                    preset.defaultTimer.workSec ?? 60,
                                     preset.defaultTimer.restSec ?? 0
                                   );
                                 } else {
@@ -803,9 +805,15 @@ export const LogView: React.FC = () => {
                               <Timer className="w-3.5 h-3.5" />
                               <span>
                                 {preset.defaultTimer.mode === 'circuit'
-                                  ? `${preset.defaultTimer.rounds || 15}×${
-                                      preset.defaultTimer.workSec || 60
-                                    }s/${preset.defaultTimer.restSec ?? 0}s`
+                                  ? (preset.defaultTimer.workSec ?? 60) === 0
+                                    ? `${preset.defaultTimer.rounds ?? 0} rnds · ${
+                                        (preset.defaultTimer.restSec ?? 0) === 0
+                                          ? 'No Rest'
+                                          : `${preset.defaultTimer.restSec}s rest`
+                                      }`
+                                    : `${preset.defaultTimer.rounds ?? 15}×${
+                                        preset.defaultTimer.workSec ?? 60
+                                      }s/${preset.defaultTimer.restSec ?? 0}s`
                                   : `${preset.defaultTimer.restSec}s Rest`}
                               </span>
                             </button>
@@ -1427,6 +1435,16 @@ export const LogView: React.FC = () => {
                                       </div>
                                     )}
 
+                                    {(ex.metricType === 'distance' || ex.metricType === 'time') && (
+                                      <span className="text-[10px] font-mono font-bold text-orange-600 dark:text-orange-400 px-1.5 py-0.5 rounded bg-orange-500/10">
+                                        {ex.totalReps > 0
+                                          ? formatExerciseMetricSummary(ex)
+                                          : ex.metricType === 'distance'
+                                          ? 'm'
+                                          : 's'}
+                                      </span>
+                                    )}
+
                                     <div className="flex items-center gap-1 ml-auto">
                                       <span className="text-[10px] font-mono text-slate-400">
                                         RIR
@@ -1463,13 +1481,19 @@ export const LogView: React.FC = () => {
                                         : ghostEx?.sets?.[0]
                                         ? String(ghostEx.sets[0].reps)
                                         : String(sIdx + 1);
+                                      const metricUnit =
+                                        ex.metricType === 'distance'
+                                          ? 'm'
+                                          : ex.metricType === 'time'
+                                          ? 's'
+                                          : 'reps';
                                       return (
                                         <input
                                           key={sIdx}
                                           type="number"
                                           inputMode="numeric"
                                           min={0}
-                                          title={`${isCircuitMode ? 'Round' : 'Set'} ${sIdx + 1} reps`}
+                                          title={`${isCircuitMode ? 'Round' : 'Set'} ${sIdx + 1} (${metricUnit})`}
                                           value={setObj.reps === 0 ? '' : setObj.reps}
                                           placeholder={ghostRepPlaceholder}
                                           onChange={(e) =>
@@ -1507,6 +1531,16 @@ export const LogView: React.FC = () => {
                                       >
                                         <Minus className="w-3 h-3" />
                                       </button>
+                                    )}
+
+                                    {(ex.metricType === 'distance' || ex.metricType === 'time') && (
+                                      <span className="text-[10px] font-mono font-bold text-orange-600 dark:text-orange-400 px-1.5 py-0.5 rounded bg-orange-500/10">
+                                        {ex.totalReps > 0
+                                          ? formatExerciseMetricSummary(ex)
+                                          : ex.metricType === 'distance'
+                                          ? 'm'
+                                          : 's'}
+                                      </span>
                                     )}
 
                                     <div className="flex items-center gap-1 ml-auto">
@@ -2003,6 +2037,11 @@ export const LogView: React.FC = () => {
                                             >
                                               <span className="text-[10px] font-mono font-semibold text-slate-400 mb-0.5 tabular-nums">
                                                 {isCircuitMode ? `R${sIdx + 1}` : `S${sIdx + 1}`}
+                                                {ex.metricType === 'distance'
+                                                  ? ' (m)'
+                                                  : ex.metricType === 'time'
+                                                  ? ' (s)'
+                                                  : ''}
                                                 {ex.isPerSide ? ' ea' : ''}
                                               </span>
                                               <input
@@ -2011,7 +2050,13 @@ export const LogView: React.FC = () => {
                                                 min={0}
                                                 title={`${
                                                   isCircuitMode ? 'Round' : 'Set'
-                                                } ${sIdx + 1} reps${
+                                                } ${sIdx + 1} ${
+                                                  ex.metricType === 'distance'
+                                                    ? 'meters'
+                                                    : ex.metricType === 'time'
+                                                    ? 'seconds'
+                                                    : 'reps'
+                                                }${
                                                   ex.isPerSide ? ' per side' : ''
                                                 }`}
                                                 value={setObj.reps === 0 ? '' : setObj.reps}
@@ -2154,18 +2199,36 @@ export const LogView: React.FC = () => {
                                           {ex.totalSets}
                                         </strong>
                                       </span>
-                                      <span className="text-slate-500 dark:text-slate-400">
-                                        Reps:{' '}
-                                        <strong className="text-slate-900 dark:text-slate-100">
-                                          {ex.totalReps}
-                                        </strong>
-                                      </span>
-                                      <span className="text-slate-500 dark:text-slate-400">
-                                        Volume:{' '}
-                                        <strong className="text-orange-600 dark:text-orange-400">
-                                          {ex.totalLoadKg.toLocaleString()} kg
-                                        </strong>
-                                      </span>
+                                      {ex.metricType === 'distance' ? (
+                                        <span className="text-slate-500 dark:text-slate-400">
+                                          Distance:{' '}
+                                          <strong className="text-orange-600 dark:text-orange-400">
+                                            {formatExerciseMetricSummary(ex)}
+                                          </strong>
+                                        </span>
+                                      ) : ex.metricType === 'time' ? (
+                                        <span className="text-slate-500 dark:text-slate-400">
+                                          Time:{' '}
+                                          <strong className="text-orange-600 dark:text-orange-400">
+                                            {formatExerciseMetricSummary(ex)}
+                                          </strong>
+                                        </span>
+                                      ) : (
+                                        <>
+                                          <span className="text-slate-500 dark:text-slate-400">
+                                            Reps:{' '}
+                                            <strong className="text-slate-900 dark:text-slate-100">
+                                              {ex.totalReps}
+                                            </strong>
+                                          </span>
+                                          <span className="text-slate-500 dark:text-slate-400">
+                                            Volume:{' '}
+                                            <strong className="text-orange-600 dark:text-orange-400">
+                                              {ex.totalLoadKg.toLocaleString()} kg
+                                            </strong>
+                                          </span>
+                                        </>
+                                      )}
                                     </div>
 
                                     <input
@@ -2714,6 +2777,7 @@ export const LogView: React.FC = () => {
                       category:
                         newCustomTrackingType === 'cardio' ? 'Cardio' : 'General',
                       trackingType: newCustomTrackingType,
+                      metricType: inferDefaultMetricType(newCustomExerciseName.trim()),
                       defaultLoadType:
                         newCustomTrackingType === 'cardio'
                           ? ('ruck_kg' as LoadType)
@@ -2731,6 +2795,7 @@ export const LogView: React.FC = () => {
                       category: created.category,
                       trackingType: created.trackingType,
                       loadType: created.defaultLoadType,
+                      metricType: created.metricType,
                       weight: created.defaultWeight,
                       sets:
                         created.trackingType === 'cardio'
@@ -2782,6 +2847,7 @@ export const LogView: React.FC = () => {
                         category: ge.category,
                         trackingType: ge.trackingType,
                         loadType: ge.defaultLoadType,
+                        metricType: ge.metricType || inferDefaultMetricType(ge.exerciseName),
                         weight: ge.defaultWeight,
                         sets:
                           ge.trackingType === 'cardio'

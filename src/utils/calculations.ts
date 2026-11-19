@@ -1,5 +1,6 @@
 import {
   DistanceUnit,
+  ExerciseMetricType,
   LoadType,
   LoggedExercise,
   RepSchemeType,
@@ -205,7 +206,8 @@ export function calculateExerciseTotals(
   loadType: LoadType,
   baseWeight: number,
   sets: SetEntry[],
-  isPerSide = false
+  isPerSide = false,
+  metricType: ExerciseMetricType = 'reps'
 ): {
   totalSets: number;
   totalReps: number;
@@ -215,6 +217,7 @@ export function calculateExerciseTotals(
   const validSets = sets.filter((s) => (Number(s.reps) || 0) > 0);
   const totalSets = validSets.length;
   const sideMultiplier = isPerSide ? 2 : 1;
+  const isRepMetric = metricType === 'reps';
   let totalReps = 0;
   let totalLoadKg = 0;
   let best1Rm = 0;
@@ -223,15 +226,18 @@ export function calculateExerciseTotals(
     const reps = Math.max(0, Number(s.reps) || 0);
     const effectiveReps = reps * sideMultiplier;
     totalReps += effectiveReps;
-    const setLoad = calculateSetLoadKg(loadType, baseWeight, effectiveReps, s.weightOverride);
-    totalLoadKg += setLoad;
 
-    const effectiveKg = getEffectiveImplementWeightKg(loadType, baseWeight, s.weightOverride);
-    if (effectiveKg > 0 && reps > 0) {
-      // Epley formula: weight * (1 + reps / 30)
-      const epley = effectiveKg * (1 + Math.min(reps, 30) / 30);
-      if (epley > best1Rm) {
-        best1Rm = epley;
+    if (isRepMetric) {
+      const setLoad = calculateSetLoadKg(loadType, baseWeight, effectiveReps, s.weightOverride);
+      totalLoadKg += setLoad;
+
+      const effectiveKg = getEffectiveImplementWeightKg(loadType, baseWeight, s.weightOverride);
+      if (effectiveKg > 0 && reps > 0) {
+        // Epley formula: weight * (1 + reps / 30)
+        const epley = effectiveKg * (1 + Math.min(reps, 30) / 30);
+        if (epley > best1Rm) {
+          best1Rm = epley;
+        }
       }
     }
   }
@@ -283,7 +289,8 @@ export function recalculateLoggedExercise(ex: LoggedExercise): LoggedExercise {
       ex.loadType,
       ex.weight,
       ex.sets || [],
-      Boolean(ex.isPerSide)
+      Boolean(ex.isPerSide),
+      ex.metricType || 'reps'
     );
     const rounds = Number(ex.roundsCompleted) || totals.totalSets || 0;
     const workSec = Number(ex.workSecPerRound) || 0;
@@ -305,12 +312,40 @@ export function recalculateLoggedExercise(ex: LoggedExercise): LoggedExercise {
     ex.loadType,
     ex.weight,
     ex.sets || [],
-    Boolean(ex.isPerSide)
+    Boolean(ex.isPerSide),
+    ex.metricType || 'reps'
   );
   return {
     ...ex,
     ...totals,
   };
+}
+
+export function inferDefaultMetricType(name: string): ExerciseMetricType {
+  const lower = (name || '').toLowerCase();
+  if (lower.includes('carry') || lower.includes('farmer') || lower.includes('sled')) {
+    return 'distance';
+  }
+  return 'reps';
+}
+
+export function formatExerciseMetricSummary(ex: {
+  metricType?: ExerciseMetricType;
+  totalReps: number;
+  totalLoadKg: number;
+  loadType: LoadType;
+  weight: number;
+}): string {
+  const metric = ex.metricType || 'reps';
+  if (metric === 'distance') {
+    const effKg = getEffectiveImplementWeightKg(ex.loadType, ex.weight);
+    return effKg > 0 ? `${ex.totalReps}m @ ${effKg}kg` : `${ex.totalReps}m`;
+  }
+  if (metric === 'time') {
+    const effKg = getEffectiveImplementWeightKg(ex.loadType, ex.weight);
+    return effKg > 0 ? `${ex.totalReps}s @ ${effKg}kg` : `${ex.totalReps}s`;
+  }
+  return `${ex.totalLoadKg.toLocaleString()} kg`;
 }
 
 export function formatLoadBadge(loadType: LoadType, weight: number, ruckLoadKg?: number): string {

@@ -67,6 +67,7 @@ export const LiveTimerBar: React.FC = () => {
     viewportMode,
     startRestTimer,
     startCircuitTimer,
+    finishCircuitWorkRound,
     toggleTimerRunning,
     resetTimer,
     setTimerExpanded,
@@ -75,16 +76,21 @@ export const LiveTimerBar: React.FC = () => {
   } = useWorkoutStore();
 
   const [soundEnabled, setSoundEnabled] = useState(true);
-  const [customRestSec, setCustomRestSec] = useState(75);
-  const [circuitRounds, setCircuitRounds] = useState(timer.totalRounds || 15);
-  const [circuitWorkSec, setCircuitWorkSec] = useState(timer.workSec || 60);
-  const [circuitRestSec, setCircuitRestSec] = useState(timer.restSec ?? 0);
+  const [customRestInput, setCustomRestInput] = useState('75');
+  const [circuitRoundsInput, setCircuitRoundsInput] = useState(String(timer.totalRounds ?? 15));
+  const [circuitWorkInput, setCircuitWorkInput] = useState(String(timer.workSec ?? 60));
+  const [circuitRestInput, setCircuitRestInput] = useState(String(timer.restSec ?? 0));
   const wakeLockRef = useRef<any>(null);
 
+  const parseOrZero = (raw: string): number => {
+    const parsed = parseInt(raw, 10);
+    return Number.isNaN(parsed) ? 0 : Math.max(0, parsed);
+  };
+
   useEffect(() => {
-    setCircuitRounds(timer.totalRounds);
-    setCircuitWorkSec(timer.workSec);
-    setCircuitRestSec(timer.restSec);
+    setCircuitRoundsInput(String(timer.totalRounds ?? 0));
+    setCircuitWorkInput(String(timer.workSec ?? 0));
+    setCircuitRestInput(String(timer.restSec ?? 0));
   }, [timer.totalRounds, timer.workSec, timer.restSec]);
 
   useEffect(() => {
@@ -195,7 +201,9 @@ export const LiveTimerBar: React.FC = () => {
 
               <div className="flex items-baseline gap-2 min-w-0">
                 <span className="font-mono text-xl sm:text-2xl font-bold tracking-tight tabular-nums shrink-0">
-                  {formatSecondsAsMmSs(timer.remainingSec)}
+                  {timer.mode === 'circuit' && timer.workSec === 0 && timer.phase === 'work'
+                    ? 'REPS'
+                    : formatSecondsAsMmSs(timer.remainingSec)}
                 </span>
 
                 {timer.mode === 'circuit' ? (
@@ -245,27 +253,52 @@ export const LiveTimerBar: React.FC = () => {
                 </div>
               )}
 
-              <button
-                type="button"
-                data-tooltip={timer.isRunning ? 'Pause timer' : 'Start timer'}
-                title={timer.isRunning ? 'Pause timer' : 'Start timer'}
-                onClick={toggleTimerRunning}
-                className={`px-2.5 sm:px-3 py-1.5 rounded-xl font-semibold text-xs flex items-center gap-1 transition-all ${
-                  timer.isRunning
-                    ? 'bg-white/20 hover:bg-white/30 text-white'
-                    : 'bg-orange-500 hover:bg-orange-600 text-white'
-                }`}
-              >
-                {timer.isRunning ? (
-                  <>
-                    <Pause className="w-3.5 h-3.5" /> Pause
-                  </>
-                ) : (
-                  <>
-                    <Play className="w-3.5 h-3.5 fill-current" /> Start
-                  </>
-                )}
-              </button>
+              {timer.mode === 'circuit' && timer.workSec === 0 && timer.phase === 'work' ? (
+                <button
+                  type="button"
+                  data-tooltip={
+                    timer.restSec > 0
+                      ? `Finish round & start ${timer.restSec}s rest`
+                      : 'Advance to next round'
+                  }
+                  title={
+                    timer.restSec > 0
+                      ? `Finish round & start ${timer.restSec}s rest`
+                      : 'Advance to next round'
+                  }
+                  onClick={finishCircuitWorkRound}
+                  className="px-2.5 sm:px-3 py-1.5 rounded-xl font-semibold text-xs flex items-center gap-1 transition-all bg-orange-500 hover:bg-orange-600 text-white"
+                >
+                  <Zap className="w-3.5 h-3.5" />
+                  <span>
+                    {timer.restSec > 0
+                      ? `Finish Round / Start ${timer.restSec}s Rest`
+                      : 'Finish Round'}
+                  </span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  data-tooltip={timer.isRunning ? 'Pause timer' : 'Start timer'}
+                  title={timer.isRunning ? 'Pause timer' : 'Start timer'}
+                  onClick={toggleTimerRunning}
+                  className={`px-2.5 sm:px-3 py-1.5 rounded-xl font-semibold text-xs flex items-center gap-1 transition-all ${
+                    timer.isRunning
+                      ? 'bg-white/20 hover:bg-white/30 text-white'
+                      : 'bg-orange-500 hover:bg-orange-600 text-white'
+                  }`}
+                >
+                  {timer.isRunning ? (
+                    <>
+                      <Pause className="w-3.5 h-3.5" /> Pause
+                    </>
+                  ) : (
+                    <>
+                      <Play className="w-3.5 h-3.5 fill-current" /> Start
+                    </>
+                  )}
+                </button>
+              )}
 
               <button
                 type="button"
@@ -312,7 +345,11 @@ export const LiveTimerBar: React.FC = () => {
                   <button
                     type="button"
                     onClick={() =>
-                      startCircuitTimer(circuitRounds, circuitWorkSec, circuitRestSec)
+                      startCircuitTimer(
+                        parseOrZero(circuitRoundsInput),
+                        parseOrZero(circuitWorkInput),
+                        parseOrZero(circuitRestInput)
+                      )
                     }
                     className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
                       timer.mode === 'circuit'
@@ -385,15 +422,16 @@ export const LiveTimerBar: React.FC = () => {
                   <div className="flex items-center gap-1 ml-auto">
                     <input
                       type="number"
-                      min={5}
+                      min={0}
                       max={900}
-                      value={customRestSec}
-                      onChange={(e) => setCustomRestSec(parseInt(e.target.value, 10) || 60)}
+                      value={customRestInput}
+                      onChange={(e) => setCustomRestInput(e.target.value)}
+                      onBlur={() => setCustomRestInput(String(parseOrZero(customRestInput)))}
                       className="w-16 px-2 py-1 text-xs font-mono tabular-nums rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-center"
                     />
                     <button
                       type="button"
-                      onClick={() => startRestTimer(customRestSec)}
+                      onClick={() => startRestTimer(parseOrZero(customRestInput))}
                       className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-900 dark:bg-slate-700 text-white hover:bg-orange-500 transition-colors"
                     >
                       Set Sec
@@ -406,15 +444,15 @@ export const LiveTimerBar: React.FC = () => {
               <div className="pt-2 border-t border-slate-200/70 dark:border-slate-800 space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-                    Circuit / EMOM Intervals (0s Rest = Continuous EMOM)
+                    Circuit / EMOM Intervals (0s Work = Rep-Based, 0s Rest = EMOM)
                   </span>
                   <div className="flex gap-1">
                     <button
                       type="button"
                       onClick={() => {
-                        setCircuitRounds(15);
-                        setCircuitWorkSec(60);
-                        setCircuitRestSec(0);
+                        setCircuitRoundsInput('15');
+                        setCircuitWorkInput('60');
+                        setCircuitRestInput('0');
                         startCircuitTimer(15, 60, 0);
                       }}
                       className="text-[11px] px-2 py-0.5 rounded bg-orange-500/10 text-orange-600 dark:text-orange-400 font-semibold hover:bg-orange-500/20"
@@ -424,9 +462,9 @@ export const LiveTimerBar: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => {
-                        setCircuitRounds(12);
-                        setCircuitWorkSec(40);
-                        setCircuitRestSec(20);
+                        setCircuitRoundsInput('12');
+                        setCircuitWorkInput('40');
+                        setCircuitRestInput('20');
                         startCircuitTimer(12, 40, 20);
                       }}
                       className="text-[11px] px-2 py-0.5 rounded bg-orange-500/10 text-orange-600 dark:text-orange-400 font-semibold hover:bg-orange-500/20"
@@ -443,10 +481,13 @@ export const LiveTimerBar: React.FC = () => {
                     </label>
                     <input
                       type="number"
-                      min={1}
+                      min={0}
                       max={100}
-                      value={circuitRounds}
-                      onChange={(e) => setCircuitRounds(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                      value={circuitRoundsInput}
+                      onChange={(e) => setCircuitRoundsInput(e.target.value)}
+                      onBlur={() =>
+                        setCircuitRoundsInput(String(parseOrZero(circuitRoundsInput)))
+                      }
                       className="w-full px-2.5 py-1.5 text-xs font-mono font-bold tabular-nums rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800"
                     />
                   </div>
@@ -456,11 +497,12 @@ export const LiveTimerBar: React.FC = () => {
                     </label>
                     <input
                       type="number"
-                      min={5}
+                      min={0}
                       max={3600}
-                      value={circuitWorkSec}
-                      onChange={(e) =>
-                        setCircuitWorkSec(Math.max(5, parseInt(e.target.value, 10) || 60))
+                      value={circuitWorkInput}
+                      onChange={(e) => setCircuitWorkInput(e.target.value)}
+                      onBlur={() =>
+                        setCircuitWorkInput(String(parseOrZero(circuitWorkInput)))
                       }
                       className="w-full px-2.5 py-1.5 text-xs font-mono font-bold tabular-nums rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800"
                     />
@@ -473,9 +515,10 @@ export const LiveTimerBar: React.FC = () => {
                       type="number"
                       min={0}
                       max={3600}
-                      value={circuitRestSec}
-                      onChange={(e) =>
-                        setCircuitRestSec(Math.max(0, parseInt(e.target.value, 10) || 0))
+                      value={circuitRestInput}
+                      onChange={(e) => setCircuitRestInput(e.target.value)}
+                      onBlur={() =>
+                        setCircuitRestInput(String(parseOrZero(circuitRestInput)))
                       }
                       className="w-full px-2.5 py-1.5 text-xs font-mono font-bold tabular-nums rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800"
                     />
@@ -483,7 +526,11 @@ export const LiveTimerBar: React.FC = () => {
                   <button
                     type="button"
                     onClick={() =>
-                      startCircuitTimer(circuitRounds, circuitWorkSec, circuitRestSec)
+                      startCircuitTimer(
+                        parseOrZero(circuitRoundsInput),
+                        parseOrZero(circuitWorkInput),
+                        parseOrZero(circuitRestInput)
+                      )
                     }
                     className="py-1.5 px-3 rounded-xl bg-orange-500 hover:bg-orange-600 text-white font-semibold text-xs flex items-center justify-center gap-1 shadow-sm transition-colors"
                   >

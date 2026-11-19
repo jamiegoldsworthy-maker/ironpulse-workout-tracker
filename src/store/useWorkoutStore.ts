@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import {
   AIImportPayload,
+  DEFAULT_WORKOUT_CATEGORIES,
   DailySchedule,
   DistanceUnit,
   GhostExerciseData,
@@ -29,6 +30,7 @@ import {
   expandLadderSequence,
   formatDisplayId,
   getTodayIsoDate,
+  inferDefaultMetricType,
   recalculateLoggedExercise,
   shiftIsoDate,
   slugify,
@@ -70,6 +72,7 @@ interface WorkoutStoreState {
   schedules: Record<string, DailySchedule>;
   logs: WorkoutLog[];
   meta: UserMeta;
+  categories: string[];
 
   // Auth & Sync state
   authUser: { uid: string; email: string | null; displayName: string | null; photoURL: string | null } | null;
@@ -148,6 +151,7 @@ interface WorkoutStoreState {
   // Timer Actions
   startRestTimer: (seconds: number) => void;
   startCircuitTimer: (rounds: number, workSec: number, restSec: number) => void;
+  finishCircuitWorkRound: () => void;
   setTimerRounds: (rounds: number) => void;
   toggleTimerRunning: () => void;
   resetTimer: () => void;
@@ -160,6 +164,9 @@ interface WorkoutStoreState {
   duplicatePreset: (presetUuid: string) => WorkoutPreset | null;
   deletePreset: (presetUuid: string) => void;
   upsertGlobalExercise: (exercise: GlobalExercise) => void;
+  addCategory: (name: string) => void;
+  renameCategory: (oldName: string, newName: string) => void;
+  deleteCategory: (name: string) => void;
 
   // Program & Schedule CRUD + Auto-Fill
   upsertProgram: (program: WorkoutProgram) => void;
@@ -238,6 +245,7 @@ function buildLoggedExerciseFromPreset(
     category: pe.category || 'General',
     trackingType: pe.trackingType,
     loadType: pe.loadType,
+    metricType: pe.metricType || inferDefaultMetricType(pe.exerciseName),
     weight: Number(pe.defaultWeight) || 0,
     side: pe.side,
     isPerSide: pe.isPerSide,
@@ -463,6 +471,34 @@ function upsertLogInArray(logs: WorkoutLog[], record: WorkoutLog): WorkoutLog[] 
   return logs.map((l, i) => (i === idx ? record : l));
 }
 
+function collectUsedCategories(
+  baseCategories: string[],
+  presets: WorkoutPreset[],
+  logs: WorkoutLog[],
+  metaCategories?: string[]
+): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  const pushUnique = (cat?: string) => {
+    const trimmed = (cat || '').trim();
+    if (!trimmed) return;
+    if (!seen.has(trimmed.toLowerCase())) {
+      seen.add(trimmed.toLowerCase());
+      result.push(trimmed);
+    }
+  };
+  for (const c of metaCategories && metaCategories.length > 0
+    ? metaCategories
+    : baseCategories.length > 0
+    ? baseCategories
+    : DEFAULT_WORKOUT_CATEGORIES) {
+    pushUnique(c);
+  }
+  for (const p of presets) pushUnique(p.workoutType);
+  for (const l of logs) pushUnique(l.workoutType);
+  return result.length > 0 ? result : [...DEFAULT_WORKOUT_CATEGORIES];
+}
+
 const EMPTY_SESSION_UUID = 'ses-initial';
 
 export const useWorkoutStore = create<WorkoutStoreState>()(
@@ -474,6 +510,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
       schedules: {},
       logs: [],
       meta: SEED_META,
+      categories: [...DEFAULT_WORKOUT_CATEGORIES],
 
       authUser: null,
       syncStatus: 'local',
@@ -593,6 +630,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
               currentRound: 1,
               remainingSec: w,
               totalPhaseSec: w,
+              isRunning: false,
             };
           } else {
             const r = Number(primaryPreset.defaultTimer.restSec ?? 0);
@@ -1081,6 +1119,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
               category: lex.category,
               trackingType: lex.trackingType,
               loadType: lex.loadType,
+              metricType: lex.metricType,
               defaultWeight: lex.weight,
               defaultSets: Math.max(1, lex.sets.length || lex.roundsCompleted || 1),
               defaultReps:
@@ -1227,7 +1266,9 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
       },
 
       startRestTimer: (seconds) => {
-        const sec = Math.max(5, Number(seconds) || 60);
+        const parsed = Number(seconds);
+        const sec = Number.isNaN(parsed) ? 0 : Math.max(0, parsed);
+        if (sec <= 0) return;
         set({
           timer: {
             ...get().timer,
@@ -1242,14 +1283,17 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
       },
 
       startCircuitTimer: (rounds, workSec, restSec) => {
-        const cleanRounds = Math.max(1, Number(rounds) || 10);
-        const cleanWork = Math.max(5, Number(workSec) || 60);
-        const cleanRest = Math.max(0, Number(restSec) || 0);
+        const pRounds = Number(rounds);
+        const cleanRounds = Number.isNaN(pRounds) ? 0 : Math.max(0, pRounds);
+        const pWork = Number(workSec);
+        const cleanWork = Number.isNaN(pWork) ? 0 : Math.max(0, pWork);
+        const pRest = Number(restSec);
+        const cleanRest = Number.isNaN(pRest) ? 0 : Math.max(0, pRest);
         set({
           timer: {
             isOpen: true,
             isExpanded: true,
-            isRunning: true,
+            isRunning: cleanWork > 0,
             mode: 'circuit',
             phase: 'work',
             remainingSec: cleanWork,
@@ -1262,14 +1306,52 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         });
       },
 
+      finishCircuitWorkRound: () => {
+        const t = get().timer;
+        if (t.mode !== 'circuit') return;
+        if (t.restSec > 0 && t.currentRound <= t.totalRounds) {
+          set({
+            timer: {
+              ...t,
+              phase: 'rest',
+              isRunning: true,
+              remainingSec: t.restSec,
+              totalPhaseSec: t.restSec,
+            },
+          });
+          return;
+        }
+        if (t.currentRound < t.totalRounds) {
+          set({
+            timer: {
+              ...t,
+              phase: 'work',
+              isRunning: t.workSec > 0,
+              currentRound: t.currentRound + 1,
+              remainingSec: t.workSec,
+              totalPhaseSec: t.workSec,
+            },
+          });
+          return;
+        }
+        set({
+          timer: {
+            ...t,
+            isRunning: false,
+            remainingSec: 0,
+          },
+        });
+      },
+
       setTimerRounds: (rounds) => {
-        const cleanRounds = Math.max(1, Number(rounds) || 1);
+        const parsed = Number(rounds);
+        const cleanRounds = Number.isNaN(parsed) ? 0 : Math.max(0, parsed);
         const t = get().timer;
         set({
           timer: {
             ...t,
             totalRounds: cleanRounds,
-            currentRound: Math.min(t.currentRound, cleanRounds),
+            currentRound: cleanRounds > 0 ? Math.min(t.currentRound, cleanRounds) : 0,
           },
         });
       },
@@ -1362,6 +1444,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
               timer: {
                 ...t,
                 phase: 'work',
+                isRunning: t.workSec > 0,
                 currentRound: t.currentRound + 1,
                 remainingSec: t.workSec,
                 totalPhaseSec: t.workSec,
@@ -1466,6 +1549,104 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
             console.error('[Sync] Failed to save exercise:', err);
             set({ syncStatus: 'error', lastSyncError: err?.message || 'Failed to sync exercise' });
           });
+        }
+      },
+
+      addCategory: (name) => {
+        const trimmed = name.trim();
+        if (!trimmed) return;
+        const state = get();
+        if (state.categories.some((c) => c.toLowerCase() === trimmed.toLowerCase())) return;
+        const nextCategories = [...state.categories, trimmed];
+        const nextMeta: UserMeta = {
+          ...state.meta,
+          categories: nextCategories,
+          updatedAt: new Date().toISOString(),
+        };
+        set({ categories: nextCategories, meta: nextMeta });
+        if (state.authUser) {
+          upsertFirestoreDoc('wt_meta', state.authUser.uid, nextMeta, state.authUser.uid).catch(
+            (err) => {
+              console.error('[Sync] Failed to save categories:', err);
+              set({ syncStatus: 'error', lastSyncError: err?.message || 'Failed to sync categories' });
+            }
+          );
+        }
+      },
+
+      renameCategory: (oldName, newName) => {
+        const trimmed = newName.trim();
+        if (!trimmed || oldName === trimmed) return;
+        const state = get();
+        const now = new Date().toISOString();
+        const nextCategories = state.categories.map((c) => (c === oldName ? trimmed : c));
+        const affectedPresets = state.presets.filter((p) => p.workoutType === oldName);
+        const nextPresets = state.presets.map((p) =>
+          p.workoutType === oldName ? { ...p, workoutType: trimmed, updatedAt: now } : p
+        );
+        const affectedLogs = state.logs.filter((l) => l.workoutType === oldName);
+        const nextLogs = state.logs.map((l) =>
+          l.workoutType === oldName ? { ...l, workoutType: trimmed, updatedAt: now } : l
+        );
+        const nextDrafts = state.draftWorkouts.map((d) =>
+          d.workoutType === oldName ? { ...d, workoutType: trimmed, updatedAt: now } : d
+        );
+        const nextMeta: UserMeta = {
+          ...state.meta,
+          categories: nextCategories,
+          updatedAt: now,
+        };
+        set({
+          categories: nextCategories,
+          presets: nextPresets,
+          logs: nextLogs,
+          draftWorkouts: nextDrafts,
+          meta: nextMeta,
+        });
+        if (state.authUser) {
+          const uid = state.authUser.uid;
+          Promise.all([
+            upsertFirestoreDoc('wt_meta', uid, nextMeta, uid),
+            ...affectedPresets.map((p) =>
+              upsertFirestoreDoc(
+                'wt_presets',
+                p.presetUuid,
+                { ...p, workoutType: trimmed, updatedAt: now },
+                uid
+              )
+            ),
+            ...affectedLogs.map((l) =>
+              upsertFirestoreDoc(
+                'wt_logs',
+                l.logUuid,
+                { ...l, workoutType: trimmed, updatedAt: now },
+                uid
+              )
+            ),
+          ]).catch((err) => {
+            console.error('[Sync] Failed to rename category in Firestore:', err);
+            set({ syncStatus: 'error', lastSyncError: err?.message || 'Failed to sync renamed category' });
+          });
+        }
+      },
+
+      deleteCategory: (name) => {
+        const state = get();
+        if (state.categories.length <= 1) return;
+        const nextCategories = state.categories.filter((c) => c !== name);
+        const nextMeta: UserMeta = {
+          ...state.meta,
+          categories: nextCategories,
+          updatedAt: new Date().toISOString(),
+        };
+        set({ categories: nextCategories, meta: nextMeta });
+        if (state.authUser) {
+          upsertFirestoreDoc('wt_meta', state.authUser.uid, nextMeta, state.authUser.uid).catch(
+            (err) => {
+              console.error('[Sync] Failed to delete category:', err);
+              set({ syncStatus: 'error', lastSyncError: err?.message || 'Failed to sync categories' });
+            }
+          );
         }
       },
 
@@ -2152,7 +2333,18 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           },
           onMeta: (remoteMeta) => {
             if (remoteMeta) {
-              set({ meta: { ...get().meta, ...remoteMeta }, syncStatus: 'synced' });
+              const state = get();
+              const mergedCategories = collectUsedCategories(
+                state.categories,
+                state.presets,
+                state.logs,
+                remoteMeta.categories
+              );
+              set({
+                meta: { ...state.meta, ...remoteMeta },
+                categories: mergedCategories,
+                syncStatus: 'synced',
+              });
             }
           },
           onError: (col, err) => {
@@ -2256,6 +2448,12 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
             schedules: scheduleMap,
             logs: nextLogs,
             meta: nextMeta,
+            categories: collectUsedCategories(
+              state.categories,
+              nextPresets,
+              nextLogs,
+              nextMeta.categories
+            ),
             ...(refreshedFloor && mergedActiveDrafts
               ? {
                   activeSessionGroupUuid: refreshedFloor.sessionGroupUuid,
@@ -2436,6 +2634,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         schedules: state.schedules,
         logs: state.logs,
         meta: state.meta,
+        categories: state.categories,
         hasSeeded: state.hasSeeded,
         viewportMode: state.viewportMode,
         logLayoutMode: state.logLayoutMode,
@@ -2458,7 +2657,15 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
 
         if (hasPriorUserData) {
           queueMicrotask(() => {
-            useWorkoutStore.setState({ hasSeeded: true });
+            useWorkoutStore.setState({
+              hasSeeded: true,
+              categories: collectUsedCategories(
+                rehydratedState.categories,
+                rehydratedState.presets,
+                rehydratedState.logs,
+                rehydratedState.meta?.categories
+              ),
+            });
           });
           return;
         }
