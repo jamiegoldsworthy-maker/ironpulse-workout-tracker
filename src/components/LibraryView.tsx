@@ -288,16 +288,18 @@ export const LibraryView: React.FC = () => {
                           {preset.legacyWorkoutId}
                         </span>
                       )}
-                      {preset.defaultTimer && (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
-                          <Timer className="w-3 h-3 text-orange-500" />
-                          {preset.defaultTimer.mode === 'circuit'
-                            ? `${preset.defaultTimer.rounds || 10}× ${
-                                preset.defaultTimer.workSec || 60
-                              }s/${preset.defaultTimer.restSec ?? 0}s`
-                            : `${preset.defaultTimer.restSec}s Rest`}
-                        </span>
-                      )}
+                      {preset.defaultTimer &&
+                        (preset.defaultTimer.mode === 'circuit' ||
+                          (Number(preset.defaultTimer.restSec) || 0) > 0) && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                            <Timer className="w-3 h-3 text-orange-500" />
+                            {preset.defaultTimer.mode === 'circuit'
+                              ? `${preset.defaultTimer.rounds || 10}× ${
+                                  preset.defaultTimer.workSec || 60
+                                }s/${preset.defaultTimer.restSec ?? 0}s`
+                              : `${preset.defaultTimer.restSec}s Rest`}
+                          </span>
+                        )}
                     </div>
 
                     <div className="flex items-center gap-1">
@@ -621,7 +623,12 @@ export const LibraryView: React.FC = () => {
                         formatMode: 'standard',
                         defaultTimer: {
                           mode: 'rest',
-                          restSec: editingPreset.defaultTimer?.restSec ?? 60,
+                          restSec:
+                            editingPreset.defaultTimer?.restSec !== undefined
+                              ? editingPreset.defaultTimer.restSec
+                              : editingPreset.workoutType === 'Cardio'
+                              ? 0
+                              : 60,
                         },
                       });
                     } else if (nextFormat === 'circuit') {
@@ -814,11 +821,19 @@ export const LibraryView: React.FC = () => {
                             </label>
                             <input
                               type="number"
-                              min={10}
+                              min={0}
                               max={600}
-                              value={editingPreset.defaultTimer?.restSec ?? 60}
+                              placeholder="0 (No Rest)"
+                              value={
+                                editingPreset.defaultTimer?.restSec === undefined ||
+                                editingPreset.defaultTimer?.restSec === null
+                                  ? ''
+                                  : editingPreset.defaultTimer.restSec
+                              }
                               onChange={(e) => {
-                                const restSec = Math.max(10, parseInt(e.target.value, 10) || 60);
+                                const raw = e.target.value;
+                                const restSec =
+                                  raw === '' ? 0 : Math.max(0, parseInt(raw, 10) || 0);
                                 setEditingPreset({
                                   ...editingPreset,
                                   defaultTimer: { mode: 'rest', restSec },
@@ -827,8 +842,32 @@ export const LibraryView: React.FC = () => {
                               className="w-full px-2.5 py-1.5 text-xs font-mono font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
                             />
                           </div>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const currentRest = editingPreset.defaultTimer?.restSec ?? 60;
+                              setEditingPreset({
+                                ...editingPreset,
+                                defaultTimer: {
+                                  mode: 'rest',
+                                  restSec: currentRest === 0 ? 60 : 0,
+                                },
+                              });
+                            }}
+                            className={`mt-4 px-2.5 py-1.5 rounded-xl text-[11px] font-bold border transition-colors ${
+                              (editingPreset.defaultTimer?.restSec ?? 60) === 0
+                                ? 'bg-orange-500 text-white border-orange-500'
+                                : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-orange-500'
+                            }`}
+                          >
+                            No Rest (0s)
+                          </button>
+
                           <span className="text-[11px] text-slate-400 pt-3">
-                            Standard straight-set logging with rest countdown between sets.
+                            {(editingPreset.defaultTimer?.restSec ?? 60) === 0
+                              ? 'Rest timer pill & auto-countdown disabled (ideal for steady-state cardio).'
+                              : 'Standard straight-set logging with rest countdown between sets.'}
                           </span>
                         </div>
                       )}

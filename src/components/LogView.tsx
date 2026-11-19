@@ -188,12 +188,6 @@ export const LogView: React.FC = () => {
     });
   }, [presets, filterByActiveProgram, meta.activeProgramUuid, selectedTag, presetSearch]);
 
-  const sessionTotalVolume = useMemo(
-    () =>
-      draftWorkouts.reduce((sum, d) => sum + (Number(d.totalSessionVolumeKg) || 0), 0),
-    [draftWorkouts]
-  );
-
   const isWorkoutMinimized = (d: DraftWorkoutCard): boolean => {
     if (collapsedCards[d.logUuid] !== undefined) {
       return collapsedCards[d.logUuid];
@@ -219,19 +213,6 @@ export const LogView: React.FC = () => {
     }
     return '0 kg total';
   };
-
-  const loadedScheduleItemIds = useMemo(
-    () => new Set(draftWorkouts.map((d) => d.scheduleItemUuid).filter(Boolean)),
-    [draftWorkouts]
-  );
-
-  const unloadedScheduledCount = useMemo(
-    () =>
-      scheduledForActiveDate.filter(
-        (it) => it.status !== 'skipped' && !loadedScheduleItemIds.has(it.scheduleItemUuid)
-      ).length,
-    [scheduledForActiveDate, loadedScheduleItemIds]
-  );
 
   const openSwitchWorkoutPicker = () => {
     if (draftWorkouts.length === 0) {
@@ -272,8 +253,12 @@ export const LogView: React.FC = () => {
 
     if (reps > 0 && meta.defaultAutoStartRestTimer) {
       const preset = presets.find((p) => p.presetUuid === draft.presetUuid);
-      const restSec = preset?.defaultTimer?.restSec || 60;
-      startRestTimer(restSec);
+      const restSec = preset?.defaultTimer
+        ? Math.max(0, Number(preset.defaultTimer.restSec ?? 0))
+        : 60;
+      if (restSec > 0) {
+        startRestTimer(restSec);
+      }
     }
   };
 
@@ -396,9 +381,9 @@ export const LogView: React.FC = () => {
       )}
 
       {/* Top Date & Session Control Bar */}
-      <div className="bg-white dark:bg-slate-900 rounded-3xl p-3 sm:p-4 border border-slate-200/70 dark:border-slate-800/80 space-y-2.5">
+      <div className="bg-white dark:bg-slate-900 rounded-3xl p-3 sm:px-4 sm:py-3 border border-slate-200/70 dark:border-slate-800/80">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          {/* Date Stepper + Edit Popover Trigger */}
+          {/* Date Stepper + Today + Minimal Edit Popover */}
           <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
             <button
               type="button"
@@ -455,7 +440,7 @@ export const LogView: React.FC = () => {
               </button>
             )}
 
-            {/* Compact Edit Session Popover */}
+            {/* Compact Edit Session Popover matching Today pill height */}
             <div ref={editMenuRef} className="relative">
               <button
                 type="button"
@@ -464,14 +449,14 @@ export const LogView: React.FC = () => {
                 aria-expanded={editMenuOpen}
                 data-tooltip="Load, switch, or add workouts"
                 title="Load, switch, or add workouts"
-                className={`p-2 rounded-2xl border transition-colors inline-flex items-center gap-1 text-xs font-semibold ${
+                className={`px-2.5 py-1.5 rounded-xl border transition-colors inline-flex items-center gap-1 text-xs font-semibold ${
                   editMenuOpen
                     ? 'bg-orange-500 text-white border-orange-500'
                     : 'bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 border-slate-200/60 dark:border-slate-700/60 text-slate-700 dark:text-slate-200'
                 }`}
               >
                 <Pencil className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Edit</span>
+                <span>Edit</span>
               </button>
 
               {editMenuOpen && (
@@ -534,49 +519,18 @@ export const LogView: React.FC = () => {
             </div>
           </div>
 
-          {/* Right: Session Volume Summary */}
-          {draftWorkouts.length > 0 && (
-            <div
-              title="Total volume lifted across today's workouts"
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-2xl bg-slate-100 dark:bg-slate-800 text-xs font-mono tabular-nums shrink-0"
-            >
-              <span className="font-bold text-orange-600 dark:text-orange-400">
-                {sessionTotalVolume.toLocaleString()} kg
-              </span>
-            </div>
-          )}
-        </div>
-
-        {/* Direct Default Action when appropriate (no workouts loaded or unloaded scheduled plan exists) */}
-        {(draftWorkouts.length === 0 || unloadedScheduledCount > 0) && (
-          <div className="flex flex-wrap items-center gap-2 pt-0.5">
+          {/* Compact inline action only when date has zero workouts AND no plan scheduled */}
+          {draftWorkouts.length === 0 && scheduledForActiveDate.length === 0 && (
             <button
               type="button"
-              data-tooltip="Load workouts scheduled on the calendar for this date"
-              title="Load workouts scheduled on the calendar for this date"
-              onClick={() => {
-                const count = loadProgrammedForDate(activeDate);
-                if (count > 0) {
-                  triggerToast(`Loaded ${count} scheduled workout(s)`);
-                } else if (scheduledForActiveDate.length > 0) {
-                  triggerToast('Today’s scheduled workouts are already loaded');
-                } else {
-                  triggerToast('No workouts scheduled on this date — pick a workout!');
-                  setPresetPickerModal({ open: true, mode: 'add' });
-                }
-              }}
-              className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-2xl bg-orange-500 hover:bg-orange-600 text-white font-semibold text-xs transition-all"
+              onClick={() => setPresetPickerModal({ open: true, mode: 'add' })}
+              className="px-3 py-1.5 rounded-xl bg-orange-500 hover:bg-orange-600 text-white text-xs font-semibold inline-flex items-center gap-1 transition-colors shrink-0"
             >
-              <Sparkles className="w-3.5 h-3.5" />
-              Load Today&apos;s Plan
-              {scheduledForActiveDate.length > 0 && (
-                <span className="ml-0.5 px-1.5 py-0.2 rounded-full bg-white/20 text-[11px] font-mono tabular-nums">
-                  {scheduledForActiveDate.length}
-                </span>
-              )}
+              <Plus className="w-3.5 h-3.5" />
+              Add Workout
             </button>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {/* Empty State */}
@@ -819,35 +773,37 @@ export const LogView: React.FC = () => {
 
                       {/* Header Right Actions */}
                       <div className="flex items-center gap-1">
-                        {preset?.defaultTimer && (
-                          <button
-                            type="button"
-                            data-tooltip="Load preset timer settings into live timer"
-                            title="Load preset timer settings into live timer"
-                            onClick={() => {
-                              if (preset.defaultTimer?.mode === 'circuit') {
-                                startCircuitTimer(
-                                  preset.defaultTimer.rounds || 15,
-                                  preset.defaultTimer.workSec || 60,
-                                  preset.defaultTimer.restSec ?? 0
-                                );
-                              } else {
-                                startRestTimer(preset.defaultTimer?.restSec || 60);
-                              }
-                              triggerToast(`Loaded ${preset.title} timer`);
-                            }}
-                            className="px-2.5 py-1.5 rounded-xl bg-orange-500/10 hover:bg-orange-500 hover:text-white text-orange-600 dark:text-orange-400 text-[11px] font-bold inline-flex items-center gap-1 transition-colors"
-                          >
-                            <Timer className="w-3.5 h-3.5" />
-                            <span>
-                              {preset.defaultTimer.mode === 'circuit'
-                                ? `${preset.defaultTimer.rounds || 15}×${
-                                    preset.defaultTimer.workSec || 60
-                                  }s/${preset.defaultTimer.restSec ?? 0}s`
-                                : `${preset.defaultTimer.restSec}s Rest`}
-                            </span>
-                          </button>
-                        )}
+                        {preset?.defaultTimer &&
+                          (preset.defaultTimer.mode === 'circuit' ||
+                            (Number(preset.defaultTimer.restSec) || 0) > 0) && (
+                            <button
+                              type="button"
+                              data-tooltip="Load preset timer settings into live timer"
+                              title="Load preset timer settings into live timer"
+                              onClick={() => {
+                                if (preset.defaultTimer?.mode === 'circuit') {
+                                  startCircuitTimer(
+                                    preset.defaultTimer.rounds || 15,
+                                    preset.defaultTimer.workSec || 60,
+                                    preset.defaultTimer.restSec ?? 0
+                                  );
+                                } else {
+                                  startRestTimer(preset.defaultTimer?.restSec || 0);
+                                }
+                                triggerToast(`Loaded ${preset.title} timer`);
+                              }}
+                              className="px-2.5 py-1.5 rounded-xl bg-orange-500/10 hover:bg-orange-500 hover:text-white text-orange-600 dark:text-orange-400 text-[11px] font-bold inline-flex items-center gap-1 transition-colors"
+                            >
+                              <Timer className="w-3.5 h-3.5" />
+                              <span>
+                                {preset.defaultTimer.mode === 'circuit'
+                                  ? `${preset.defaultTimer.rounds || 15}×${
+                                      preset.defaultTimer.workSec || 60
+                                    }s/${preset.defaultTimer.restSec ?? 0}s`
+                                  : `${preset.defaultTimer.restSec}s Rest`}
+                              </span>
+                            </button>
+                          )}
 
                         <button
                           type="button"

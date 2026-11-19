@@ -590,14 +590,16 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
               totalPhaseSec: w,
             };
           } else {
-            const r = primaryPreset.defaultTimer.restSec ?? 60;
-            nextTimer = {
-              ...state.timer,
-              isOpen: true,
-              mode: 'rest',
-              remainingSec: r,
-              totalPhaseSec: r,
-            };
+            const r = Number(primaryPreset.defaultTimer.restSec ?? 0);
+            if (r > 0) {
+              nextTimer = {
+                ...state.timer,
+                isOpen: true,
+                mode: 'rest',
+                remainingSec: r,
+                totalPhaseSec: r,
+              };
+            }
           }
         }
 
@@ -669,14 +671,16 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
                 totalPhaseSec: w,
               };
             } else {
-              const r = primaryPreset.defaultTimer.restSec ?? 60;
-              nextTimer = {
-                ...state.timer,
-                isOpen: true,
-                mode: 'rest',
-                remainingSec: r,
-                totalPhaseSec: r,
-              };
+              const r = Number(primaryPreset.defaultTimer.restSec ?? 0);
+              if (r > 0) {
+                nextTimer = {
+                  ...state.timer,
+                  isOpen: true,
+                  mode: 'rest',
+                  remainingSec: r,
+                  totalPhaseSec: r,
+                };
+              }
             }
           }
 
@@ -744,17 +748,19 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
               },
             });
           } else {
-            const r = preset.defaultTimer.restSec ?? 60;
-            set({
-              timer: {
-                ...state.timer,
-                isOpen: true,
-                mode: 'rest',
-                remainingSec: r,
-                totalPhaseSec: r,
-                isRunning: false,
-              },
-            });
+            const r = Number(preset.defaultTimer.restSec ?? 0);
+            if (r > 0) {
+              set({
+                timer: {
+                  ...state.timer,
+                  isOpen: true,
+                  mode: 'rest',
+                  remainingSec: r,
+                  totalPhaseSec: r,
+                  isRunning: false,
+                },
+              });
+            }
           }
         }
 
