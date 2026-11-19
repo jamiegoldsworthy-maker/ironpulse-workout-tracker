@@ -12,7 +12,7 @@ export const DEFAULT_WORKOUT_CATEGORIES: string[] = [
 
 export type ExerciseMetricType = 'reps' | 'distance' | 'time';
 
-export type TrackingType = 'strength' | 'circuit' | 'cardio';
+export type TrackingType = 'strength' | 'circuit' | 'cardio' | 'mobility';
 
 export type LoadType =
   | 'single_kg'
@@ -88,6 +88,7 @@ export interface PresetExercise {
   groupId?: string;
   cardioMode?: CardioMode;
   defaultDistanceUnit?: DistanceUnit;
+  defaultDurationMin?: number;
   baseNotes?: string;
 }
 
@@ -144,6 +145,8 @@ export interface ScheduledItem {
   presetUuid: string;
   programUuid?: string;
   coachNotes?: string;
+  exerciseNotesByUid?: Record<string, string>;
+  exerciseNotesByIndex?: Record<string, string>;
   status: ScheduleStatus;
   linkedLogUuid?: string | null;
 }
@@ -192,6 +195,7 @@ export interface LoggedExercise {
   // Cardio / Endurance fields
   mode?: CardioMode;
   durationSec?: number;
+  isCompleted?: boolean;
   distance?: number; // Primary distance value in distanceUnit
   distanceUnit?: DistanceUnit; // Defaults to "mi"
   paceSecPerUnit?: number; // Auto-calculated pace in seconds per mi or km

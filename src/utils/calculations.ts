@@ -276,6 +276,15 @@ export function calculateExerciseTotals(
 }
 
 export function recalculateLoggedExercise(ex: LoggedExercise): LoggedExercise {
+  if (ex.trackingType === 'mobility') {
+    return {
+      ...ex,
+      totalSets: 0,
+      totalReps: 0,
+      totalLoadKg: 0,
+    };
+  }
+
   if (ex.trackingType === 'cardio') {
     const unit: DistanceUnit = ex.distanceUnit || 'mi';
     const distance =

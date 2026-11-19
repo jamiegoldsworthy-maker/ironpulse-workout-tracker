@@ -244,7 +244,7 @@ function buildLoggedExerciseFromPreset(
       : Math.max(1, Number(pe.defaultSets) || 3);
   const parsedDefaultRep = parseInt(String(pe.defaultReps).replace(/[^0-9]/g, ''), 10) || 0;
   const sets: SetEntry[] =
-    pe.trackingType === 'cardio' || numSets === 0
+    pe.trackingType === 'cardio' || pe.trackingType === 'mobility' || numSets === 0
       ? []
       : Array.from({ length: numSets }, (_, idx) => ({
           setNumber: idx + 1,
@@ -276,10 +276,20 @@ function buildLoggedExerciseFromPreset(
     restSecPerRound: pe.trackingType === 'circuit' ? 15 : undefined,
     totalDurationSec: pe.trackingType === 'circuit' ? effectiveRounds * 60 : undefined,
     mode: pe.cardioMode || (pe.trackingType === 'cardio' ? 'Ruck' : undefined),
+    durationSec:
+      pe.trackingType === 'mobility' && pe.defaultDurationMin
+        ? pe.defaultDurationMin * 60
+        : undefined,
+    isCompleted: pe.trackingType === 'mobility' ? false : undefined,
     distanceUnit: pe.defaultDistanceUnit || defaultDistanceUnit || 'mi',
     ruckLoadKg: pe.loadType === 'ruck_kg' ? Number(pe.defaultWeight) || 20 : undefined,
     exerciseNotes:
-      pe.baseNotes || (parsedDefaultRep ? `Target: ${effectiveRounds}x${pe.defaultReps}` : ''),
+      pe.baseNotes ||
+      (pe.trackingType === 'mobility'
+        ? ''
+        : parsedDefaultRep
+        ? `Target: ${effectiveRounds}x${pe.defaultReps}`
+        : ''),
   };
 
   return recalculateLoggedExercise(base);
@@ -297,6 +307,8 @@ function createDraftFromPreset(
     programUuid?: string;
     coachNotes?: string;
     slotRole?: string;
+    exerciseNotesByUid?: Record<string, string>;
+    exerciseNotesByIndex?: Record<string, string>;
   }
 ): DraftWorkoutCard {
   const now = new Date().toISOString();
@@ -324,9 +336,13 @@ function createDraftFromPreset(
       ? preset.defaultTimer?.rounds || ladderRungCount || preset.exercises[0]?.defaultSets || 10
       : ladderRungCount;
 
-  const exercises = preset.exercises.map((pe) =>
-    buildLoggedExerciseFromPreset(pe, defaultDistanceUnit, formatMode, targetRounds)
-  );
+  const exercises = preset.exercises.map((pe, idx) => {
+    const built = buildLoggedExerciseFromPreset(pe, defaultDistanceUnit, formatMode, targetRounds);
+    const sessionExNote =
+      options?.exerciseNotesByUid?.[pe.exerciseUuid] ??
+      options?.exerciseNotesByIndex?.[String(idx)];
+    return sessionExNote ? { ...built, exerciseNotes: sessionExNote } : built;
+  });
   return {
     logUuid: `log-${uuidv4()}`,
     displayId: formatDisplayId(seqNumber),
@@ -403,6 +419,8 @@ function buildInitialDraftsForDate(
               programUuid: item.programUuid,
               coachNotes: item.coachNotes,
               slotRole: item.slotRole,
+              exerciseNotesByUid: item.exerciseNotesByUid,
+              exerciseNotesByIndex: item.exerciseNotesByIndex,
             })
           );
         }
@@ -700,6 +718,8 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
                   programUuid: item.programUuid,
                   coachNotes: item.coachNotes,
                   slotRole: item.slotRole,
+                  exerciseNotesByUid: item.exerciseNotesByUid,
+                  exerciseNotesByIndex: item.exerciseNotesByIndex,
                 }
               )
             );
@@ -2333,9 +2353,11 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           }
         }
 
-        // 3. Upcoming schedule coachNotes
+        // 3. Upcoming schedule coachNotes & session-specific exercise notes
         const schedulePatches = patch.upcomingSchedule || patch.schedule || [];
         const scheduleNoteMap = new Map<string, string>();
+        const scheduleExUidMap = new Map<string, Record<string, string>>();
+        const scheduleExIdxMap = new Map<string, Record<string, string>>();
         for (const sPatch of schedulePatches) {
           const nextNote =
             typeof sPatch.coachNotes === 'string'
@@ -2343,7 +2365,10 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
               : typeof sPatch.notes === 'string'
               ? sPatch.notes
               : undefined;
-          if (nextNote === undefined) continue;
+          const hasExUid = Boolean(sPatch.exerciseNotesByUid && Object.keys(sPatch.exerciseNotesByUid).length > 0);
+          const hasExIdx = Boolean(sPatch.exerciseNotesByIndex && Object.keys(sPatch.exerciseNotesByIndex).length > 0);
+          const hasExList = Boolean(Array.isArray(sPatch.exercises) && sPatch.exercises.length > 0);
+          if (nextNote === undefined && !hasExUid && !hasExIdx && !hasExList) continue;
 
           const itemId = sPatch.scheduleItemUuid || sPatch.scheduleId || sPatch.id;
           const candidateDates = sPatch.date && nextSchedules[sPatch.date] ? [sPatch.date] : Object.keys(nextSchedules);
@@ -2358,11 +2383,69 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
                 Boolean(sPatch.date) &&
                 (sPatch.presetId || sPatch.presetUuid) &&
                 item.presetUuid === (sPatch.presetId || sPatch.presetUuid);
-              if ((matchesId || matchesDatePreset) && (item.coachNotes || '') !== nextNote) {
+              if (!matchesId && !matchesDatePreset) return item;
+
+              let updatedItem = { ...item };
+              let itemChanged = false;
+
+              if (nextNote !== undefined && (item.coachNotes || '') !== nextNote) {
+                updatedItem.coachNotes = nextNote;
+                scheduleNoteMap.set(item.scheduleItemUuid, nextNote);
+                itemChanged = true;
+              }
+
+              if (hasExUid || hasExList) {
+                const mergedUid: Record<string, string> = { ...(item.exerciseNotesByUid || {}) };
+                if (sPatch.exerciseNotesByUid) {
+                  for (const [k, v] of Object.entries(sPatch.exerciseNotesByUid)) {
+                    if (typeof v === 'string' && mergedUid[k] !== v) {
+                      mergedUid[k] = v;
+                      itemChanged = true;
+                    }
+                  }
+                }
+                if (sPatch.exercises) {
+                  for (const ep of sPatch.exercises) {
+                    const uidKey = ep.exerciseUid || ep.exerciseUuid;
+                    const noteVal = ep.notes ?? ep.exerciseNotes ?? ep.baseNotes;
+                    if (uidKey && typeof noteVal === 'string' && mergedUid[uidKey] !== noteVal) {
+                      mergedUid[uidKey] = noteVal;
+                      itemChanged = true;
+                    }
+                  }
+                }
+                updatedItem.exerciseNotesByUid = mergedUid;
+                scheduleExUidMap.set(item.scheduleItemUuid, mergedUid);
+              }
+
+              if (hasExIdx || hasExList) {
+                const mergedIdx: Record<string, string> = { ...(item.exerciseNotesByIndex || {}) };
+                if (sPatch.exerciseNotesByIndex) {
+                  for (const [k, v] of Object.entries(sPatch.exerciseNotesByIndex)) {
+                    if (typeof v === 'string' && mergedIdx[k] !== v) {
+                      mergedIdx[k] = v;
+                      itemChanged = true;
+                    }
+                  }
+                }
+                if (sPatch.exercises) {
+                  for (const ep of sPatch.exercises) {
+                    const idxKey = ep.exerciseIndex ?? ep.index;
+                    const noteVal = ep.notes ?? ep.exerciseNotes ?? ep.baseNotes;
+                    if (typeof idxKey === 'number' && typeof noteVal === 'string' && mergedIdx[String(idxKey)] !== noteVal) {
+                      mergedIdx[String(idxKey)] = noteVal;
+                      itemChanged = true;
+                    }
+                  }
+                }
+                updatedItem.exerciseNotesByIndex = mergedIdx;
+                scheduleExIdxMap.set(item.scheduleItemUuid, mergedIdx);
+              }
+
+              if (itemChanged) {
                 dayChanged = true;
                 schedulesUpdated += 1;
-                scheduleNoteMap.set(item.scheduleItemUuid, nextNote);
-                return { ...item, coachNotes: nextNote };
+                return updatedItem;
               }
               return item;
             });
@@ -2399,11 +2482,23 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
             draftChanged = true;
           }
 
-          if (draft.presetUuid && presetExerciseNoteMap.has(draft.presetUuid)) {
-            const exMap = presetExerciseNoteMap.get(draft.presetUuid)!;
+          const schedUidNotes = draft.scheduleItemUuid
+            ? scheduleExUidMap.get(draft.scheduleItemUuid)
+            : undefined;
+          const schedIdxNotes = draft.scheduleItemUuid
+            ? scheduleExIdxMap.get(draft.scheduleItemUuid)
+            : undefined;
+          const presetExMap = draft.presetUuid
+            ? presetExerciseNoteMap.get(draft.presetUuid)
+            : undefined;
+
+          if (schedUidNotes || schedIdxNotes || presetExMap) {
             const nextDraftExercises = nextDraft.exercises.map((ex, idx) => {
-              if (!exMap.has(idx)) return ex;
-              return { ...ex, exerciseNotes: exMap.get(idx)! };
+              const sessionNote =
+                schedUidNotes?.[ex.exerciseUuid] ?? schedIdxNotes?.[String(idx)];
+              const nextExNote = sessionNote ?? presetExMap?.get(idx);
+              if (nextExNote === undefined) return ex;
+              return { ...ex, exerciseNotes: nextExNote };
             });
             nextDraft = { ...nextDraft, exercises: nextDraftExercises };
             draftChanged = true;

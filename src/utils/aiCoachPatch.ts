@@ -41,6 +41,9 @@ export interface AiCoachSchedulePatch {
   presetUuid?: string;
   notes?: string;
   coachNotes?: string;
+  exerciseNotesByUid?: Record<string, string>;
+  exerciseNotesByIndex?: Record<string, string>;
+  exercises?: AiCoachPresetExercisePatch[];
 }
 
 export interface AiNotesPatchPayload {
@@ -149,8 +152,10 @@ export function buildAiCoachExportPayload(params: {
     _instructions: [
       'Return ONLY a JSON object matching this exact patch structure.',
       'Keep exact programId, presetId (id), scheduleId (id), date, and exerciseIndex / exerciseUid keys.',
-      'Update ONLY weekFocusNotes, workoutNotes / notes, and exercise notes unless structural edits are explicitly requested.',
-      'Do NOT alter sets, weights, dates, or add/remove exercises unless asked.',
+      'Put week-specific or date-specific targets (e.g. W1, W2, W3 progressions) ONLY on upcomingSchedule (scheduleId) entries—NEVER write multi-week W1 | W2 | W3 schedules into reusable presetId notes.',
+      'Keep presetId notes strictly for universal cues that apply to every session.',
+      'On upcomingSchedule entries you may set notes (session target) and optional exerciseNotesByUid or exerciseNotesByIndex for session-specific exercise cues.',
+      'Update ONLY weekFocusNotes, notes, and exercise notes unless structural edits are explicitly requested. Do NOT alter sets, weights, dates, or add/remove exercises unless asked.',
     ].join(' '),
     program: program
       ? {
@@ -337,12 +342,12 @@ export function buildAiNotesDiffPreview(
 
       const incomingNote =
         sPatch.notes !== undefined ? sPatch.notes : sPatch.coachNotes;
+      const matchedPreset = state.presets.find(
+        (p) => p.presetUuid === item.presetUuid
+      );
       if (typeof incomingNote === 'string') {
         const oldNote = item.coachNotes || '';
         if (incomingNote.trim() !== oldNote.trim()) {
-          const matchedPreset = state.presets.find(
-            (p) => p.presetUuid === item.presetUuid
-          );
           scheduleNoteDiffs.push({
             date: d,
             scheduleItemUuid: item.scheduleItemUuid,
@@ -350,6 +355,42 @@ export function buildAiNotesDiffPreview(
             oldNote,
             newNote: incomingNote,
           });
+        }
+      }
+      if (sPatch.exerciseNotesByUid) {
+        for (const [uid, exNote] of Object.entries(sPatch.exerciseNotesByUid)) {
+          if (typeof exNote !== 'string') continue;
+          const oldExNote = item.exerciseNotesByUid?.[uid] || '';
+          if (exNote.trim() !== oldExNote.trim()) {
+            const exName =
+              matchedPreset?.exercises.find((e) => e.exerciseUuid === uid)
+                ?.exerciseName || uid;
+            scheduleNoteDiffs.push({
+              date: d,
+              scheduleItemUuid: item.scheduleItemUuid,
+              presetName: `${matchedPreset?.title || 'Scheduled'} · ${exName}`,
+              oldNote: oldExNote,
+              newNote: exNote,
+            });
+          }
+        }
+      }
+      if (sPatch.exerciseNotesByIndex) {
+        for (const [idxKey, exNote] of Object.entries(sPatch.exerciseNotesByIndex)) {
+          if (typeof exNote !== 'string') continue;
+          const oldExNote = item.exerciseNotesByIndex?.[idxKey] || '';
+          if (exNote.trim() !== oldExNote.trim()) {
+            const exName =
+              matchedPreset?.exercises[Number(idxKey)]?.exerciseName ||
+              `Exercise #${Number(idxKey) + 1}`;
+            scheduleNoteDiffs.push({
+              date: d,
+              scheduleItemUuid: item.scheduleItemUuid,
+              presetName: `${matchedPreset?.title || 'Scheduled'} · ${exName}`,
+              oldNote: oldExNote,
+              newNote: exNote,
+            });
+          }
         }
       }
       break;
@@ -363,4 +404,29 @@ export function buildAiNotesDiffPreview(
     scheduleNoteDiffs,
     structuralChangesCount,
   };
+}
+
+/**
+ * Fallback filter for legacy pipe-separated multi-week notes (e.g. "W1: ... | W2: ... | W3: ...").
+ * When the active workout belongs to a known program week, extracts only that week's segment.
+ */
+export function filterNoteForWeek(note: string | undefined | null, weekNumber?: number | null): string {
+  if (!note) return '';
+  if (!weekNumber || !note.includes('|')) return note;
+
+  const segments = note
+    .split('|')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (segments.length < 2) return note;
+
+  const weekRegex = /^(?:W|Week\s*)(\d+)\b/i;
+  const taggedCount = segments.filter((s) => weekRegex.test(s)).length;
+  if (taggedCount < 2) return note;
+
+  const match = segments.find((s) => {
+    const m = s.match(weekRegex);
+    return m && Number(m[1]) === weekNumber;
+  });
+  return match || note;
 }

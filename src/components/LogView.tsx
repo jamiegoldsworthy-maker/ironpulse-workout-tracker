@@ -52,6 +52,7 @@ import {
   uuidv4,
 } from '../utils/calculations';
 import { ExerciseHistoryModal } from './ExerciseHistoryModal';
+import { filterNoteForWeek } from '../utils/aiCoachPatch';
 
 const LOAD_TYPE_OPTIONS: Array<{ value: LoadType; label: string }> = [
   { value: 'single_kg', label: '1x Single (kg)' },
@@ -72,6 +73,7 @@ export const LogView: React.FC = () => {
     logLayoutMode,
     logDensityMode,
     presets,
+    programs,
     exercises: globalExercises,
     schedules,
     meta,
@@ -652,6 +654,37 @@ export const LogView: React.FC = () => {
               const isCollapsed = isWorkoutMinimized(draft);
               const preset = presets.find((p) => p.presetUuid === draft.presetUuid);
 
+              const activeWeekNumber: number | null = (() => {
+                const coachMatch = draft.coachNotes?.match(/\[?W(?:eek\s*)?(\d+)\]?/i);
+                if (coachMatch) return Number(coachMatch[1]);
+
+                const progId = draft.programUuid || meta.activeProgramUuid;
+                const prog = programs.find((p) => p.programUuid === progId);
+                if (!prog || prog.cycleLengthWeeks <= 1) return null;
+
+                const progDates = Object.keys(schedules)
+                  .filter((d) =>
+                    schedules[d]?.items?.some((it) => it.programUuid === prog.programUuid)
+                  )
+                  .sort();
+                if (progDates.length > 0 && draft.date >= progDates[0]) {
+                  const startMs = new Date(`${progDates[0]}T00:00:00`).getTime();
+                  const currMs = new Date(`${draft.date}T00:00:00`).getTime();
+                  const diffDays = Math.max(0, Math.round((currMs - startMs) / 86400000));
+                  return (Math.floor(diffDays / 7) % prog.cycleLengthWeeks) + 1;
+                }
+                return null;
+              })();
+
+              const filteredWorkoutNotes = filterNoteForWeek(
+                preset?.workoutNotes,
+                activeWeekNumber
+              );
+              const filteredCoachNotes = filterNoteForWeek(
+                draft.coachNotes,
+                activeWeekNumber
+              );
+
               if (isCollapsed) {
                 return (
                   <div
@@ -873,8 +906,8 @@ export const LogView: React.FC = () => {
                     </div>
 
                     {/* Collapsible Workout Guidance, Target Range & Scheduled Coach Notes Banner */}
-                    {(preset?.workoutNotes ||
-                      draft.coachNotes ||
+                    {(filteredWorkoutNotes ||
+                      filteredCoachNotes ||
                       preset?.defaultTimer?.targetRange) && (
                       <div className="rounded-2xl bg-orange-500/10 border border-orange-500/20 text-xs text-orange-950 dark:text-orange-200 overflow-hidden">
                         <button
@@ -905,15 +938,15 @@ export const LogView: React.FC = () => {
 
                         {!collapsedGuidance[draft.logUuid] && (
                           <div className="px-3 pb-2.5 space-y-1.5 text-xs border-t border-orange-500/15 pt-1.5">
-                            {preset?.workoutNotes && (
-                              <p className="leading-relaxed opacity-90">{preset.workoutNotes}</p>
+                            {filteredWorkoutNotes && (
+                              <p className="leading-relaxed opacity-90">{filteredWorkoutNotes}</p>
                             )}
-                            {draft.coachNotes && (
+                            {filteredCoachNotes && (
                               <p className="leading-relaxed">
                                 <span className="font-bold text-orange-700 dark:text-orange-300">
                                   Session Target:{' '}
                                 </span>
-                                {draft.coachNotes}
+                                {filteredCoachNotes}
                               </p>
                             )}
                           </div>
@@ -1265,12 +1298,13 @@ export const LogView: React.FC = () => {
                               !workoutHasLadder &&
                               ex.trackingType !== 'cardio';
                             const exKey = `${draft.logUuid}_${exIdx}`;
-                            const cueNote =
+                            const rawCueNote =
                               (ex.exerciseNotes && !ex.exerciseNotes.startsWith('Target:')
                                 ? ex.exerciseNotes
                                 : '') ||
                               preset?.exercises?.[exIdx]?.baseNotes ||
                               '';
+                            const cueNote = filterNoteForWeek(rawCueNote, activeWeekNumber);
                             const isCompactCard =
                               logDensityMode === 'compact' &&
                               !expandedCompactExercises[exKey] &&
@@ -1299,7 +1333,11 @@ export const LogView: React.FC = () => {
                                         {ex.side}
                                       </span>
                                     )}
-                                    <h3 className="font-display font-bold text-sm text-slate-900 dark:text-slate-100 truncate">
+                                    <h3
+                                      className={`font-display font-bold text-sm text-slate-900 dark:text-slate-100 ${
+                                        ex.trackingType === 'mobility' ? 'break-words' : 'truncate'
+                                      }`}
+                                    >
                                       {ex.exerciseName}
                                     </h3>
                                     {ex.isPerSide && (
@@ -1311,7 +1349,7 @@ export const LogView: React.FC = () => {
 
                                   <div className="flex items-center gap-1 shrink-0">
                                     {/* Inline Weight Pill */}
-                                    {ex.loadType === 'bodyweight' || ex.loadType === 'none' ? (
+                                    {ex.trackingType === 'mobility' ? null : ex.loadType === 'bodyweight' || ex.loadType === 'none' ? (
                                       <span className="px-2 py-0.5 rounded-lg bg-slate-200/70 dark:bg-slate-800 text-[11px] font-mono font-semibold text-slate-600 dark:text-slate-300">
                                         {ex.loadType === 'bodyweight' ? 'BW' : '—'}
                                       </span>
@@ -1437,8 +1475,59 @@ export const LogView: React.FC = () => {
                                   </div>
                                 )}
 
-                                {/* Compact Sets / Complex / Ladder Row */}
-                                {isComplexMode ? (
+                                {/* Compact Mobility / Flow OR Sets / Complex / Ladder Row */}
+                                {ex.trackingType === 'mobility' ? (
+                                  <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">
+                                    <div className="flex items-center gap-1.5 text-xs">
+                                      <label className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                                        Duration (min)
+                                      </label>
+                                      <input
+                                        type="number"
+                                        min={0}
+                                        value={
+                                          ex.durationSec !== undefined && ex.durationSec > 0
+                                            ? Math.round(ex.durationSec / 60)
+                                            : ''
+                                        }
+                                        placeholder="0"
+                                        onChange={(e) => {
+                                          const mins = Math.max(0, parseInt(e.target.value, 10) || 0);
+                                          updateDraftWorkout(draft.logUuid, (curr) => {
+                                            const next = [...curr.exercises];
+                                            next[exIdx] = {
+                                              ...next[exIdx],
+                                              durationSec: mins * 60,
+                                            };
+                                            return { ...curr, exercises: next };
+                                          });
+                                        }}
+                                        className="w-14 px-2 py-1 text-xs font-mono font-bold tabular-nums rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-center focus:outline-none focus:border-orange-500"
+                                      />
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        updateDraftWorkout(draft.logUuid, (curr) => {
+                                          const next = [...curr.exercises];
+                                          next[exIdx] = {
+                                            ...next[exIdx],
+                                            isCompleted: !next[exIdx].isCompleted,
+                                          };
+                                          return { ...curr, exercises: next };
+                                        })
+                                      }
+                                      className={`px-3 py-1 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 transition-colors ${
+                                        ex.isCompleted
+                                          ? 'bg-emerald-500 text-white shadow-sm'
+                                          : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-emerald-500 hover:text-emerald-600'
+                                      }`}
+                                    >
+                                      <CheckCircle2 className="w-3.5 h-3.5" />
+                                      {ex.isCompleted ? 'Completed' : 'Mark Done'}
+                                    </button>
+                                  </div>
+                                ) : isComplexMode ? (
                                   <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                                     {ex.repScheme && ex.repScheme.schemeType !== 'fixed' ? (
                                       <div className="flex items-center gap-1.5 font-mono text-[11px]">
@@ -1787,8 +1876,60 @@ export const LogView: React.FC = () => {
                                 )}
                               </div>
 
-                              {/* STRENGTH / COMPLEX / CIRCUIT ENTRY */}
-                              {ex.trackingType !== 'cardio' ? (
+                              {/* MOBILITY / FLOW OR STRENGTH / COMPLEX / CIRCUIT OR CARDIO ENTRY */}
+                              {ex.trackingType === 'mobility' ? (
+                                <div className="p-3 rounded-2xl bg-slate-50/70 dark:bg-slate-800/35 border border-slate-200/70 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3">
+                                  <div className="flex items-center gap-2">
+                                    <label className="text-xs font-semibold text-slate-600 dark:text-slate-300">
+                                      Duration (min)
+                                    </label>
+                                    <input
+                                      type="number"
+                                      min={0}
+                                      value={
+                                        ex.durationSec !== undefined && ex.durationSec > 0
+                                          ? Math.round(ex.durationSec / 60)
+                                          : ''
+                                      }
+                                      placeholder="0 (un-timed)"
+                                      onChange={(e) => {
+                                        const mins = Math.max(0, parseInt(e.target.value, 10) || 0);
+                                        updateDraftWorkout(draft.logUuid, (curr) => {
+                                          const next = [...curr.exercises];
+                                          next[exIdx] = {
+                                            ...next[exIdx],
+                                            durationSec: mins * 60,
+                                          };
+                                          return { ...curr, exercises: next };
+                                        });
+                                      }}
+                                      className="w-24 px-2.5 py-1.5 text-xs font-mono font-bold tabular-nums rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-center focus:outline-none focus:border-orange-500"
+                                    />
+                                  </div>
+
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      updateDraftWorkout(draft.logUuid, (curr) => {
+                                        const next = [...curr.exercises];
+                                        next[exIdx] = {
+                                          ...next[exIdx],
+                                          isCompleted: !next[exIdx].isCompleted,
+                                        };
+                                        return { ...curr, exercises: next };
+                                      })
+                                    }
+                                    className={`px-4 py-2 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 transition-colors ${
+                                      ex.isCompleted
+                                        ? 'bg-emerald-500 text-white shadow-sm'
+                                        : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:border-emerald-500 hover:text-emerald-600'
+                                    }`}
+                                  >
+                                    <CheckCircle2 className="w-4 h-4" />
+                                    {ex.isCompleted ? 'Completed' : 'Mark Done'}
+                                  </button>
+                                </div>
+                              ) : ex.trackingType !== 'cardio' ? (
                                 <div className="space-y-3">
                                   {ex.trackingType === 'circuit' && (
                                     <div className="p-2.5 rounded-xl bg-orange-500/[0.06] border border-orange-500/20 flex flex-wrap items-center gap-3">

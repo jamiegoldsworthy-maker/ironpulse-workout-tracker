@@ -415,7 +415,11 @@ export const LibraryView: React.FC = () => {
                           </span>
                         </div>
                         <span className="font-mono text-[11px] font-semibold text-orange-600 dark:text-orange-400 tabular-nums ml-auto">
-                          {ex.trackingType === 'cardio'
+                          {ex.trackingType === 'mobility'
+                            ? ex.defaultDurationMin
+                              ? `${ex.defaultDurationMin} min`
+                              : 'Flow'
+                            : ex.trackingType === 'cardio'
                             ? `${ex.cardioMode || 'Cardio'} (${ex.defaultDistanceUnit || 'mi'})`
                             : `${ex.defaultSets} × ${ex.defaultReps}${
                                 ex.isPerSide ? '/side' : ''
@@ -508,9 +512,24 @@ export const LibraryView: React.FC = () => {
                           setCategoryManagerOpen(true);
                           return;
                         }
+                        const nextCategory = e.target.value as WorkoutType;
+                        const isMobCat = /^(mobility|yoga)$/i.test(nextCategory.trim());
                         setEditingPreset({
                           ...editingPreset,
-                          workoutType: e.target.value as WorkoutType,
+                          workoutType: nextCategory,
+                          exercises: isMobCat
+                            ? editingPreset.exercises.map((ex) =>
+                                ex.exerciseName === 'New Exercise' && ex.trackingType === 'strength'
+                                  ? {
+                                      ...ex,
+                                      trackingType: 'mobility',
+                                      loadType: 'none',
+                                      defaultWeight: 0,
+                                      defaultDurationMin: ex.defaultDurationMin ?? 0,
+                                    }
+                                  : ex
+                              )
+                            : editingPreset.exercises,
                         });
                       }}
                       className="flex-1 min-w-0 px-3 py-2 text-sm font-semibold rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:border-orange-500"
@@ -1328,33 +1347,53 @@ export const LibraryView: React.FC = () => {
 
               {/* Exercises List */}
               <div className="space-y-3 pt-2 border-t border-slate-100 dark:border-slate-800">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                    Exercises ({editingPreset.exercises.length})
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const newEx: PresetExercise = {
-                        exerciseUuid: `ex-${uuidv4()}`,
-                        exerciseName: 'New Exercise',
-                        category: 'Strength',
-                        trackingType: 'strength',
-                        loadType: 'single_kg',
-                        defaultWeight: 16,
-                        defaultSets: 3,
-                        defaultReps: '10',
-                      };
-                      setEditingPreset({
-                        ...editingPreset,
-                        exercises: [...editingPreset.exercises, newEx],
-                      });
-                    }}
-                    className="px-3 py-1.5 rounded-xl bg-orange-500/10 text-orange-600 dark:text-orange-400 text-xs font-bold hover:bg-orange-500 hover:text-white transition-colors"
-                  >
-                    + Add Exercise
-                  </button>
-                </div>
+                {(() => {
+                  const isMobCategory = /^(mobility|yoga)$/i.test(
+                    (editingPreset.workoutType || '').trim()
+                  );
+                  const addExerciseToPreset = () => {
+                    const newEx: PresetExercise = isMobCategory
+                      ? {
+                          exerciseUuid: `ex-${uuidv4()}`,
+                          exerciseName: '',
+                          category: editingPreset.workoutType || 'Mobility',
+                          trackingType: 'mobility',
+                          loadType: 'none',
+                          defaultWeight: 0,
+                          defaultSets: 1,
+                          defaultReps: '',
+                          defaultDurationMin: 0,
+                        }
+                      : {
+                          exerciseUuid: `ex-${uuidv4()}`,
+                          exerciseName: 'New Exercise',
+                          category: 'Strength',
+                          trackingType: 'strength',
+                          loadType: 'single_kg',
+                          defaultWeight: 16,
+                          defaultSets: 3,
+                          defaultReps: '10',
+                        };
+                    setEditingPreset({
+                      ...editingPreset,
+                      exercises: [...editingPreset.exercises, newEx],
+                    });
+                  };
+
+                  return (
+                    <>
+                      <div className="sticky top-0 z-10 flex items-center justify-between py-2 -mx-1 px-1 bg-white/95 dark:bg-slate-900/95 backdrop-blur-sm border-b border-slate-100/80 dark:border-slate-800/80">
+                        <label className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                          Exercises ({editingPreset.exercises.length})
+                        </label>
+                        <button
+                          type="button"
+                          onClick={addExerciseToPreset}
+                          className="px-3 py-1.5 rounded-xl bg-orange-500/10 text-orange-600 dark:text-orange-400 text-xs font-bold hover:bg-orange-500 hover:text-white transition-colors"
+                        >
+                          + Add Exercise
+                        </button>
+                      </div>
 
                 {(() => {
                   const isSequenceMode =
@@ -1427,42 +1466,68 @@ export const LibraryView: React.FC = () => {
                             {stepBadge || idx + 1}
                           </span>
 
-                          <input
-                            type="text"
-                            list="global-exercises-datalist"
-                            value={pe.exerciseName}
-                            placeholder="Exercise Name"
-                            onChange={(e) => {
-                              const name = e.target.value;
-                              const matchedGlobal = globalExercises.find(
-                                (ge) => ge.exerciseName.toLowerCase() === name.toLowerCase()
-                              );
-                              const inferredMetric =
-                                matchedGlobal?.metricType || inferDefaultMetricType(name);
-                              const next = [...editingPreset.exercises];
-                              next[idx] = {
-                                ...pe,
-                                exerciseName: name,
-                                exerciseUuid: matchedGlobal?.exerciseUuid || pe.exerciseUuid,
-                                category: matchedGlobal?.category || pe.category,
-                                metricType:
-                                  inferredMetric !== 'reps'
-                                    ? inferredMetric
-                                    : pe.metricType || 'reps',
-                              };
-                              setEditingPreset({ ...editingPreset, exercises: next });
-                            }}
-                            className="min-w-0 w-full sm:w-auto sm:flex-1 px-3 py-2 text-xs font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 focus:outline-none focus:border-orange-500"
-                          />
+                          {pe.trackingType === 'mobility' ? (
+                            <textarea
+                              rows={2}
+                              value={pe.exerciseName}
+                              placeholder="Flow / Movement Sequence (e.g. 90/90 Hip Switch → Shin Box Reach)"
+                              onChange={(e) => {
+                                const name = e.target.value;
+                                const next = [...editingPreset.exercises];
+                                next[idx] = {
+                                  ...pe,
+                                  exerciseName: name,
+                                };
+                                setEditingPreset({ ...editingPreset, exercises: next });
+                              }}
+                              className="min-w-0 w-full sm:flex-1 px-3 py-2 text-xs font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 focus:outline-none focus:border-orange-500 resize-y"
+                            />
+                          ) : (
+                            <input
+                              type="text"
+                              list="global-exercises-datalist"
+                              value={pe.exerciseName}
+                              placeholder="Exercise Name"
+                              onChange={(e) => {
+                                const name = e.target.value;
+                                const matchedGlobal = globalExercises.find(
+                                  (ge) => ge.exerciseName.toLowerCase() === name.toLowerCase()
+                                );
+                                const inferredMetric =
+                                  matchedGlobal?.metricType || inferDefaultMetricType(name);
+                                const next = [...editingPreset.exercises];
+                                next[idx] = {
+                                  ...pe,
+                                  exerciseName: name,
+                                  exerciseUuid: matchedGlobal?.exerciseUuid || pe.exerciseUuid,
+                                  category: matchedGlobal?.category || pe.category,
+                                  metricType:
+                                    inferredMetric !== 'reps'
+                                      ? inferredMetric
+                                      : pe.metricType || 'reps',
+                                };
+                                setEditingPreset({ ...editingPreset, exercises: next });
+                              }}
+                              className="min-w-0 w-full sm:w-auto sm:flex-1 px-3 py-2 text-xs font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 focus:outline-none focus:border-orange-500"
+                            />
+                          )}
 
                           <select
                             value={pe.trackingType}
                             title="Exercise Tracking Format"
                             onChange={(e) => {
+                              const nextType = e.target.value as TrackingType;
                               const next = [...editingPreset.exercises];
                               next[idx] = {
                                 ...pe,
-                                trackingType: e.target.value as TrackingType,
+                                trackingType: nextType,
+                                ...(nextType === 'mobility'
+                                  ? {
+                                      loadType: 'none',
+                                      defaultWeight: 0,
+                                      defaultDurationMin: pe.defaultDurationMin ?? 0,
+                                    }
+                                  : {}),
                               };
                               setEditingPreset({ ...editingPreset, exercises: next });
                             }}
@@ -1471,6 +1536,7 @@ export const LibraryView: React.FC = () => {
                             <option value="strength">Strength / Sets</option>
                             <option value="circuit">Circuit / Timed</option>
                             <option value="cardio">Cardio / Distance</option>
+                            <option value="mobility">Mobility / Flow</option>
                           </select>
 
                           <div className="flex items-center gap-0.5 ml-auto">
@@ -1532,7 +1598,80 @@ export const LibraryView: React.FC = () => {
                           </div>
                         </div>
 
-                        {pe.trackingType === 'cardio' ? (
+                        {pe.trackingType === 'mobility' ? (
+                          <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-end">
+                            <div className="sm:col-span-3">
+                              <label className="block text-[10px] font-semibold text-slate-400 mb-0.5">
+                                Duration (min)
+                              </label>
+                              <input
+                                type="number"
+                                min={0}
+                                value={pe.defaultDurationMin === undefined ? '' : pe.defaultDurationMin}
+                                placeholder="0 (un-timed)"
+                                onChange={(e) => {
+                                  const raw = e.target.value;
+                                  const parsed = raw === '' ? undefined : Math.max(0, parseInt(raw, 10) || 0);
+                                  const next = [...editingPreset.exercises];
+                                  next[idx] = { ...pe, defaultDurationMin: parsed };
+                                  setEditingPreset({ ...editingPreset, exercises: next });
+                                }}
+                                onBlur={() => {
+                                  if (pe.defaultDurationMin === undefined) {
+                                    const next = [...editingPreset.exercises];
+                                    next[idx] = { ...pe, defaultDurationMin: 0 };
+                                    setEditingPreset({ ...editingPreset, exercises: next });
+                                  }
+                                }}
+                                className="w-full px-2.5 py-1.5 text-xs font-mono font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
+                              />
+                            </div>
+                            <div className="sm:col-span-3">
+                              <label className="block text-[10px] font-semibold text-slate-400 mb-0.5">
+                                Side
+                              </label>
+                              <div className="flex items-center gap-1">
+                                {(['', 'L/R'] as Array<'' | ExerciseSide>).map((sOpt) => (
+                                  <button
+                                    key={sOpt || 'none'}
+                                    type="button"
+                                    onClick={() => {
+                                      const next = [...editingPreset.exercises];
+                                      next[idx] = {
+                                        ...pe,
+                                        side: sOpt ? sOpt : undefined,
+                                      };
+                                      setEditingPreset({ ...editingPreset, exercises: next });
+                                    }}
+                                    className={`flex-1 px-2 py-1.5 rounded-xl text-[11px] font-bold transition-colors ${
+                                      (pe.side || '') === sOpt
+                                        ? 'bg-orange-500 text-white'
+                                        : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-500'
+                                    }`}
+                                  >
+                                    {sOpt || 'None'}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                            <div className="sm:col-span-6">
+                              <label className="block text-[10px] font-semibold text-slate-400 mb-0.5">
+                                Flow Cues / Sequence Notes
+                              </label>
+                              <input
+                                type="text"
+                                value={pe.baseNotes || ''}
+                                placeholder="e.g. 5 slow breaths per side, keep ribs down..."
+                                onChange={(e) => {
+                                  const next = [...editingPreset.exercises];
+                                  next[idx] = { ...pe, baseNotes: e.target.value };
+                                  setEditingPreset({ ...editingPreset, exercises: next });
+                                }}
+                                className="w-full px-2.5 py-1.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
+                              />
+                            </div>
+                          </div>
+                        ) : pe.trackingType === 'cardio' ? (
                           <div className="grid grid-cols-3 gap-2.5">
                             <div>
                               <label className="block text-[10px] font-semibold text-slate-400 mb-0.5">
@@ -1774,7 +1913,7 @@ export const LibraryView: React.FC = () => {
                         )}
 
                         {/* Compact "More" Disclosure for Rep Scheme, Side & Per Side */}
-                        {pe.trackingType !== 'cardio' && (() => {
+                        {pe.trackingType !== 'cardio' && pe.trackingType !== 'mobility' && (() => {
                           const schemeType: RepSchemeType = pe.repScheme?.schemeType || 'fixed';
                           const lStart =
                             pe.repScheme?.ladderStart ??
@@ -2064,6 +2203,17 @@ export const LibraryView: React.FC = () => {
                         );
                       })}
                     </div>
+                  );
+                })()}
+
+                      <button
+                        type="button"
+                        onClick={addExerciseToPreset}
+                        className="w-full py-2.5 rounded-2xl border-2 border-dashed border-orange-500/35 bg-orange-500/[0.04] hover:bg-orange-500/10 hover:border-orange-500/60 text-orange-600 dark:text-orange-400 text-xs font-bold transition-colors"
+                      >
+                        + Add Exercise
+                      </button>
+                    </>
                   );
                 })()}
 
