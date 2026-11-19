@@ -1689,6 +1689,32 @@ export const LogView: React.FC = () => {
                               preset?.exercises?.[exIdx]?.baseNotes ||
                               '';
                             const cueNote = filterNoteForWeek(rawCueNote, activeWeekNumber);
+                            const presetEx = preset?.exercises?.[exIdx];
+                            const rawTargetReps = (
+                              ex.targetRepsLabel ||
+                              presetEx?.defaultReps ||
+                              ''
+                            ).trim();
+                            const targetSetCount =
+                              presetEx?.defaultSets || ex.sets?.length || 0;
+                            const unitSuffix =
+                              ex.metricType === 'distance' && !/[a-z]/i.test(rawTargetReps)
+                                ? 'm'
+                                : ex.metricType === 'time' && !/[a-z]/i.test(rawTargetReps)
+                                ? 's'
+                                : '';
+                            const presetTargetLabel =
+                              ex.trackingType !== 'cardio' &&
+                              ex.trackingType !== 'mobility' &&
+                              rawTargetReps
+                                ? targetSetCount > 0
+                                  ? `${targetSetCount}×${rawTargetReps}${unitSuffix}${
+                                      ex.isPerSide ? '/side' : ''
+                                    }`
+                                  : `${rawTargetReps}${unitSuffix}${
+                                      ex.isPerSide ? '/side' : ''
+                                    }`
+                                : '';
                             const isCompactCard =
                               logDensityMode === 'compact' &&
                               !expandedCompactExercises[exKey] &&
@@ -1839,6 +1865,14 @@ export const LogView: React.FC = () => {
                                     {renderExerciseMenu(draft, exIdx, exKey, true)}
                                   </div>
                                 </div>
+
+                                {presetTargetLabel && (
+                                  <div className="flex items-center">
+                                    <span className="px-2 py-0.5 rounded-md bg-slate-200/70 dark:bg-slate-800 text-[10px] font-mono font-semibold text-slate-500 dark:text-slate-400 tabular-nums">
+                                      Target: {presetTargetLabel}
+                                    </span>
+                                  </div>
+                                )}
 
                                 {cueNote && (
                                   <div className="px-2.5 py-1 rounded-lg bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-700 dark:text-amber-300 font-medium leading-snug break-words">
@@ -2185,6 +2219,11 @@ export const LogView: React.FC = () => {
                                   {ex.isPerSide && (
                                     <span className="px-1.5 py-0.5 rounded-md bg-orange-500/15 text-orange-600 dark:text-orange-400 text-[10px] font-mono font-bold">
                                       ×2 L+R
+                                    </span>
+                                  )}
+                                  {presetTargetLabel && (
+                                    <span className="px-2 py-0.5 rounded-md bg-slate-200/70 dark:bg-slate-800 text-[11px] font-mono font-semibold text-slate-500 dark:text-slate-400 tabular-nums">
+                                      Target: {presetTargetLabel}
                                     </span>
                                   )}
                                 </h3>
