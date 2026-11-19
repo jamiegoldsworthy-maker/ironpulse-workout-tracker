@@ -42,6 +42,7 @@ import {
   formatReadableDate,
   formatSecondsAsMmSs,
   getTodayIsoDate,
+  groupConsecutiveExercises,
   parseMmSsToSeconds,
   recalculateLoggedExercise,
   shiftIsoDate,
@@ -251,7 +252,12 @@ export const LogView: React.FC = () => {
       return { ...curr, exercises: nextExs };
     });
 
-    if (reps > 0 && meta.defaultAutoStartRestTimer) {
+    const currentEx = draft.exercises[exIdx];
+    const nextEx = draft.exercises[exIdx + 1];
+    const isIntermediateInGroup = Boolean(
+      currentEx?.groupId && nextEx?.groupId && currentEx.groupId === nextEx.groupId
+    );
+    if (reps > 0 && meta.defaultAutoStartRestTimer && !isIntermediateInGroup) {
       const preset = presets.find((p) => p.presetUuid === draft.presetUuid);
       const restSec = preset?.defaultTimer
         ? Math.max(0, Number(preset.defaultTimer.restSec ?? 0))
@@ -1216,51 +1222,62 @@ export const LogView: React.FC = () => {
 
                       {/* Exercise List */}
                       <div className="space-y-3.5">
-                        {draft.exercises.map((ex, exIdx) => {
-                          const ghost = getGhostExerciseData(
-                            draft.presetUuid,
-                            ex.exerciseUuid,
-                            draft.logUuid
-                          );
-                          const ghostEx = ghost?.exercise;
-                          const workoutHasLadder = draft.exercises.some(
-                            (e) => e.repScheme && e.repScheme.schemeType !== 'fixed'
-                          );
-                          const effectiveFormatMode =
-                            draft.formatMode ||
-                            preset?.formatMode ||
-                            (workoutHasLadder
-                              ? 'emom_complex'
-                              : preset?.defaultTimer?.mode === 'circuit'
-                              ? preset.defaultTimer.restSec === 0
+                        {(() => {
+                          const renderLoggedExerciseCard = (
+                            ex: LoggedExercise,
+                            exIdx: number,
+                            stepBadge?: string
+                          ) => {
+                            const ghost = getGhostExerciseData(
+                              draft.presetUuid,
+                              ex.exerciseUuid,
+                              draft.logUuid
+                            );
+                            const ghostEx = ghost?.exercise;
+                            const workoutHasLadder = draft.exercises.some(
+                              (e) => e.repScheme && e.repScheme.schemeType !== 'fixed'
+                            );
+                            const effectiveFormatMode =
+                              draft.formatMode ||
+                              preset?.formatMode ||
+                              (workoutHasLadder
                                 ? 'emom_complex'
-                                : 'circuit'
-                              : 'standard');
-                          const isComplexMode =
-                            (effectiveFormatMode === 'emom_complex' || workoutHasLadder) &&
-                            ex.trackingType !== 'cardio';
-                          const isCircuitMode =
-                            effectiveFormatMode === 'circuit' &&
-                            !workoutHasLadder &&
-                            ex.trackingType !== 'cardio';
-                          const exKey = `${draft.logUuid}_${exIdx}`;
-                          const isCompactCard =
-                            logDensityMode === 'compact' &&
-                            !expandedCompactExercises[exKey] &&
-                            ex.trackingType !== 'cardio';
+                                : preset?.defaultTimer?.mode === 'circuit'
+                                ? preset.defaultTimer.restSec === 0
+                                  ? 'emom_complex'
+                                  : 'circuit'
+                                : 'standard');
+                            const isComplexMode =
+                              (effectiveFormatMode === 'emom_complex' || workoutHasLadder) &&
+                              ex.trackingType !== 'cardio';
+                            const isCircuitMode =
+                              effectiveFormatMode === 'circuit' &&
+                              !workoutHasLadder &&
+                              ex.trackingType !== 'cardio';
+                            const exKey = `${draft.logUuid}_${exIdx}`;
+                            const isCompactCard =
+                              logDensityMode === 'compact' &&
+                              !expandedCompactExercises[exKey] &&
+                              ex.trackingType !== 'cardio';
 
-                          if (isCompactCard) {
-                            return (
-                              <div
-                                key={`${ex.exerciseUuid}-${exIdx}`}
-                                className="p-2.5 sm:p-3 rounded-2xl bg-slate-50/60 dark:bg-slate-800/25 border border-slate-200/60 dark:border-slate-800/70 space-y-2 min-w-0"
-                              >
-                                {/* Single-Line Compact Header */}
-                                <div className="flex items-center justify-between gap-1.5 min-w-0">
-                                  <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                                    <span className="w-5 h-5 rounded-full bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-slate-100 text-[10px] font-bold flex items-center justify-center shrink-0 tabular-nums">
-                                      {exIdx + 1}
-                                    </span>
+                            if (isCompactCard) {
+                              return (
+                                <div
+                                  key={`${ex.exerciseUuid}-${exIdx}`}
+                                  className="p-2.5 sm:p-3 rounded-2xl bg-slate-50/60 dark:bg-slate-800/25 border border-slate-200/60 dark:border-slate-800/70 space-y-2 min-w-0"
+                                >
+                                  {/* Single-Line Compact Header */}
+                                  <div className="flex items-center justify-between gap-1.5 min-w-0">
+                                    <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                                      <span
+                                        className={`min-w-[1.25rem] h-5 px-1 rounded-full text-[10px] font-bold flex items-center justify-center shrink-0 tabular-nums ${
+                                          stepBadge
+                                            ? 'bg-orange-500 text-white'
+                                            : 'bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-slate-100'
+                                        }`}
+                                      >
+                                        {stepBadge || exIdx + 1}
+                                      </span>
                                     {ex.side && (
                                       <span className="px-1.5 py-0.5 rounded bg-orange-500 text-white text-[9px] font-bold shrink-0">
                                         {ex.side}
@@ -1534,8 +1551,14 @@ export const LogView: React.FC = () => {
                               <div className="space-y-1.5">
                                 <div className="flex flex-wrap items-center justify-between gap-2">
                                   <div className="flex items-center gap-2">
-                                    <span className="w-5 h-5 rounded-full bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-[11px] font-bold flex items-center justify-center shrink-0 tabular-nums">
-                                      {exIdx + 1}
+                                    <span
+                                      className={`min-w-[1.25rem] h-5 px-1.5 rounded-full text-[11px] font-bold flex items-center justify-center shrink-0 tabular-nums ${
+                                        stepBadge
+                                          ? 'bg-orange-500 text-white'
+                                          : 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900'
+                                      }`}
+                                    >
+                                      {stepBadge || exIdx + 1}
                                     </span>
                                     <span className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-md bg-slate-200/80 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
                                       {ex.category}
@@ -2345,7 +2368,35 @@ export const LogView: React.FC = () => {
                               )}
                             </div>
                           );
-                        })}
+                          };
+
+                          const groupedChunks = groupConsecutiveExercises(draft.exercises);
+                          return groupedChunks.map((chunk, cIdx) => {
+                            if (chunk.type === 'single') {
+                              return renderLoggedExerciseCard(chunk.item, chunk.originalIdx);
+                            }
+                            return (
+                              <div
+                                key={`${chunk.groupId}-${cIdx}`}
+                                className="rounded-2xl border border-orange-500/30 border-l-4 border-l-orange-500 bg-orange-500/[0.025] p-2.5 sm:p-3 space-y-2.5"
+                              >
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <span className="px-2 py-0.5 rounded-md bg-orange-500 text-white text-[10px] font-extrabold tracking-wider uppercase">
+                                    {chunk.label}
+                                  </span>
+                                  <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                                    No rest between exercises — rest after final exercise
+                                  </span>
+                                </div>
+                                <div className="space-y-2.5">
+                                  {chunk.items.map(({ item, originalIdx, stepCode }) =>
+                                    renderLoggedExerciseCard(item, originalIdx, stepCode)
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          });
+                        })()}
                       </div>
 
                       {/* Add Exercise On-the-Fly Button & Update Preset Toggle */}

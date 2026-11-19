@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Calendar,
   Sparkles,
@@ -15,6 +15,9 @@ import {
   ChevronRight,
   Edit3,
   ListChecks,
+  Pencil,
+  Copy,
+  CalendarX,
 } from 'lucide-react';
 import { useWorkoutStore } from '../store/useWorkoutStore';
 import { ProgramDayTemplate, WorkoutProgram } from '../types/workout';
@@ -74,6 +77,8 @@ export const PlanView: React.FC = () => {
     addScheduledItemToDate,
     removeScheduledItemFromDate,
     upsertProgram,
+    deleteProgram,
+    clearFutureScheduledWorkoutsForProgram,
     autoFillSchedule,
   } = useWorkoutStore();
 
@@ -123,6 +128,36 @@ export const PlanView: React.FC = () => {
   const [newProgramModal, setNewProgramModal] = useState(false);
   const [newProgTitle, setNewProgTitle] = useState('');
   const [newProgWeeks, setNewProgWeeks] = useState(2);
+
+  const [programEditMenuOpen, setProgramEditMenuOpen] = useState(false);
+  const programEditMenuRef = useRef<HTMLDivElement>(null);
+  const [renameModal, setRenameModal] = useState<{ open: boolean; title: string }>({
+    open: false,
+    title: '',
+  });
+
+  useEffect(() => {
+    if (!programEditMenuOpen) return;
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (
+        programEditMenuRef.current &&
+        !programEditMenuRef.current.contains(e.target as Node)
+      ) {
+        setProgramEditMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setProgramEditMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleOutsideClick);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [programEditMenuOpen]);
 
   const triggerNotice = (msg: string) => {
     setBannerNotice(msg);
@@ -310,21 +345,37 @@ export const PlanView: React.FC = () => {
           </button>
         </div>
 
-        {/* Active Program Selector */}
-        <div className="flex items-center gap-2 w-full sm:w-auto">
+        {/* Active Program Selector + New Program */}
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto min-w-0">
           <span className="text-xs font-semibold text-slate-400 shrink-0">Program:</span>
           <select
             value={selectedProgram?.programUuid || ''}
             onChange={(e) => setActiveProgram(e.target.value)}
             title="Select active training program"
-            className="flex-1 sm:flex-initial px-3 py-1.5 rounded-xl text-xs font-bold bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 truncate"
+            className="flex-1 min-w-0 sm:flex-initial px-3 py-1.5 rounded-xl text-xs font-bold bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 truncate"
           >
-            {programs.map((prog) => (
-              <option key={prog.programUuid} value={prog.programUuid}>
-                {prog.title} ({prog.cycleLengthWeeks}w cycle)
+            {programs.length === 0 ? (
+              <option value="" disabled>
+                No Programs
               </option>
-            ))}
+            ) : (
+              programs.map((prog) => (
+                <option key={prog.programUuid} value={prog.programUuid}>
+                  {prog.title} ({prog.cycleLengthWeeks}w cycle)
+                </option>
+              ))
+            )}
           </select>
+          <button
+            type="button"
+            onClick={() => setNewProgramModal(true)}
+            data-tooltip="Create a new multi-week program"
+            title="Create a new multi-week program"
+            className="px-2.5 py-1.5 rounded-xl bg-orange-500/10 hover:bg-orange-500 text-orange-600 dark:text-orange-400 hover:text-white text-xs font-bold inline-flex items-center gap-1 transition-colors shrink-0"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            New
+          </button>
         </div>
       </div>
 
@@ -984,14 +1035,30 @@ export const PlanView: React.FC = () => {
       ) : (
         /* SUB-TAB 2: PROGRAMMING & AUTO-FILL ENGINE */
         <div className="space-y-4">
-          {selectedProgram && (
+          {!selectedProgram ? (
+            <div className="bg-white dark:bg-slate-900 rounded-3xl p-8 border border-slate-200/80 dark:border-slate-800 text-center space-y-3">
+              <p className="text-sm font-semibold text-slate-600 dark:text-slate-300">
+                No training program selected.
+              </p>
+              <button
+                type="button"
+                onClick={() => setNewProgramModal(true)}
+                className="px-4 py-2 rounded-2xl bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold inline-flex items-center gap-1.5"
+              >
+                <Plus className="w-4 h-4" />
+                Create Training Program
+              </button>
+            </div>
+          ) : (
             <>
               <div className="bg-white dark:bg-slate-900 rounded-3xl p-5 border border-slate-200/80 dark:border-slate-800 space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div className="min-w-0">
                     <h2 className="font-display font-bold text-base sm:text-lg text-slate-900 dark:text-slate-100 flex items-center gap-2">
-                      <Sparkles className="w-5 h-5 text-orange-500" />
-                      Auto-Fill Calendar from "{selectedProgram.title}"
+                      <Sparkles className="w-5 h-5 text-orange-500 shrink-0" />
+                      <span className="break-words">
+                        Auto-Fill Calendar from &ldquo;{selectedProgram.title}&rdquo;
+                      </span>
                     </h2>
                     <p className="text-xs text-slate-500 dark:text-slate-400">
                       Populate your calendar between any start and end date using the weekly
@@ -999,15 +1066,110 @@ export const PlanView: React.FC = () => {
                     </p>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => setNewProgramModal(true)}
-                    data-tooltip="Create a new multi-week program"
-                    title="Create a new multi-week program"
-                    className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-xs font-bold hover:bg-orange-500 hover:text-white transition-colors"
-                  >
-                    + New Program
-                  </button>
+                  {/* Active Program Edit Popover */}
+                  <div ref={programEditMenuRef} className="relative shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setProgramEditMenuOpen((prev) => !prev)}
+                      aria-label="Edit Active Program"
+                      aria-expanded={programEditMenuOpen}
+                      data-tooltip="Rename, duplicate, clear, or delete program"
+                      title="Rename, duplicate, clear, or delete program"
+                      className={`px-2.5 py-1.5 rounded-xl border transition-colors inline-flex items-center gap-1 text-xs font-semibold ${
+                        programEditMenuOpen
+                          ? 'bg-orange-500 text-white border-orange-500'
+                          : 'bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 border-slate-200/60 dark:border-slate-700/60 text-slate-700 dark:text-slate-200'
+                      }`}
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                      <span>Edit</span>
+                    </button>
+
+                    {programEditMenuOpen && (
+                      <div className="absolute right-0 top-full mt-2 w-60 max-w-[calc(100vw-2rem)] rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xl p-1.5 space-y-1 z-40">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setProgramEditMenuOpen(false);
+                            setRenameModal({ open: true, title: selectedProgram.title });
+                          }}
+                          className="w-full px-3 py-2 rounded-xl text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-2 transition-colors"
+                        >
+                          <Edit3 className="w-3.5 h-3.5 text-orange-500 shrink-0" />
+                          Rename Program
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setProgramEditMenuOpen(false);
+                            const now = new Date().toISOString();
+                            const clonedTitle = `${selectedProgram.title} (Copy)`;
+                            const cloned: WorkoutProgram = {
+                              ...JSON.parse(JSON.stringify(selectedProgram)),
+                              programUuid: `prog-${uuidv4()}`,
+                              slug: slugify(clonedTitle, 'prg'),
+                              title: clonedTitle,
+                              createdAt: now,
+                              updatedAt: now,
+                            };
+                            upsertProgram(cloned);
+                            setActiveProgram(cloned.programUuid);
+                            triggerNotice(`Duplicated as "${clonedTitle}"`);
+                          }}
+                          className="w-full px-3 py-2 rounded-xl text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-2 transition-colors"
+                        >
+                          <Copy className="w-3.5 h-3.5 text-orange-500 shrink-0" />
+                          Duplicate Program
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setProgramEditMenuOpen(false);
+                            const confirmed = window.confirm(
+                              `Clear all upcoming scheduled workouts (>= today) for "${selectedProgram.title}"?`
+                            );
+                            if (!confirmed) return;
+                            const { itemsRemoved, daysModified } =
+                              clearFutureScheduledWorkoutsForProgram(
+                                selectedProgram.programUuid
+                              );
+                            if (itemsRemoved > 0) {
+                              triggerNotice(
+                                `Cleared ${itemsRemoved} upcoming workout(s) across ${daysModified} day(s)`
+                              );
+                            } else {
+                              triggerNotice('No upcoming scheduled workouts found for this program');
+                            }
+                          }}
+                          className="w-full px-3 py-2 rounded-xl text-left text-xs font-semibold text-amber-700 dark:text-amber-300 hover:bg-amber-500/10 flex items-center gap-2 transition-colors"
+                        >
+                          <CalendarX className="w-3.5 h-3.5 shrink-0" />
+                          Clear Future Scheduled Workouts
+                        </button>
+
+                        <div className="pt-1 border-t border-slate-100 dark:border-slate-800">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setProgramEditMenuOpen(false);
+                              const confirmed = window.confirm(
+                                `Delete program "${selectedProgram.title}"? This cannot be undone.`
+                              );
+                              if (!confirmed) return;
+                              deleteProgram(selectedProgram.programUuid);
+                              triggerNotice(`Deleted "${selectedProgram.title}"`);
+                            }}
+                            className="w-full px-3 py-2 rounded-xl text-left text-xs font-semibold text-rose-600 dark:text-rose-400 hover:bg-rose-500/10 flex items-center gap-2 transition-colors"
+                          >
+                            <Trash2 className="w-3.5 h-3.5 shrink-0" />
+                            Delete Program
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 <div
@@ -1474,6 +1636,54 @@ export const PlanView: React.FC = () => {
                 className="px-4 py-2 rounded-xl text-xs font-bold bg-orange-500 text-white"
               >
                 Create Program
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Rename Active Program */}
+      {renameModal.open && selectedProgram && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
+          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-5 space-y-4 shadow-2xl">
+            <h3 className="font-display font-bold text-base">Rename Training Program</h3>
+            <div>
+              <label className="block text-xs font-semibold text-slate-500 mb-1">
+                Program Name
+              </label>
+              <input
+                type="text"
+                autoFocus
+                value={renameModal.title}
+                onChange={(e) => setRenameModal({ ...renameModal, title: e.target.value })}
+                placeholder="Enter program name..."
+                className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:border-orange-500"
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setRenameModal({ open: false, title: '' })}
+                className="px-4 py-2 rounded-xl text-xs font-semibold bg-slate-100 dark:bg-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const trimmed = renameModal.title.trim();
+                  if (!trimmed) return;
+                  upsertProgram({
+                    ...selectedProgram,
+                    title: trimmed,
+                    slug: slugify(trimmed, 'prg'),
+                  });
+                  setRenameModal({ open: false, title: '' });
+                  triggerNotice(`Renamed program to "${trimmed}"`);
+                }}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-orange-500 text-white"
+              >
+                Save Name
               </button>
             </div>
           </div>

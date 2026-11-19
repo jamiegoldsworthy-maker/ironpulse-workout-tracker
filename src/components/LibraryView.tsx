@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Search,
   Plus,
@@ -14,6 +14,9 @@ import {
   ArrowUp,
   ArrowDown,
   Flame,
+  Link2,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { useWorkoutStore } from '../store/useWorkoutStore';
 import {
@@ -31,6 +34,7 @@ import {
 import {
   expandLadderSequence,
   formatLoadBadge,
+  groupConsecutiveExercises,
   slugify,
   uuidv4,
 } from '../utils/calculations';
@@ -70,7 +74,25 @@ export const LibraryView: React.FC = () => {
 
   const [editingPreset, setEditingPreset] = useState<WorkoutPreset | null>(null);
   const [tagInput, setTagInput] = useState('');
+  const [presetMetaExpanded, setPresetMetaExpanded] = useState<{
+    programs: boolean;
+    tags: boolean;
+    notes: boolean;
+  }>({ programs: false, tags: false, notes: false });
+  const [expandedExerciseMore, setExpandedExerciseMore] = useState<Record<number, boolean>>({});
   const [toast, setToast] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!editingPreset) return;
+    setPresetMetaExpanded({
+      programs: (editingPreset.programIds?.length || 0) > 0,
+      tags: (editingPreset.tags?.length || 0) > 0,
+      notes: Boolean(editingPreset.workoutNotes?.trim()),
+    });
+    setExpandedExerciseMore({});
+    // Only re-initialize disclosure state when opening a different preset
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingPreset?.presetUuid]);
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -484,78 +506,157 @@ export const LibraryView: React.FC = () => {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300 mb-1.5">
-                    Included in Programs
-                  </label>
-                  <div className="flex flex-wrap gap-2">
-                    {programs.map((prog) => {
-                      const checked = editingPreset.programIds?.includes(prog.programUuid);
-                      return (
-                        <label
-                          key={prog.programUuid}
-                          className={`px-3 py-1.5 rounded-xl border text-xs font-semibold flex items-center gap-2 cursor-pointer transition-colors ${
-                            checked
-                              ? 'bg-orange-500/15 border-orange-500 text-orange-600 dark:text-orange-400'
-                              : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400'
-                          }`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={checked}
-                            onChange={(e) => {
-                              const nextIds = e.target.checked
-                                ? [...(editingPreset.programIds || []), prog.programUuid]
-                                : (editingPreset.programIds || []).filter(
-                                    (id) => id !== prog.programUuid
-                                  );
-                              setEditingPreset({ ...editingPreset, programIds: nextIds });
-                            }}
-                            className="rounded text-orange-500 focus:ring-orange-500"
-                          />
-                          {prog.title}
-                        </label>
-                      );
-                    })}
-                  </div>
+              {/* Compact Inline Disclosure Pills (+ Programs, + Tags, + Notes) */}
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setPresetMetaExpanded((prev) => ({ ...prev, programs: !prev.programs }))
+                    }
+                    className={`px-2.5 py-1 rounded-xl text-[11px] font-bold inline-flex items-center gap-1.5 border transition-colors ${
+                      presetMetaExpanded.programs || (editingPreset.programIds?.length || 0) > 0
+                        ? 'bg-orange-500/10 border-orange-500/35 text-orange-600 dark:text-orange-400'
+                        : 'bg-slate-100 dark:bg-slate-800 border-slate-200/70 dark:border-slate-700/70 text-slate-600 dark:text-slate-300 hover:border-orange-500'
+                    }`}
+                  >
+                    <span>+ Programs</span>
+                    {(editingPreset.programIds?.length || 0) > 0 && (
+                      <span className="px-1.5 py-0.2 rounded-full bg-orange-500 text-white text-[10px] font-mono tabular-nums">
+                        {editingPreset.programIds.length}
+                      </span>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setPresetMetaExpanded((prev) => ({ ...prev, tags: !prev.tags }))
+                    }
+                    className={`px-2.5 py-1 rounded-xl text-[11px] font-bold inline-flex items-center gap-1.5 border transition-colors ${
+                      presetMetaExpanded.tags || (editingPreset.tags?.length || 0) > 0
+                        ? 'bg-orange-500/10 border-orange-500/35 text-orange-600 dark:text-orange-400'
+                        : 'bg-slate-100 dark:bg-slate-800 border-slate-200/70 dark:border-slate-700/70 text-slate-600 dark:text-slate-300 hover:border-orange-500'
+                    }`}
+                  >
+                    <span>+ Tags</span>
+                    {(editingPreset.tags?.length || 0) > 0 && (
+                      <span className="px-1.5 py-0.2 rounded-full bg-orange-500 text-white text-[10px] font-mono tabular-nums">
+                        {editingPreset.tags.length}
+                      </span>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setPresetMetaExpanded((prev) => ({ ...prev, notes: !prev.notes }))
+                    }
+                    className={`px-2.5 py-1 rounded-xl text-[11px] font-bold inline-flex items-center gap-1.5 border transition-colors ${
+                      presetMetaExpanded.notes || Boolean(editingPreset.workoutNotes?.trim())
+                        ? 'bg-orange-500/10 border-orange-500/35 text-orange-600 dark:text-orange-400'
+                        : 'bg-slate-100 dark:bg-slate-800 border-slate-200/70 dark:border-slate-700/70 text-slate-600 dark:text-slate-300 hover:border-orange-500'
+                    }`}
+                  >
+                    <span>+ Notes</span>
+                    {Boolean(editingPreset.workoutNotes?.trim()) && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-orange-500" />
+                    )}
+                  </button>
                 </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300 mb-1.5">
-                    Tags
-                  </label>
-                  <div className="flex flex-wrap items-center gap-1.5 mb-2">
-                    {editingPreset.tags?.map((t) => (
-                      <span
-                        key={t}
-                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300"
-                      >
-                        <Tag className="w-3 h-3 text-orange-500" />
-                        {t}
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setEditingPreset({
-                              ...editingPreset,
-                              tags: editingPreset.tags.filter((x) => x !== t),
-                            })
-                          }
-                          className="text-slate-400 hover:text-rose-500 ml-0.5"
-                        >
-                          ×
-                        </button>
-                      </span>
-                    ))}
+                {presetMetaExpanded.programs && (
+                  <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/70 dark:border-slate-800 space-y-1.5">
+                    <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                      Included in Programs
+                    </label>
+                    <div className="flex flex-wrap gap-2">
+                      {programs.map((prog) => {
+                        const checked = editingPreset.programIds?.includes(prog.programUuid);
+                        return (
+                          <label
+                            key={prog.programUuid}
+                            className={`px-2.5 py-1 rounded-xl border text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors ${
+                              checked
+                                ? 'bg-orange-500/15 border-orange-500 text-orange-600 dark:text-orange-400'
+                                : 'border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={(e) => {
+                                const nextIds = e.target.checked
+                                  ? [...(editingPreset.programIds || []), prog.programUuid]
+                                  : (editingPreset.programIds || []).filter(
+                                      (id) => id !== prog.programUuid
+                                    );
+                                setEditingPreset({ ...editingPreset, programIds: nextIds });
+                              }}
+                              className="rounded text-orange-500 focus:ring-orange-500"
+                            />
+                            {prog.title}
+                          </label>
+                        );
+                      })}
+                    </div>
                   </div>
-                  <div className="flex gap-1.5">
-                    <input
-                      type="text"
-                      value={tagInput}
-                      onChange={(e) => setTagInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && tagInput.trim()) {
-                          e.preventDefault();
+                )}
+
+                {presetMetaExpanded.tags && (
+                  <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/70 dark:border-slate-800 space-y-2">
+                    <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                      Tags
+                    </label>
+                    {(editingPreset.tags?.length || 0) > 0 && (
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {editingPreset.tags?.map((t) => (
+                          <span
+                            key={t}
+                            className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg text-xs font-semibold bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300"
+                          >
+                            <Tag className="w-3 h-3 text-orange-500" />
+                            {t}
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setEditingPreset({
+                                  ...editingPreset,
+                                  tags: editingPreset.tags.filter((x) => x !== t),
+                                })
+                              }
+                              className="text-slate-400 hover:text-rose-500 ml-0.5"
+                            >
+                              ×
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    <div className="flex gap-1.5">
+                      <input
+                        type="text"
+                        value={tagInput}
+                        onChange={(e) => setTagInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && tagInput.trim()) {
+                            e.preventDefault();
+                            if (!editingPreset.tags?.includes(tagInput.trim())) {
+                              setEditingPreset({
+                                ...editingPreset,
+                                tags: [...(editingPreset.tags || []), tagInput.trim()],
+                              });
+                            }
+                            setTagInput('');
+                          }
+                        }}
+                        placeholder="Add tag..."
+                        className="flex-1 min-w-0 px-3 py-1.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!tagInput.trim()) return;
                           if (!editingPreset.tags?.includes(tagInput.trim())) {
                             setEditingPreset({
                               ...editingPreset,
@@ -563,47 +664,35 @@ export const LibraryView: React.FC = () => {
                             });
                           }
                           setTagInput('');
-                        }
-                      }}
-                      placeholder="Add tag..."
-                      className="flex-1 px-3 py-1.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (!tagInput.trim()) return;
-                        if (!editingPreset.tags?.includes(tagInput.trim())) {
-                          setEditingPreset({
-                            ...editingPreset,
-                            tags: [...(editingPreset.tags || []), tagInput.trim()],
-                          });
-                        }
-                        setTagInput('');
-                      }}
-                      className="px-3 py-1.5 rounded-xl bg-slate-200 dark:bg-slate-800 text-xs font-bold"
-                    >
-                      Add
-                    </button>
+                        }}
+                        className="px-3 py-1.5 rounded-xl bg-slate-200 dark:bg-slate-700 text-xs font-bold"
+                      >
+                        Add
+                      </button>
+                    </div>
                   </div>
-                </div>
+                )}
+
+                {presetMetaExpanded.notes && (
+                  <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/70 dark:border-slate-800 space-y-1">
+                    <label className="block text-[11px] font-semibold text-slate-500 dark:text-slate-400">
+                      Workout Guidance / Progression Notes
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={editingPreset.workoutNotes || ''}
+                      placeholder="e.g. Perform 2 Cleans -> 1 Press -> 3 Front Squats EMOM. Add 1-2 rounds weekly up to 30 mins..."
+                      onChange={(e) =>
+                        setEditingPreset({ ...editingPreset, workoutNotes: e.target.value })
+                      }
+                      className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 focus:outline-none focus:border-orange-500"
+                    />
+                  </div>
+                )}
               </div>
 
-              {/* Workout Guidance & Default Structure / Timer */}
-              <div className="space-y-3 pt-2 border-t border-slate-100 dark:border-slate-800">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300 mb-1">
-                    Workout Guidance / Progression Notes
-                  </label>
-                  <textarea
-                    rows={2}
-                    value={editingPreset.workoutNotes || ''}
-                    placeholder="e.g. Perform 2 Cleans -> 1 Press -> 3 Front Squats EMOM. Add 1-2 rounds weekly up to 30 mins..."
-                    onChange={(e) =>
-                      setEditingPreset({ ...editingPreset, workoutNotes: e.target.value })
-                    }
-                    className="w-full px-3.5 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:border-orange-500"
-                  />
-                </div>
+              {/* Default Structure / Timer Strip */}
+              <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
 
                 {(() => {
                   const activeFormat: PresetFormatMode =
@@ -913,6 +1002,573 @@ export const LibraryView: React.FC = () => {
                     editingPreset.defaultTimer?.mode === 'circuit';
                   const syncedRounds = editingPreset.defaultTimer?.rounds || 15;
 
+                  const toggleGroupWithAbove = (idx: number) => {
+                    if (idx <= 0) return;
+                    const next = [...editingPreset.exercises];
+                    const curr = next[idx];
+                    const prev = next[idx - 1];
+                    const alreadyGrouped = Boolean(
+                      curr.groupId && prev.groupId && curr.groupId === prev.groupId
+                    );
+
+                    if (alreadyGrouped) {
+                      const oldGid = curr.groupId;
+                      next[idx] = { ...curr, groupId: undefined };
+                      // Clean up orphan groupId if only 1 consecutive item remains in that run
+                      const remainingWithOldGid = next.filter((e) => e.groupId === oldGid);
+                      if (remainingWithOldGid.length < 2) {
+                        for (let k = 0; k < next.length; k++) {
+                          if (next[k].groupId === oldGid) {
+                            next[k] = { ...next[k], groupId: undefined };
+                          }
+                        }
+                      }
+                    } else {
+                      const gid = prev.groupId || `grp-${uuidv4().slice(0, 8)}`;
+                      next[idx - 1] = { ...prev, groupId: gid };
+                      next[idx] = { ...curr, groupId: gid };
+                    }
+                    setEditingPreset({ ...editingPreset, exercises: next });
+                  };
+
+                  const renderPresetExerciseCard = (
+                    pe: PresetExercise,
+                    idx: number,
+                    stepBadge?: string
+                  ) => {
+                    const prevEx = idx > 0 ? editingPreset.exercises[idx - 1] : undefined;
+                    const isGroupedWithAbove = Boolean(
+                      pe.groupId && prevEx?.groupId && pe.groupId === prevEx.groupId
+                    );
+                    const hasNonDefaultMore = Boolean(
+                      (pe.repScheme && pe.repScheme.schemeType !== 'fixed') ||
+                        pe.side ||
+                        pe.isPerSide
+                    );
+                    const isMoreOpen =
+                      expandedExerciseMore[idx] !== undefined
+                        ? expandedExerciseMore[idx]
+                        : hasNonDefaultMore;
+
+                    return (
+                      <div
+                        key={idx}
+                        className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/80 space-y-2.5"
+                      >
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span
+                            className={`min-w-[1.5rem] h-6 px-1.5 rounded-full text-[11px] font-bold flex items-center justify-center shrink-0 tabular-nums ${
+                              stepBadge || isSequenceMode
+                                ? 'bg-orange-500 text-white'
+                                : 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900'
+                            }`}
+                          >
+                            {stepBadge || idx + 1}
+                          </span>
+
+                          <input
+                            type="text"
+                            list="global-exercises-datalist"
+                            value={pe.exerciseName}
+                            placeholder="Exercise Name"
+                            onChange={(e) => {
+                              const name = e.target.value;
+                              const matchedGlobal = globalExercises.find(
+                                (ge) => ge.exerciseName.toLowerCase() === name.toLowerCase()
+                              );
+                              const next = [...editingPreset.exercises];
+                              next[idx] = {
+                                ...pe,
+                                exerciseName: name,
+                                exerciseUuid: matchedGlobal?.exerciseUuid || pe.exerciseUuid,
+                                category: matchedGlobal?.category || pe.category,
+                              };
+                              setEditingPreset({ ...editingPreset, exercises: next });
+                            }}
+                            className="min-w-0 w-full sm:w-auto sm:flex-1 px-3 py-2 text-xs font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 focus:outline-none focus:border-orange-500"
+                          />
+
+                          <select
+                            value={pe.trackingType}
+                            title="Exercise Tracking Format"
+                            onChange={(e) => {
+                              const next = [...editingPreset.exercises];
+                              next[idx] = {
+                                ...pe,
+                                trackingType: e.target.value as TrackingType,
+                              };
+                              setEditingPreset({ ...editingPreset, exercises: next });
+                            }}
+                            className="px-2.5 py-2 text-xs font-semibold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
+                          >
+                            <option value="strength">Strength / Sets</option>
+                            <option value="circuit">Circuit / Timed</option>
+                            <option value="cardio">Cardio / Distance</option>
+                          </select>
+
+                          <div className="flex items-center gap-0.5 ml-auto">
+                            {idx > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => toggleGroupWithAbove(idx)}
+                                data-tooltip={
+                                  isGroupedWithAbove
+                                    ? 'Ungroup from exercise above'
+                                    : 'Group with exercise above (Superset / Tri-Set / Giant Set)'
+                                }
+                                title={
+                                  isGroupedWithAbove
+                                    ? 'Ungroup from exercise above'
+                                    : 'Group with exercise above'
+                                }
+                                className={`px-2 py-1 rounded-lg text-[10px] font-bold inline-flex items-center gap-1 border transition-colors ${
+                                  isGroupedWithAbove
+                                    ? 'bg-orange-500 text-white border-orange-500'
+                                    : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-500 hover:border-orange-500 hover:text-orange-500'
+                                }`}
+                              >
+                                <Link2 className="w-3 h-3" />
+                                <span>{isGroupedWithAbove ? 'Ungroup' : 'Group'}</span>
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              disabled={idx === 0}
+                              onClick={() => handleMoveExercise(idx, -1)}
+                              title="Move exercise up"
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-slate-800 dark:hover:text-white disabled:opacity-30"
+                            >
+                              <ArrowUp className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={idx === editingPreset.exercises.length - 1}
+                              onClick={() => handleMoveExercise(idx, 1)}
+                              title="Move exercise down"
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-slate-800 dark:hover:text-white disabled:opacity-30"
+                            >
+                              <ArrowDown className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setEditingPreset({
+                                  ...editingPreset,
+                                  exercises: editingPreset.exercises.filter((_, i) => i !== idx),
+                                })
+                              }
+                              title="Remove exercise"
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-rose-500 hover:bg-rose-500/10 transition-colors"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+
+                        {pe.trackingType === 'cardio' ? (
+                          <div className="grid grid-cols-3 gap-2.5">
+                            <div>
+                              <label className="block text-[10px] font-semibold text-slate-400 mb-0.5">
+                                Cardio Mode
+                              </label>
+                              <select
+                                value={pe.cardioMode || 'Ruck'}
+                                onChange={(e) => {
+                                  const next = [...editingPreset.exercises];
+                                  next[idx] = {
+                                    ...pe,
+                                    cardioMode: e.target.value as CardioMode,
+                                  };
+                                  setEditingPreset({ ...editingPreset, exercises: next });
+                                }}
+                                className="w-full px-2.5 py-1.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
+                              >
+                                {CARDIO_MODES.map((m) => (
+                                  <option key={m} value={m}>
+                                    {m}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                            <div>
+                              <label className="block text-[10px] font-semibold text-slate-400 mb-0.5">
+                                Unit
+                              </label>
+                              <select
+                                value={pe.defaultDistanceUnit || 'mi'}
+                                onChange={(e) => {
+                                  const next = [...editingPreset.exercises];
+                                  next[idx] = {
+                                    ...pe,
+                                    defaultDistanceUnit: e.target.value as DistanceUnit,
+                                  };
+                                  setEditingPreset({ ...editingPreset, exercises: next });
+                                }}
+                                className="w-full px-2.5 py-1.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
+                              >
+                                <option value="mi">Miles (mi)</option>
+                                <option value="km">Kilometers (km)</option>
+                              </select>
+                            </div>
+                            <div>
+                              <label className="block text-[10px] font-semibold text-slate-400 mb-0.5">
+                                Ruck / Load (kg)
+                              </label>
+                              <input
+                                type="number"
+                                value={pe.defaultWeight}
+                                onChange={(e) => {
+                                  const next = [...editingPreset.exercises];
+                                  next[idx] = {
+                                    ...pe,
+                                    loadType: 'ruck_kg',
+                                    defaultWeight: parseFloat(e.target.value) || 0,
+                                  };
+                                  setEditingPreset({ ...editingPreset, exercises: next });
+                                }}
+                                className="w-full px-2.5 py-1.5 text-xs font-mono font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
+                              />
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                            <div>
+                              <label className="block text-[10px] font-semibold text-slate-400 mb-0.5">
+                                Load Style
+                              </label>
+                              <select
+                                value={pe.loadType}
+                                onChange={(e) => {
+                                  const next = [...editingPreset.exercises];
+                                  next[idx] = { ...pe, loadType: e.target.value as LoadType };
+                                  setEditingPreset({ ...editingPreset, exercises: next });
+                                }}
+                                className="w-full px-2.5 py-1.5 text-xs font-semibold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
+                              >
+                                <option value="single_kg">1x Single (kg)</option>
+                                <option value="double_kg">2x Double (kg)</option>
+                                <option value="bw_plus_kg">BW + Weight (kg)</option>
+                                <option value="bodyweight">Bodyweight (BW)</option>
+                                <option value="none">No Load</option>
+                              </select>
+                            </div>
+
+                            <div>
+                              <label className="block text-[10px] font-semibold text-slate-400 mb-0.5">
+                                Default Weight (kg)
+                              </label>
+                              <input
+                                type="number"
+                                step="0.5"
+                                disabled={pe.loadType === 'bodyweight' || pe.loadType === 'none'}
+                                value={pe.defaultWeight}
+                                onChange={(e) => {
+                                  const next = [...editingPreset.exercises];
+                                  next[idx] = {
+                                    ...pe,
+                                    defaultWeight: parseFloat(e.target.value) || 0,
+                                  };
+                                  setEditingPreset({ ...editingPreset, exercises: next });
+                                }}
+                                className="w-full px-2.5 py-1.5 text-xs font-mono font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 disabled:opacity-40"
+                              />
+                            </div>
+
+                            {isSequenceMode ? (
+                              <div>
+                                <label className="block text-[10px] font-semibold text-slate-400 mb-0.5">
+                                  Rounds (Synced)
+                                </label>
+                                <div className="px-2.5 py-1.5 text-xs font-mono font-bold rounded-xl border border-orange-500/30 bg-orange-500/10 text-orange-600 dark:text-orange-400 text-center">
+                                  {syncedRounds} rds
+                                </div>
+                              </div>
+                            ) : (
+                              <div>
+                                <label className="block text-[10px] font-semibold text-slate-400 mb-0.5">
+                                  Sets
+                                </label>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  value={pe.defaultSets}
+                                  onChange={(e) => {
+                                    const next = [...editingPreset.exercises];
+                                    next[idx] = {
+                                      ...pe,
+                                      defaultSets: Math.max(1, parseInt(e.target.value, 10) || 1),
+                                    };
+                                    setEditingPreset({ ...editingPreset, exercises: next });
+                                  }}
+                                  className="w-full px-2.5 py-1.5 text-xs font-mono font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
+                                />
+                              </div>
+                            )}
+
+                            <div>
+                              <label className="block text-[10px] font-semibold text-slate-400 mb-0.5">
+                                {isSequenceMode ? 'Reps / Round' : 'Target Reps'}
+                              </label>
+                              <input
+                                type="text"
+                                value={pe.defaultReps}
+                                placeholder={isSequenceMode ? 'e.g. 2' : 'e.g. 10 or AMRAP'}
+                                onChange={(e) => {
+                                  const next = [...editingPreset.exercises];
+                                  next[idx] = { ...pe, defaultReps: e.target.value };
+                                  setEditingPreset({ ...editingPreset, exercises: next });
+                                }}
+                                className="w-full px-2.5 py-1.5 text-xs font-mono font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
+                              />
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Compact "More" Disclosure for Rep Scheme, Side & Per Side */}
+                        {pe.trackingType !== 'cardio' && (() => {
+                          const schemeType: RepSchemeType = pe.repScheme?.schemeType || 'fixed';
+                          const lStart =
+                            pe.repScheme?.ladderStart ??
+                            (schemeType === 'descending_ladder' ? 10 : 1);
+                          const lEnd =
+                            pe.repScheme?.ladderEnd ??
+                            (schemeType === 'descending_ladder' ? 1 : 5);
+                          const lStep = pe.repScheme?.ladderStep ?? 1;
+                          const expandedSeq =
+                            schemeType !== 'fixed'
+                              ? expandLadderSequence(lStart, lEnd, lStep, schemeType)
+                              : [];
+                          const totalLadderReps = expandedSeq.reduce((a, b) => a + b, 0);
+
+                          const updateScheme = (
+                            nextType: RepSchemeType,
+                            nextStart = nextType === 'descending_ladder' ? 10 : 1,
+                            nextEnd = nextType === 'descending_ladder' ? 1 : 5,
+                            nextStep = 1
+                          ) => {
+                            const next = [...editingPreset.exercises];
+                            if (nextType === 'fixed') {
+                              next[idx] = {
+                                ...pe,
+                                repScheme: { schemeType: 'fixed' },
+                                defaultReps:
+                                  pe.defaultReps.includes('->') || pe.defaultReps.includes('→')
+                                    ? '10'
+                                    : pe.defaultReps,
+                              };
+                            } else {
+                              const seq = expandLadderSequence(
+                                nextStart,
+                                nextEnd,
+                                nextStep,
+                                nextType
+                              );
+                              next[idx] = {
+                                ...pe,
+                                defaultSets: seq.length || pe.defaultSets,
+                                defaultReps:
+                                  nextType === 'pyramid'
+                                    ? `${nextStart}->${nextEnd}->${nextStart}`
+                                    : `${nextStart}->${nextEnd}`,
+                                repScheme: {
+                                  schemeType: nextType,
+                                  ladderStart: nextStart,
+                                  ladderEnd: nextEnd,
+                                  ladderStep: nextStep,
+                                },
+                              };
+                            }
+                            setEditingPreset({ ...editingPreset, exercises: next });
+                          };
+
+                          return (
+                            <div className="pt-1">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setExpandedExerciseMore((prev) => ({
+                                    ...prev,
+                                    [idx]: !isMoreOpen,
+                                  }))
+                                }
+                                className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-500 hover:text-orange-500 transition-colors"
+                              >
+                                {isMoreOpen ? (
+                                  <ChevronUp className="w-3.5 h-3.5" />
+                                ) : (
+                                  <ChevronDown className="w-3.5 h-3.5" />
+                                )}
+                                <span>More</span>
+                                {hasNonDefaultMore && !isMoreOpen && (
+                                  <span className="w-1.5 h-1.5 rounded-full bg-orange-500" />
+                                )}
+                              </button>
+
+                              {isMoreOpen && (
+                                <div className="mt-2 space-y-2.5 pt-2 border-t border-slate-200/50 dark:border-slate-700/50">
+                                  {/* Rep Scheme Selector */}
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                                      Rep Scheme:
+                                    </span>
+                                    <div className="inline-flex flex-wrap rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 p-0.5 gap-0.5">
+                                      {(
+                                        [
+                                          { id: 'fixed', label: 'Fixed' },
+                                          { id: 'descending_ladder', label: 'Descending' },
+                                          { id: 'ascending_ladder', label: 'Ascending' },
+                                          { id: 'pyramid', label: 'Pyramid' },
+                                        ] as Array<{ id: RepSchemeType; label: string }>
+                                      ).map((opt) => (
+                                        <button
+                                          key={opt.id}
+                                          type="button"
+                                          onClick={() => updateScheme(opt.id)}
+                                          className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition-colors ${
+                                            schemeType === opt.id
+                                              ? 'bg-orange-500 text-white'
+                                              : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+                                          }`}
+                                        >
+                                          {opt.label}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
+
+                                  {/* Ladder Start / End / Step + Live Preview */}
+                                  {schemeType !== 'fixed' && (
+                                    <div className="p-2.5 rounded-xl bg-orange-500/[0.06] border border-orange-500/20 flex flex-wrap items-end gap-2.5">
+                                      <div className="w-16">
+                                        <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
+                                          Start
+                                        </label>
+                                        <input
+                                          type="number"
+                                          min={1}
+                                          value={lStart}
+                                          onChange={(e) =>
+                                            updateScheme(
+                                              schemeType,
+                                              Math.max(1, parseInt(e.target.value, 10) || 1),
+                                              lEnd,
+                                              lStep
+                                            )
+                                          }
+                                          className="w-full px-2 py-1 text-xs font-mono font-bold rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-center"
+                                        />
+                                      </div>
+
+                                      <div className="w-16">
+                                        <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
+                                          End
+                                        </label>
+                                        <input
+                                          type="number"
+                                          min={1}
+                                          value={lEnd}
+                                          onChange={(e) =>
+                                            updateScheme(
+                                              schemeType,
+                                              lStart,
+                                              Math.max(1, parseInt(e.target.value, 10) || 1),
+                                              lStep
+                                            )
+                                          }
+                                          className="w-full px-2 py-1 text-xs font-mono font-bold rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-center"
+                                        />
+                                      </div>
+
+                                      <div className="w-14">
+                                        <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
+                                          Step
+                                        </label>
+                                        <input
+                                          type="number"
+                                          min={1}
+                                          value={lStep}
+                                          onChange={(e) =>
+                                            updateScheme(
+                                              schemeType,
+                                              lStart,
+                                              lEnd,
+                                              Math.max(1, parseInt(e.target.value, 10) || 1)
+                                            )
+                                          }
+                                          className="w-full px-2 py-1 text-xs font-mono font-bold rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-center"
+                                        />
+                                      </div>
+
+                                      <div className="ml-auto text-right">
+                                        <span className="inline-block px-2.5 py-1 rounded-lg bg-orange-500/15 text-orange-600 dark:text-orange-400 text-[11px] font-mono font-bold tabular-nums">
+                                          {expandedSeq.length} rungs • {totalLadderReps} total reps
+                                        </span>
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {/* Side Badge & Per Side (x2) */}
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <div className="flex items-center gap-1.5">
+                                      <span className="text-[10px] font-semibold text-slate-400">
+                                        Side:
+                                      </span>
+                                      {(['', 'L', 'R', 'L/R'] as Array<'' | ExerciseSide>).map(
+                                        (sOpt) => (
+                                          <button
+                                            key={sOpt || 'none'}
+                                            type="button"
+                                            onClick={() => {
+                                              const next = [...editingPreset.exercises];
+                                              next[idx] = {
+                                                ...pe,
+                                                side: sOpt ? sOpt : undefined,
+                                              };
+                                              setEditingPreset({
+                                                ...editingPreset,
+                                                exercises: next,
+                                              });
+                                            }}
+                                            className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition-colors ${
+                                              (pe.side || '') === sOpt
+                                                ? 'bg-orange-500 text-white'
+                                                : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-500'
+                                            }`}
+                                          >
+                                            {sOpt || 'None'}
+                                          </button>
+                                        )
+                                      )}
+                                    </div>
+
+                                    <label
+                                      title="Multiply reps by 2 (Left + Right) when calculating total reps & volume"
+                                      className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-600 dark:text-slate-300 cursor-pointer"
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        checked={Boolean(pe.isPerSide)}
+                                        onChange={(e) => {
+                                          const next = [...editingPreset.exercises];
+                                          next[idx] = { ...pe, isPerSide: e.target.checked };
+                                          setEditingPreset({ ...editingPreset, exercises: next });
+                                        }}
+                                        className="rounded text-orange-500 focus:ring-orange-500"
+                                      />
+                                      Per Side (×2 L+R)
+                                    </label>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    );
+                  };
+
+                  const groupedChunks = groupConsecutiveExercises(editingPreset.exercises);
+
                   return (
                     <div
                       className={
@@ -933,467 +1589,31 @@ export const LibraryView: React.FC = () => {
                         </div>
                       )}
 
-                      {editingPreset.exercises.map((pe, idx) => (
-                        <div
-                          key={idx}
-                          className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/80 space-y-3"
-                        >
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span
-                              className={`w-6 h-6 rounded-full text-xs font-bold flex items-center justify-center shrink-0 tabular-nums ${
-                                isSequenceMode
-                                  ? 'bg-orange-500 text-white'
-                                  : 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900'
-                              }`}
-                            >
-                              {idx + 1}
-                            </span>
-
-                        <input
-                          type="text"
-                          list="global-exercises-datalist"
-                          value={pe.exerciseName}
-                          placeholder="Exercise Name"
-                          onChange={(e) => {
-                            const name = e.target.value;
-                            const matchedGlobal = globalExercises.find(
-                              (ge) => ge.exerciseName.toLowerCase() === name.toLowerCase()
-                            );
-                            const next = [...editingPreset.exercises];
-                            next[idx] = {
-                              ...pe,
-                              exerciseName: name,
-                              exerciseUuid: matchedGlobal?.exerciseUuid || pe.exerciseUuid,
-                              category: matchedGlobal?.category || pe.category,
-                            };
-                            setEditingPreset({ ...editingPreset, exercises: next });
-                          }}
-                          className="min-w-0 w-full sm:w-auto sm:flex-1 px-3 py-2 text-xs font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 focus:outline-none focus:border-orange-500"
-                        />
-
-                        <select
-                          value={pe.trackingType}
-                          title="Exercise Tracking Format"
-                          onChange={(e) => {
-                            const next = [...editingPreset.exercises];
-                            next[idx] = {
-                              ...pe,
-                              trackingType: e.target.value as TrackingType,
-                            };
-                            setEditingPreset({ ...editingPreset, exercises: next });
-                          }}
-                          className="px-2.5 py-2 text-xs font-semibold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
-                        >
-                          <option value="strength">Strength / Sets</option>
-                          <option value="circuit">Circuit / Timed</option>
-                          <option value="cardio">Cardio / Distance</option>
-                        </select>
-
-                        <div className="flex items-center gap-0.5 ml-auto">
-                          <button
-                            type="button"
-                            disabled={idx === 0}
-                            onClick={() => handleMoveExercise(idx, -1)}
-                            title="Move exercise up"
-                            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-800 dark:hover:text-white disabled:opacity-30"
-                          >
-                            <ArrowUp className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            disabled={idx === editingPreset.exercises.length - 1}
-                            onClick={() => handleMoveExercise(idx, 1)}
-                            title="Move exercise down"
-                            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-800 dark:hover:text-white disabled:opacity-30"
-                          >
-                            <ArrowDown className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setEditingPreset({
-                                ...editingPreset,
-                                exercises: editingPreset.exercises.filter((_, i) => i !== idx),
-                              })
-                            }
-                            title="Remove exercise"
-                            className="p-1.5 rounded-lg text-slate-400 hover:text-rose-500 hover:bg-rose-500/10 transition-colors"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </div>
-
-                      {pe.trackingType === 'cardio' ? (
-                        <div className="grid grid-cols-3 gap-2.5">
-                          <div>
-                            <label className="block text-[10px] font-semibold text-slate-400 mb-0.5">
-                              Cardio Mode
-                            </label>
-                            <select
-                              value={pe.cardioMode || 'Ruck'}
-                              onChange={(e) => {
-                                const next = [...editingPreset.exercises];
-                                next[idx] = {
-                                  ...pe,
-                                  cardioMode: e.target.value as CardioMode,
-                                };
-                                setEditingPreset({ ...editingPreset, exercises: next });
-                              }}
-                              className="w-full px-2.5 py-1.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
-                            >
-                              {CARDIO_MODES.map((m) => (
-                                <option key={m} value={m}>
-                                  {m}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                          <div>
-                            <label className="block text-[10px] font-semibold text-slate-400 mb-0.5">
-                              Unit
-                            </label>
-                            <select
-                              value={pe.defaultDistanceUnit || 'mi'}
-                              onChange={(e) => {
-                                const next = [...editingPreset.exercises];
-                                next[idx] = {
-                                  ...pe,
-                                  defaultDistanceUnit: e.target.value as DistanceUnit,
-                                };
-                                setEditingPreset({ ...editingPreset, exercises: next });
-                              }}
-                              className="w-full px-2.5 py-1.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
-                            >
-                              <option value="mi">Miles (mi)</option>
-                              <option value="km">Kilometers (km)</option>
-                            </select>
-                          </div>
-                          <div>
-                            <label className="block text-[10px] font-semibold text-slate-400 mb-0.5">
-                              Ruck / Load (kg)
-                            </label>
-                            <input
-                              type="number"
-                              value={pe.defaultWeight}
-                              onChange={(e) => {
-                                const next = [...editingPreset.exercises];
-                                next[idx] = {
-                                  ...pe,
-                                  loadType: 'ruck_kg',
-                                  defaultWeight: parseFloat(e.target.value) || 0,
-                                };
-                                setEditingPreset({ ...editingPreset, exercises: next });
-                              }}
-                              className="w-full px-2.5 py-1.5 text-xs font-mono font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
-                            />
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                          <div>
-                            <label className="block text-[10px] font-semibold text-slate-400 mb-0.5">
-                              Load Style
-                            </label>
-                            <select
-                              value={pe.loadType}
-                              onChange={(e) => {
-                                const next = [...editingPreset.exercises];
-                                next[idx] = { ...pe, loadType: e.target.value as LoadType };
-                                setEditingPreset({ ...editingPreset, exercises: next });
-                              }}
-                              className="w-full px-2.5 py-1.5 text-xs font-semibold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
-                            >
-                              <option value="single_kg">1x Single (kg)</option>
-                              <option value="double_kg">2x Double (kg)</option>
-                              <option value="bw_plus_kg">BW + Weight (kg)</option>
-                              <option value="bodyweight">Bodyweight (BW)</option>
-                              <option value="none">No Load</option>
-                            </select>
-                          </div>
-
-                          <div>
-                            <label className="block text-[10px] font-semibold text-slate-400 mb-0.5">
-                              Default Weight (kg)
-                            </label>
-                            <input
-                              type="number"
-                              step="0.5"
-                              disabled={pe.loadType === 'bodyweight' || pe.loadType === 'none'}
-                              value={pe.defaultWeight}
-                              onChange={(e) => {
-                                const next = [...editingPreset.exercises];
-                                next[idx] = {
-                                  ...pe,
-                                  defaultWeight: parseFloat(e.target.value) || 0,
-                                };
-                                setEditingPreset({ ...editingPreset, exercises: next });
-                              }}
-                              className="w-full px-2.5 py-1.5 text-xs font-mono font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 disabled:opacity-40"
-                            />
-                          </div>
-
-                          {isSequenceMode ? (
-                            <div>
-                              <label className="block text-[10px] font-semibold text-slate-400 mb-0.5">
-                                Rounds (Synced)
-                              </label>
-                              <div className="px-2.5 py-1.5 text-xs font-mono font-bold rounded-xl border border-orange-500/30 bg-orange-500/10 text-orange-600 dark:text-orange-400 text-center">
-                                {syncedRounds} rds
-                              </div>
-                            </div>
-                          ) : (
-                            <div>
-                              <label className="block text-[10px] font-semibold text-slate-400 mb-0.5">
-                                Sets
-                              </label>
-                              <input
-                                type="number"
-                                min={1}
-                                value={pe.defaultSets}
-                                onChange={(e) => {
-                                  const next = [...editingPreset.exercises];
-                                  next[idx] = {
-                                    ...pe,
-                                    defaultSets: Math.max(1, parseInt(e.target.value, 10) || 1),
-                                  };
-                                  setEditingPreset({ ...editingPreset, exercises: next });
-                                }}
-                                className="w-full px-2.5 py-1.5 text-xs font-mono font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
-                              />
-                            </div>
-                          )}
-
-                          <div>
-                            <label className="block text-[10px] font-semibold text-slate-400 mb-0.5">
-                              {isSequenceMode ? 'Reps / Round' : 'Target Reps'}
-                            </label>
-                            <input
-                              type="text"
-                              value={pe.defaultReps}
-                              placeholder={isSequenceMode ? 'e.g. 2' : 'e.g. 10 or AMRAP'}
-                              onChange={(e) => {
-                                const next = [...editingPreset.exercises];
-                                next[idx] = { ...pe, defaultReps: e.target.value };
-                                setEditingPreset({ ...editingPreset, exercises: next });
-                              }}
-                              className="w-full px-2.5 py-1.5 text-xs font-mono font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
-                            />
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Rep Scheme (Fixed vs Ladder / Pyramid) + Side Badge & Per Side (x2) */}
-                      {pe.trackingType !== 'cardio' && (() => {
-                        const schemeType: RepSchemeType = pe.repScheme?.schemeType || 'fixed';
-                        const lStart =
-                          pe.repScheme?.ladderStart ??
-                          (schemeType === 'descending_ladder' ? 10 : 1);
-                        const lEnd =
-                          pe.repScheme?.ladderEnd ??
-                          (schemeType === 'descending_ladder' ? 1 : 5);
-                        const lStep = pe.repScheme?.ladderStep ?? 1;
-                        const expandedSeq =
-                          schemeType !== 'fixed'
-                            ? expandLadderSequence(lStart, lEnd, lStep, schemeType)
-                            : [];
-                        const totalLadderReps = expandedSeq.reduce((a, b) => a + b, 0);
-
-                        const updateScheme = (
-                          nextType: RepSchemeType,
-                          nextStart = nextType === 'descending_ladder' ? 10 : 1,
-                          nextEnd = nextType === 'descending_ladder' ? 1 : 5,
-                          nextStep = 1
-                        ) => {
-                          const next = [...editingPreset.exercises];
-                          if (nextType === 'fixed') {
-                            next[idx] = {
-                              ...pe,
-                              repScheme: { schemeType: 'fixed' },
-                              defaultReps:
-                                pe.defaultReps.includes('->') || pe.defaultReps.includes('→')
-                                  ? '10'
-                                  : pe.defaultReps,
-                            };
-                          } else {
-                            const seq = expandLadderSequence(
-                              nextStart,
-                              nextEnd,
-                              nextStep,
-                              nextType
-                            );
-                            next[idx] = {
-                              ...pe,
-                              defaultSets: seq.length || pe.defaultSets,
-                              defaultReps:
-                                nextType === 'pyramid'
-                                  ? `${nextStart}->${nextEnd}->${nextStart}`
-                                  : `${nextStart}->${nextEnd}`,
-                              repScheme: {
-                                schemeType: nextType,
-                                ladderStart: nextStart,
-                                ladderEnd: nextEnd,
-                                ladderStep: nextStep,
-                              },
-                            };
-                          }
-                          setEditingPreset({ ...editingPreset, exercises: next });
-                        };
-
+                      {groupedChunks.map((chunk, cIdx) => {
+                        if (chunk.type === 'single') {
+                          return renderPresetExerciseCard(chunk.item, chunk.originalIdx);
+                        }
                         return (
-                          <div className="space-y-2.5 pt-2 border-t border-slate-200/50 dark:border-slate-700/50">
-                            {/* Rep Scheme Selector */}
+                          <div
+                            key={`${chunk.groupId}-${cIdx}`}
+                            className="rounded-2xl border border-orange-500/30 border-l-4 border-l-orange-500 bg-orange-500/[0.03] p-3 space-y-2.5"
+                          >
                             <div className="flex flex-wrap items-center justify-between gap-2">
-                              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                                Rep Scheme:
+                              <span className="px-2 py-0.5 rounded-md bg-orange-500 text-white text-[10px] font-extrabold tracking-wider uppercase">
+                                {chunk.label}
                               </span>
-                              <div className="inline-flex flex-wrap rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 p-0.5 gap-0.5">
-                                {(
-                                  [
-                                    { id: 'fixed', label: 'Fixed' },
-                                    { id: 'descending_ladder', label: 'Descending' },
-                                    { id: 'ascending_ladder', label: 'Ascending' },
-                                    { id: 'pyramid', label: 'Pyramid' },
-                                  ] as Array<{ id: RepSchemeType; label: string }>
-                                ).map((opt) => (
-                                  <button
-                                    key={opt.id}
-                                    type="button"
-                                    onClick={() => updateScheme(opt.id)}
-                                    className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition-colors ${
-                                      schemeType === opt.id
-                                        ? 'bg-orange-500 text-white'
-                                        : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
-                                    }`}
-                                  >
-                                    {opt.label}
-                                  </button>
-                                ))}
-                              </div>
+                              <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                                No rest between exercises — rest after final exercise
+                              </span>
                             </div>
-
-                            {/* Ladder Start / End / Step + Live Preview */}
-                            {schemeType !== 'fixed' && (
-                              <div className="p-2.5 rounded-xl bg-orange-500/[0.06] border border-orange-500/20 flex flex-wrap items-end gap-2.5">
-                                <div className="w-16">
-                                  <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
-                                    Start
-                                  </label>
-                                  <input
-                                    type="number"
-                                    min={1}
-                                    value={lStart}
-                                    onChange={(e) =>
-                                      updateScheme(
-                                        schemeType,
-                                        Math.max(1, parseInt(e.target.value, 10) || 1),
-                                        lEnd,
-                                        lStep
-                                      )
-                                    }
-                                    className="w-full px-2 py-1 text-xs font-mono font-bold rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-center"
-                                  />
-                                </div>
-
-                                <div className="w-16">
-                                  <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
-                                    End
-                                  </label>
-                                  <input
-                                    type="number"
-                                    min={1}
-                                    value={lEnd}
-                                    onChange={(e) =>
-                                      updateScheme(
-                                        schemeType,
-                                        lStart,
-                                        Math.max(1, parseInt(e.target.value, 10) || 1),
-                                        lStep
-                                      )
-                                    }
-                                    className="w-full px-2 py-1 text-xs font-mono font-bold rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-center"
-                                  />
-                                </div>
-
-                                <div className="w-14">
-                                  <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
-                                    Step
-                                  </label>
-                                  <input
-                                    type="number"
-                                    min={1}
-                                    value={lStep}
-                                    onChange={(e) =>
-                                      updateScheme(
-                                        schemeType,
-                                        lStart,
-                                        lEnd,
-                                        Math.max(1, parseInt(e.target.value, 10) || 1)
-                                      )
-                                    }
-                                    className="w-full px-2 py-1 text-xs font-mono font-bold rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-center"
-                                  />
-                                </div>
-
-                                <div className="ml-auto text-right">
-                                  <span className="inline-block px-2.5 py-1 rounded-lg bg-orange-500/15 text-orange-600 dark:text-orange-400 text-[11px] font-mono font-bold tabular-nums">
-                                    {expandedSeq.length} rungs • {totalLadderReps} total reps
-                                  </span>
-                                </div>
-                              </div>
-                            )}
-
-                            {/* Side Badge & Per Side (x2) */}
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                              <div className="flex items-center gap-1.5">
-                                <span className="text-[10px] font-semibold text-slate-400">
-                                  Side:
-                                </span>
-                                {(['', 'L', 'R', 'L/R'] as Array<'' | ExerciseSide>).map((sOpt) => (
-                                  <button
-                                    key={sOpt || 'none'}
-                                    type="button"
-                                    onClick={() => {
-                                      const next = [...editingPreset.exercises];
-                                      next[idx] = {
-                                        ...pe,
-                                        side: sOpt ? sOpt : undefined,
-                                      };
-                                      setEditingPreset({ ...editingPreset, exercises: next });
-                                    }}
-                                    className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition-colors ${
-                                      (pe.side || '') === sOpt
-                                        ? 'bg-orange-500 text-white'
-                                        : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-500'
-                                    }`}
-                                  >
-                                    {sOpt || 'None'}
-                                  </button>
-                                ))}
-                              </div>
-
-                              <label
-                                title="Multiply reps by 2 (Left + Right) when calculating total reps & volume"
-                                className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-600 dark:text-slate-300 cursor-pointer"
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={Boolean(pe.isPerSide)}
-                                  onChange={(e) => {
-                                    const next = [...editingPreset.exercises];
-                                    next[idx] = { ...pe, isPerSide: e.target.checked };
-                                    setEditingPreset({ ...editingPreset, exercises: next });
-                                  }}
-                                  className="rounded text-orange-500 focus:ring-orange-500"
-                                />
-                                Per Side (×2 L+R)
-                              </label>
+                            <div className="space-y-2.5">
+                              {chunk.items.map(({ item, originalIdx, stepCode }) =>
+                                renderPresetExerciseCard(item, originalIdx, stepCode)
+                              )}
                             </div>
                           </div>
                         );
-                      })()}
-                    </div>
-                  ))}
+                      })}
                     </div>
                   );
                 })()}

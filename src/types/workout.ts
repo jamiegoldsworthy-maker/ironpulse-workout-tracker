@@ -76,6 +76,7 @@ export interface PresetExercise {
   repScheme?: RepSchemeConfig;
   side?: ExerciseSide;
   isPerSide?: boolean;
+  groupId?: string;
   cardioMode?: CardioMode;
   defaultDistanceUnit?: DistanceUnit;
   baseNotes?: string;
@@ -161,6 +162,7 @@ export interface LoggedExercise {
   weight: number; // Base weight in kg
   side?: ExerciseSide;
   isPerSide?: boolean;
+  groupId?: string;
   repScheme?: RepSchemeConfig;
   repsPerRound?: number; // Fixed reps per round in EMOM/Complex mode
   targetRepsLabel?: string; // e.g., "AMRAP" or "8-12"

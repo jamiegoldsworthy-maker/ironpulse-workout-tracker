@@ -99,7 +99,7 @@ interface WorkoutStoreState {
   setTheme: (theme: ThemeMode) => void;
   setDefaultAutoStartRestTimer: (enabled: boolean) => void;
   setDefaultDistanceUnit: (unit: DistanceUnit) => void;
-  setActiveProgram: (programUuid: string) => void;
+  setActiveProgram: (programUuid?: string) => void;
 
   // Date & Gym Floor Session Actions
   setActiveDate: (date: string) => void;
@@ -164,6 +164,10 @@ interface WorkoutStoreState {
   // Program & Schedule CRUD + Auto-Fill
   upsertProgram: (program: WorkoutProgram) => void;
   deleteProgram: (programUuid: string) => void;
+  clearFutureScheduledWorkoutsForProgram: (programUuid: string) => {
+    daysModified: number;
+    itemsRemoved: number;
+  };
   updateDailySchedule: (date: string, items: ScheduledItem[]) => void;
   addScheduledItemToDate: (
     date: string,
@@ -237,6 +241,7 @@ function buildLoggedExerciseFromPreset(
     weight: Number(pe.defaultWeight) || 0,
     side: pe.side,
     isPerSide: pe.isPerSide,
+    groupId: pe.groupId,
     repScheme: pe.repScheme,
     repsPerRound: parsedDefaultRep || 1,
     targetRepsLabel: pe.defaultReps,
@@ -1083,6 +1088,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
               repScheme: lex.repScheme,
               side: lex.side,
               isPerSide: lex.isPerSide,
+              groupId: lex.groupId,
               cardioMode: lex.mode,
               defaultDistanceUnit: lex.distanceUnit,
               baseNotes: lex.exerciseNotes,
@@ -1487,13 +1493,87 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
 
       deleteProgram: (programUuid) => {
         const state = get();
-        set({ programs: state.programs.filter((p) => p.programUuid !== programUuid) });
+        const remaining = state.programs.filter((p) => p.programUuid !== programUuid);
+        const needNewActive = state.meta.activeProgramUuid === programUuid;
+        const nextActiveUuid = needNewActive ? remaining[0]?.programUuid : state.meta.activeProgramUuid;
+        const nextMeta: UserMeta = {
+          ...state.meta,
+          activeProgramUuid: nextActiveUuid,
+          updatedAt: new Date().toISOString(),
+        };
+        set({
+          programs: remaining,
+          ...(needNewActive ? { meta: nextMeta } : {}),
+        });
         if (state.authUser) {
+          const uid = state.authUser.uid;
           removeFirestoreDoc('wt_programs', programUuid).catch((err) => {
             console.error('[Sync] Failed to delete program:', err);
             set({ syncStatus: 'error', lastSyncError: err?.message || 'Failed to delete program' });
           });
+          if (needNewActive) {
+            upsertFirestoreDoc('wt_meta', uid, nextMeta, uid).catch((err) => {
+              console.error('[Sync] Failed to update active program in meta:', err);
+            });
+          }
         }
+      },
+
+      clearFutureScheduledWorkoutsForProgram: (programUuid) => {
+        const state = get();
+        const today = getTodayIsoDate();
+        const now = new Date().toISOString();
+        const nextSchedules = { ...state.schedules };
+        let daysModified = 0;
+        let itemsRemoved = 0;
+        const updatedDates: string[] = [];
+        const removedDates: string[] = [];
+
+        for (const [date, daySched] of Object.entries(state.schedules)) {
+          if (date < today) continue;
+          const matchingCount = daySched.items.filter((it) => it.programUuid === programUuid).length;
+          if (matchingCount === 0) continue;
+
+          itemsRemoved += matchingCount;
+          daysModified += 1;
+          const remainingItems = daySched.items
+            .filter((it) => it.programUuid !== programUuid)
+            .map((it, idx) => ({ ...it, orderIndex: idx }));
+
+          if (remainingItems.length === 0) {
+            delete nextSchedules[date];
+            removedDates.push(date);
+          } else {
+            nextSchedules[date] = {
+              ...daySched,
+              items: remainingItems,
+              updatedAt: now,
+            };
+            updatedDates.push(date);
+          }
+        }
+
+        if (daysModified > 0) {
+          set({ schedules: nextSchedules });
+          if (state.authUser) {
+            const uid = state.authUser.uid;
+            const ops: Promise<void>[] = [
+              ...updatedDates.map((d) =>
+                upsertFirestoreDoc('wt_schedule', `${uid}_${d}`, nextSchedules[d], uid)
+              ),
+              ...removedDates.map((d) => removeFirestoreDoc('wt_schedule', `${uid}_${d}`)),
+            ];
+            Promise.all(ops).catch((err) => {
+              console.error('[Sync] Failed to clear future scheduled workouts:', err);
+              set({
+                syncStatus: 'error',
+                lastSyncError: err?.message || 'Failed to sync cleared schedule workouts',
+              });
+            });
+          }
+        }
+
+        return { daysModified, itemsRemoved };
       },
 
       updateDailySchedule: (date, items) => {

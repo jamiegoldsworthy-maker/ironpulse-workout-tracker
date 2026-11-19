@@ -394,6 +394,77 @@ export function parsePrintedWeight(raw: string): { loadType: LoadType; weight: n
   return { loadType: 'bodyweight', weight: 0 };
 }
 
+export type ExerciseGroupChunk<T> =
+  | {
+      type: 'single';
+      item: T;
+      originalIdx: number;
+    }
+  | {
+      type: 'group';
+      groupId: string;
+      label: 'SUPERSET' | 'TRI-SET' | 'GIANT SET';
+      groupLetter: string;
+      items: Array<{ item: T; originalIdx: number; stepCode: string }>;
+    };
+
+/**
+ * Groups consecutive exercises sharing the same non-empty `groupId` (length >= 2)
+ * into SUPERSET (2), TRI-SET (3), or GIANT SET (4+) chunks with A1/A2/A3... step codes.
+ */
+export function groupConsecutiveExercises<T extends { groupId?: string }>(
+  exercises: T[]
+): Array<ExerciseGroupChunk<T>> {
+  const chunks: Array<ExerciseGroupChunk<T>> = [];
+  let groupCounter = 0;
+  let i = 0;
+
+  while (i < exercises.length) {
+    const curr = exercises[i];
+    const gid = curr.groupId;
+
+    if (gid) {
+      let j = i + 1;
+      while (j < exercises.length && exercises[j].groupId === gid) {
+        j += 1;
+      }
+      const runLen = j - i;
+      if (runLen >= 2) {
+        const letter = String.fromCharCode(65 + (groupCounter % 26));
+        groupCounter += 1;
+        const label =
+          runLen === 2 ? 'SUPERSET' : runLen === 3 ? 'TRI-SET' : 'GIANT SET';
+        const items = [];
+        for (let k = i; k < j; k++) {
+          items.push({
+            item: exercises[k],
+            originalIdx: k,
+            stepCode: `${letter}${k - i + 1}`,
+          });
+        }
+        chunks.push({
+          type: 'group',
+          groupId: gid,
+          label,
+          groupLetter: letter,
+          items,
+        });
+        i = j;
+        continue;
+      }
+    }
+
+    chunks.push({
+      type: 'single',
+      item: curr,
+      originalIdx: i,
+    });
+    i += 1;
+  }
+
+  return chunks;
+}
+
 export function getTodayIsoDate(): string {
   const now = new Date();
   const year = now.getFullYear();
