@@ -1090,7 +1090,12 @@ export const PlanView: React.FC = () => {
                     </button>
 
                     {programEditMenuOpen && (
-                      <div className="absolute right-0 top-full mt-2 w-60 max-w-[calc(100vw-2rem)] rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xl p-1.5 space-y-1 z-40">
+                      <>
+                        <div
+                          className="fixed inset-0 bg-black/30 z-40 sm:hidden"
+                          onClick={() => setProgramEditMenuOpen(false)}
+                        />
+                        <div className="fixed inset-x-3 bottom-4 z-50 sm:absolute sm:inset-x-auto sm:bottom-auto sm:right-0 sm:top-full sm:mt-2 sm:w-60 max-w-[calc(100vw-1.5rem)] rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xl p-1.5 space-y-1">
                         <button
                           type="button"
                           onClick={() => {
@@ -1206,6 +1211,7 @@ export const PlanView: React.FC = () => {
                           </button>
                         </div>
                       </div>
+                      </>
                     )}
                   </div>
                 </div>

@@ -109,6 +109,76 @@ export const LogView: React.FC = () => {
   >({});
   const editMenuRef = useRef<HTMLDivElement>(null);
   const touchStartXRef = useRef<number | null>(null);
+  const dateTouchStartRef = useRef<{ x: number; y: number } | null>(null);
+  const cardTouchStartRef = useRef<{ x: number; y: number } | null>(null);
+  const cardRefs = useRef<Record<string, HTMLDivElement | null>>({});
+
+  const isSwipeIgnoredTarget = (target: EventTarget | null) =>
+    Boolean((target as HTMLElement | null)?.closest('input, select, textarea'));
+
+  const handleDateBarTouchStart = (e: React.TouchEvent) => {
+    if (isSwipeIgnoredTarget(e.target) || e.touches.length !== 1) {
+      dateTouchStartRef.current = null;
+      return;
+    }
+    dateTouchStartRef.current = {
+      x: e.touches[0].clientX,
+      y: e.touches[0].clientY,
+    };
+  };
+
+  const handleDateBarTouchEnd = (e: React.TouchEvent) => {
+    const start = dateTouchStartRef.current;
+    dateTouchStartRef.current = null;
+    if (!start || e.changedTouches.length !== 1) return;
+    const dx = e.changedTouches[0].clientX - start.x;
+    const dy = e.changedTouches[0].clientY - start.y;
+    if (Math.abs(dx) >= 50 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+      setActiveDate(shiftIsoDate(activeDate, dx < 0 ? 1 : -1));
+    }
+  };
+
+  const handleWorkoutCardTouchStart = (e: React.TouchEvent) => {
+    if (draftWorkouts.length <= 1 || isSwipeIgnoredTarget(e.target) || e.touches.length !== 1) {
+      cardTouchStartRef.current = null;
+      return;
+    }
+    cardTouchStartRef.current = {
+      x: e.touches[0].clientX,
+      y: e.touches[0].clientY,
+    };
+  };
+
+  const handleWorkoutCardTouchEnd = (e: React.TouchEvent, currentIdx: number) => {
+    const start = cardTouchStartRef.current;
+    cardTouchStartRef.current = null;
+    if (!start || draftWorkouts.length <= 1 || e.changedTouches.length !== 1) return;
+    const dx = e.changedTouches[0].clientX - start.x;
+    const dy = e.changedTouches[0].clientY - start.y;
+    if (Math.abs(dx) < 50 || Math.abs(dx) <= Math.abs(dy) * 1.5) return;
+
+    const targetIdx =
+      dx < 0
+        ? Math.min(draftWorkouts.length - 1, currentIdx + 1)
+        : Math.max(0, currentIdx - 1);
+    if (targetIdx === currentIdx) return;
+
+    const targetDraft = draftWorkouts[targetIdx];
+    if (!targetDraft) return;
+    if (logLayoutMode === 'cards') {
+      setActiveCardIdx(targetIdx);
+    }
+    setCollapsedCards((prev) => ({
+      ...prev,
+      [targetDraft.logUuid]: false,
+    }));
+    requestAnimationFrame(() => {
+      cardRefs.current[targetDraft.logUuid]?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'nearest',
+      });
+    });
+  };
 
   useEffect(() => {
     if (!openExerciseMenuKey) return;
@@ -591,35 +661,39 @@ export const LogView: React.FC = () => {
       )}
 
       {/* Top Date & Session Control Bar */}
-      <div className="bg-white dark:bg-slate-900 rounded-3xl p-3 sm:px-4 sm:py-3 border border-slate-200/70 dark:border-slate-800/80">
-        <div className="flex flex-wrap items-center justify-between gap-2">
+      <div
+        onTouchStart={handleDateBarTouchStart}
+        onTouchEnd={handleDateBarTouchEnd}
+        className="bg-white dark:bg-slate-900 rounded-3xl p-3 sm:px-4 sm:py-3 border border-slate-200/70 dark:border-slate-800/80"
+      >
+        <div className="w-full flex flex-wrap items-center gap-2">
           {/* Date Stepper + Today + Minimal Edit Popover */}
-          <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
+          <div className="w-full flex items-center gap-1.5 min-w-0">
             <button
               type="button"
               onClick={() => setActiveDate(shiftIsoDate(activeDate, -1))}
               data-tooltip="Previous Day"
               title="Previous Day"
-              className="p-2 rounded-2xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 transition-colors"
+              className="p-2 rounded-2xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 transition-colors shrink-0"
             >
               <ChevronLeft className="w-4 h-4" />
             </button>
 
             <label
               title="Click to pick another date"
-              className="relative flex items-center gap-2 px-3 py-2 rounded-2xl bg-slate-100/80 hover:bg-slate-200/70 dark:bg-slate-800 dark:hover:bg-slate-700 cursor-pointer transition-colors"
+              className="relative flex-1 min-w-0 flex items-center justify-between gap-2 px-3 py-2 rounded-2xl bg-slate-100/80 hover:bg-slate-200/70 dark:bg-slate-800 dark:hover:bg-slate-700 cursor-pointer transition-colors"
             >
-              <Calendar className="w-4 h-4 text-orange-500 shrink-0" />
-              <div className="text-left">
-                <div className="text-xs font-display font-bold text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
+              <span className="flex items-center gap-2 min-w-0">
+                <Calendar className="w-4 h-4 text-orange-500 shrink-0" />
+                <span className="text-xs font-display font-bold text-slate-900 dark:text-slate-100 truncate">
                   {formatReadableDate(activeDate)}
-                  {isToday && (
-                    <span className="px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider rounded-md bg-orange-500 text-white">
-                      Today
-                    </span>
-                  )}
-                </div>
-              </div>
+                </span>
+              </span>
+              {isToday && (
+                <span className="px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider rounded-md bg-orange-500 text-white shrink-0">
+                  Today
+                </span>
+              )}
               <input
                 type="date"
                 value={activeDate}
@@ -633,7 +707,7 @@ export const LogView: React.FC = () => {
               onClick={() => setActiveDate(shiftIsoDate(activeDate, 1))}
               data-tooltip="Next Day"
               title="Next Day"
-              className="p-2 rounded-2xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 transition-colors"
+              className="p-2 rounded-2xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 transition-colors shrink-0"
             >
               <ChevronRight className="w-4 h-4" />
             </button>
@@ -644,14 +718,14 @@ export const LogView: React.FC = () => {
                 data-tooltip="Jump back to Today"
                 title="Jump back to Today"
                 onClick={() => setActiveDate(todayIso)}
-                className="px-2.5 py-1.5 rounded-xl text-xs font-semibold text-orange-600 dark:text-orange-400 bg-orange-500/10 hover:bg-orange-500/20 transition-colors"
+                className="px-2.5 py-1.5 rounded-xl text-xs font-semibold text-orange-600 dark:text-orange-400 bg-orange-500/10 hover:bg-orange-500/20 transition-colors shrink-0"
               >
                 Today
               </button>
             )}
 
             {/* Compact Edit Session Popover matching Today pill height */}
-            <div ref={editMenuRef} className="relative">
+            <div ref={editMenuRef} className="relative shrink-0">
               <button
                 type="button"
                 onClick={() => setEditMenuOpen((prev) => !prev)}
@@ -670,7 +744,12 @@ export const LogView: React.FC = () => {
               </button>
 
               {editMenuOpen && (
-                <div className="absolute left-0 top-full mt-2 w-56 max-w-[calc(100vw-2rem)] rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xl p-1.5 space-y-1 z-40">
+                <>
+                  <div
+                    className="fixed inset-0 bg-black/30 z-40 sm:hidden"
+                    onClick={() => setEditMenuOpen(false)}
+                  />
+                  <div className="fixed inset-x-3 bottom-4 z-50 sm:absolute sm:inset-x-auto sm:bottom-auto sm:right-0 sm:top-full sm:mt-2 sm:w-56 max-w-[calc(100vw-1.5rem)] rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xl p-1.5 space-y-1">
                   <button
                     type="button"
                     onClick={() => {
@@ -725,6 +804,7 @@ export const LogView: React.FC = () => {
                     + Add Workout
                   </button>
                 </div>
+                </>
               )}
             </div>
           </div>
@@ -887,6 +967,11 @@ export const LogView: React.FC = () => {
                 return (
                   <div
                     key={draft.logUuid}
+                    ref={(el) => {
+                      cardRefs.current[draft.logUuid] = el;
+                    }}
+                    onTouchStart={handleWorkoutCardTouchStart}
+                    onTouchEnd={(e) => handleWorkoutCardTouchEnd(e, cardIdx)}
                     role="button"
                     tabIndex={0}
                     onClick={() => toggleCollapse(draft.logUuid, true)}
@@ -935,6 +1020,11 @@ export const LogView: React.FC = () => {
                         </div>
 
                         <div className="flex items-center gap-1 shrink-0">
+                          {draftWorkouts.length > 1 && (
+                            <span className="px-2 py-0.5 rounded-lg bg-slate-200/70 dark:bg-slate-800 text-[10px] font-mono font-bold text-slate-600 dark:text-slate-300 tabular-nums">
+                              {cardIdx + 1} / {draftWorkouts.length}
+                            </span>
+                          )}
                           <span
                             className="p-1.5 rounded-xl text-slate-500 hover:bg-slate-200/60 dark:hover:bg-slate-800"
                             aria-label="Expand workout"
@@ -972,6 +1062,11 @@ export const LogView: React.FC = () => {
               return (
                 <div
                   key={draft.logUuid}
+                  ref={(el) => {
+                    cardRefs.current[draft.logUuid] = el;
+                  }}
+                  onTouchStart={handleWorkoutCardTouchStart}
+                  onTouchEnd={(e) => handleWorkoutCardTouchEnd(e, cardIdx)}
                   className={`rounded-3xl bg-white dark:bg-slate-900 border transition-all overflow-hidden ${
                     draft.isSaved
                       ? draft.status === 'completed'
@@ -1014,6 +1109,11 @@ export const LogView: React.FC = () => {
 
                       {/* Header Right Actions */}
                       <div className="flex items-center gap-1">
+                        {draftWorkouts.length > 1 && (
+                          <span className="px-2 py-0.5 rounded-lg bg-slate-200/70 dark:bg-slate-800 text-[10px] font-mono font-bold text-slate-600 dark:text-slate-300 tabular-nums">
+                            {cardIdx + 1} / {draftWorkouts.length}
+                          </span>
+                        )}
                         {preset?.defaultTimer &&
                           (preset.defaultTimer.mode === 'circuit' ||
                             (Number(preset.defaultTimer.restSec) || 0) > 0) && (

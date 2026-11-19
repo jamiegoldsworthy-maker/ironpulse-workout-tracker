@@ -239,7 +239,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
               </button>
 
               {cogOpen && (
-                <div className="absolute right-0 top-full mt-2 w-72 max-w-[calc(100vw-1.5rem)] rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xl p-3.5 space-y-3 z-50">
+                <div className="fixed right-3 top-14 sm:absolute sm:right-0 sm:top-full sm:mt-2 w-72 max-w-[calc(100vw-1.5rem)] rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xl p-3.5 space-y-3 z-50">
                   {/* 1. Density */}
                   <div className="space-y-1.5">
                     <span className="block text-[10px] font-bold uppercase tracking-wider text-slate-400">
