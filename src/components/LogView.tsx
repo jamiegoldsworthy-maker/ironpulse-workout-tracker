@@ -104,6 +104,7 @@ export const LogView: React.FC = () => {
   const [activeCardIdx, setActiveCardIdx] = useState<number>(0);
   const [editMenuOpen, setEditMenuOpen] = useState<boolean>(false);
   const [openExerciseMenuKey, setOpenExerciseMenuKey] = useState<string | null>(null);
+  const [editingCueKey, setEditingCueKey] = useState<string | null>(null);
   const [modifiedStructureLogUuids, setModifiedStructureLogUuids] = useState<
     Record<string, boolean>
   >({});
@@ -1840,7 +1841,7 @@ export const LogView: React.FC = () => {
                                 </div>
 
                                 {cueNote && (
-                                  <div className="px-2.5 py-1 rounded-lg bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-700 dark:text-amber-300 font-medium truncate" title={cueNote}>
+                                  <div className="px-2.5 py-1 rounded-lg bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-700 dark:text-amber-300 font-medium leading-snug break-words">
                                     Coach cue: {cueNote}
                                   </div>
                                 )}
@@ -1991,11 +1992,17 @@ export const LogView: React.FC = () => {
                                   <div className="flex flex-wrap items-center gap-1.5">
                                     {(ex.sets || []).map((setObj, sIdx) => {
                                       const ghostSet = ghostEx?.sets?.[sIdx];
+                                      const rawPresetTarget = (
+                                        ex.targetRepsLabel ||
+                                        preset?.exercises?.[exIdx]?.defaultReps ||
+                                        ''
+                                      ).trim();
+                                      const numericPresetTarget = rawPresetTarget.match(/\d+/)?.[0];
                                       const ghostRepPlaceholder = ghostSet
                                         ? String(ghostSet.reps)
                                         : ghostEx?.sets?.[0]
                                         ? String(ghostEx.sets[0].reps)
-                                        : String(sIdx + 1);
+                                        : numericPresetTarget || String(sIdx + 1);
                                       const metricUnit =
                                         ex.metricType === 'distance'
                                           ? 'm'
@@ -2181,11 +2188,40 @@ export const LogView: React.FC = () => {
                                     </span>
                                   )}
                                 </h3>
-                                {cueNote && (
-                                  <div className="mt-1 px-2.5 py-1 rounded-lg bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-700 dark:text-amber-300 font-medium">
-                                    Coach cue: {cueNote}
+                                {editingCueKey === exKey ? (
+                                  <div className="mt-1 flex items-center gap-1.5">
+                                    <input
+                                      type="text"
+                                      autoFocus
+                                      value={ex.exerciseNotes || ''}
+                                      placeholder="Add coaching cue or exercise note..."
+                                      onChange={(e) => {
+                                        const val = e.target.value;
+                                        updateDraftWorkout(draft.logUuid, (curr) => {
+                                          const next = [...curr.exercises];
+                                          next[exIdx] = { ...next[exIdx], exerciseNotes: val };
+                                          return { ...curr, exercises: next };
+                                        });
+                                      }}
+                                      onKeyDown={(e) => {
+                                        if (e.key === 'Enter' || e.key === 'Escape') {
+                                          setEditingCueKey(null);
+                                        }
+                                      }}
+                                      onBlur={() => setEditingCueKey(null)}
+                                      className="flex-1 min-w-0 px-2.5 py-1 rounded-lg bg-amber-500/10 border border-amber-500/40 text-[11px] text-amber-900 dark:text-amber-200 font-medium focus:outline-none focus:ring-1 focus:ring-amber-500"
+                                    />
                                   </div>
-                                )}
+                                ) : cueNote ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => setEditingCueKey(exKey)}
+                                    title="Tap to edit coaching cue"
+                                    className="mt-1 w-full text-left px-2.5 py-1 rounded-lg bg-amber-500/10 hover:bg-amber-500/15 border border-amber-500/20 text-[11px] text-amber-700 dark:text-amber-300 font-medium leading-snug break-words transition-colors"
+                                  >
+                                    Coach cue: {cueNote}
+                                  </button>
+                                ) : null}
 
                                 {/* Ghost Benchmark Subtitle */}
                                 {ghost && ghostEx && (
@@ -2606,17 +2642,24 @@ export const LogView: React.FC = () => {
                                       <div className="flex flex-wrap items-start gap-1.5">
                                         {(ex.sets || []).map((setObj, sIdx) => {
                                           const ghostSet = ghostEx?.sets?.[sIdx];
+                                          const rawPresetTarget = (
+                                            ex.targetRepsLabel ||
+                                            preset?.exercises?.[exIdx]?.defaultReps ||
+                                            ''
+                                          ).trim();
+                                          const numericPresetTarget =
+                                            rawPresetTarget.match(/\d+/)?.[0];
                                           const isAmrap =
                                             isCircuitMode &&
                                             (ex.targetRepsLabel?.toUpperCase() === 'AMRAP' ||
-                                              !ghostSet?.reps);
+                                              (!ghostSet?.reps && !numericPresetTarget));
                                           const ghostRepPlaceholder = isAmrap
                                             ? 'AMRAP'
                                             : ghostSet
                                             ? String(ghostSet.reps)
                                             : ghostEx?.sets?.[0]
                                             ? String(ghostEx.sets[0].reps)
-                                            : '0';
+                                            : numericPresetTarget || '0';
                                           const overrideKey = `${draft.logUuid}_${exIdx}_${sIdx}`;
                                           const hasWeightOverride =
                                             setObj.weightOverride !== undefined &&
@@ -2825,21 +2868,6 @@ export const LogView: React.FC = () => {
                                         </>
                                       )}
                                     </div>
-
-                                    <input
-                                      type="text"
-                                      value={ex.exerciseNotes || ''}
-                                      placeholder="Exercise note..."
-                                      onChange={(e) => {
-                                        const val = e.target.value;
-                                        updateDraftWorkout(draft.logUuid, (curr) => {
-                                          const next = [...curr.exercises];
-                                          next[exIdx] = { ...next[exIdx], exerciseNotes: val };
-                                          return { ...curr, exercises: next };
-                                        });
-                                      }}
-                                      className="w-full sm:w-64 px-2.5 py-1 text-xs rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:border-orange-500"
-                                    />
                                   </div>
                                 </div>
                               ) : (

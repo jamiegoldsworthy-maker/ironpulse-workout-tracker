@@ -356,7 +356,7 @@ export const PlanView: React.FC = () => {
             value={selectedProgram?.programUuid || ''}
             onChange={(e) => setActiveProgram(e.target.value)}
             title="Select active training program"
-            className="flex-1 min-w-0 sm:flex-initial px-3 py-1.5 rounded-xl text-xs font-bold bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 truncate"
+            className="flex-1 min-w-0 max-w-full sm:flex-initial sm:max-w-xs px-3 py-1.5 rounded-xl text-xs font-bold bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100 truncate"
           >
             {programs.length === 0 ? (
               <option value="" disabled>
@@ -1221,7 +1221,7 @@ export const PlanView: React.FC = () => {
                     isMobile ? 'grid-cols-1' : 'grid-cols-1 sm:grid-cols-4'
                   }`}
                 >
-                  <div>
+                  <div className="min-w-0">
                     <label className="block text-[11px] font-semibold text-slate-500 mb-1">
                       Start Date
                     </label>
@@ -1229,10 +1229,10 @@ export const PlanView: React.FC = () => {
                       type="date"
                       value={autoFillStart}
                       onChange={(e) => setAutoFillStart(e.target.value)}
-                      className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                      className="w-full min-w-0 px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
                     />
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <label className="block text-[11px] font-semibold text-slate-500 mb-1">
                       End Date
                     </label>
@@ -1240,10 +1240,10 @@ export const PlanView: React.FC = () => {
                       type="date"
                       value={autoFillEnd}
                       onChange={(e) => setAutoFillEnd(e.target.value)}
-                      className="w-full px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                      className="w-full min-w-0 px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
                     />
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <label className="block text-[11px] font-semibold text-slate-500 mb-1">
                       If Dates Already Have Workouts
                     </label>
@@ -1254,7 +1254,7 @@ export const PlanView: React.FC = () => {
                           e.target.value as 'replace' | 'update_matching' | 'skip'
                         )
                       }
-                      className="w-full px-3 py-2 text-xs font-semibold rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                      className="w-full min-w-0 truncate px-3 py-2 text-xs font-semibold rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
                     >
                       <option value="update_matching">Update Matching Slots</option>
                       <option value="replace">Replace All</option>
