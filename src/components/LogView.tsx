@@ -56,6 +56,7 @@ import { ExerciseHistoryModal } from './ExerciseHistoryModal';
 const LOAD_TYPE_OPTIONS: Array<{ value: LoadType; label: string }> = [
   { value: 'single_kg', label: '1x Single (kg)' },
   { value: 'double_kg', label: '2x Double (kg)' },
+  { value: 'offset_kg', label: 'Offset / Uneven (kg)' },
   { value: 'bw_plus_kg', label: 'BW + Load (kg)' },
   { value: 'ruck_kg', label: 'Ruck Load (kg)' },
   { value: 'bodyweight', label: 'Bodyweight (BW)' },
@@ -339,6 +340,7 @@ export const LogView: React.FC = () => {
         targetEx.avgHr = ghostEx.avgHr;
       } else {
         targetEx.weight = ghostEx.weight;
+        targetEx.secondaryWeightKg = ghostEx.secondaryWeightKg;
         targetEx.loadType = ghostEx.loadType;
         targetEx.rir = ghostEx.rir;
         targetEx.roundsCompleted = ghostEx.roundsCompleted ?? targetEx.roundsCompleted;
@@ -1307,6 +1309,48 @@ export const LogView: React.FC = () => {
                                       <span className="px-2 py-0.5 rounded-lg bg-slate-200/70 dark:bg-slate-800 text-[11px] font-mono font-semibold text-slate-600 dark:text-slate-300">
                                         {ex.loadType === 'bodyweight' ? 'BW' : '—'}
                                       </span>
+                                    ) : ex.loadType === 'offset_kg' ? (
+                                      <div className="inline-flex items-center px-1.5 py-0.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-700 text-[11px] font-mono font-bold">
+                                        <input
+                                          type="number"
+                                          step="0.5"
+                                          min={0}
+                                          title="Weight A (kg)"
+                                          value={ex.weight || ''}
+                                          placeholder={String(ghostEx?.weight ?? 16)}
+                                          onChange={(e) => {
+                                            const val = parseFloat(e.target.value) || 0;
+                                            updateDraftWorkout(draft.logUuid, (curr) => {
+                                              const next = [...curr.exercises];
+                                              next[exIdx] = { ...next[exIdx], weight: val };
+                                              return { ...curr, exercises: next };
+                                            });
+                                          }}
+                                          className="w-8 bg-transparent text-center text-slate-900 dark:text-slate-100 focus:outline-none tabular-nums"
+                                        />
+                                        <span className="text-orange-500">+</span>
+                                        <input
+                                          type="number"
+                                          step="0.5"
+                                          min={0}
+                                          title="Weight B (kg)"
+                                          value={ex.secondaryWeightKg ?? ''}
+                                          placeholder={String(ghostEx?.secondaryWeightKg ?? 20)}
+                                          onChange={(e) => {
+                                            const val = parseFloat(e.target.value) || 0;
+                                            updateDraftWorkout(draft.logUuid, (curr) => {
+                                              const next = [...curr.exercises];
+                                              next[exIdx] = {
+                                                ...next[exIdx],
+                                                secondaryWeightKg: val,
+                                              };
+                                              return { ...curr, exercises: next };
+                                            });
+                                          }}
+                                          className="w-8 bg-transparent text-center text-slate-900 dark:text-slate-100 focus:outline-none tabular-nums"
+                                        />
+                                        <span className="text-slate-400 text-[10px]">kg</span>
+                                      </div>
                                     ) : (
                                       <label className="inline-flex items-center px-1.5 py-0.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-700 text-[11px] font-mono font-bold">
                                         {ex.loadType === 'double_kg' && (
@@ -1715,7 +1759,8 @@ export const LogView: React.FC = () => {
                                         {formatLoadBadge(
                                           ghostEx.loadType,
                                           ghostEx.weight,
-                                          ghostEx.ruckLoadKg
+                                          ghostEx.ruckLoadKg,
+                                          ghostEx.secondaryWeightKg
                                         )}{' '}
                                         • [{ghostEx.sets.map((s) => s.reps).join(', ')}]
                                         {ghostEx.rir !== undefined ? ` @ RIR ${ghostEx.rir}` : ''}
@@ -1842,18 +1887,13 @@ export const LogView: React.FC = () => {
                                           ))}
                                         </select>
 
-                                        {ex.loadType !== 'bodyweight' && ex.loadType !== 'none' && (
-                                          <div className="relative flex items-center">
-                                            {ex.loadType === 'double_kg' && (
-                                              <span className="text-[11px] font-mono font-bold text-orange-500 mr-1">
-                                                2×
-                                              </span>
-                                            )}
+                                        {ex.loadType === 'offset_kg' ? (
+                                          <div className="relative flex items-center gap-1">
                                             <input
                                               type="number"
                                               step="0.5"
                                               min={0}
-                                              title="Base exercise weight (kg)"
+                                              title="Weight A (kg)"
                                               value={ex.weight || ''}
                                               placeholder={String(ghostEx?.weight ?? 16)}
                                               onChange={(e) => {
@@ -1864,12 +1904,68 @@ export const LogView: React.FC = () => {
                                                   return { ...curr, exercises: next };
                                                 });
                                               }}
-                                              className="w-14 px-1.5 py-1 text-xs font-mono font-bold tabular-nums text-center rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder:text-slate-400/70 focus:ring-2 focus:ring-orange-500 focus:outline-none"
+                                              className="w-12 px-1.5 py-1 text-xs font-mono font-bold tabular-nums text-center rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder:text-slate-400/70 focus:ring-2 focus:ring-orange-500 focus:outline-none"
                                             />
-                                            <span className="text-[11px] font-mono text-slate-400 ml-1 pr-1">
+                                            <span className="text-[11px] font-mono font-bold text-orange-500">
+                                              +
+                                            </span>
+                                            <input
+                                              type="number"
+                                              step="0.5"
+                                              min={0}
+                                              title="Weight B (kg)"
+                                              value={ex.secondaryWeightKg ?? ''}
+                                              placeholder={String(
+                                                ghostEx?.secondaryWeightKg ?? 20
+                                              )}
+                                              onChange={(e) => {
+                                                const val = parseFloat(e.target.value) || 0;
+                                                updateDraftWorkout(draft.logUuid, (curr) => {
+                                                  const next = [...curr.exercises];
+                                                  next[exIdx] = {
+                                                    ...next[exIdx],
+                                                    secondaryWeightKg: val,
+                                                  };
+                                                  return { ...curr, exercises: next };
+                                                });
+                                              }}
+                                              className="w-12 px-1.5 py-1 text-xs font-mono font-bold tabular-nums text-center rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder:text-slate-400/70 focus:ring-2 focus:ring-orange-500 focus:outline-none"
+                                            />
+                                            <span className="text-[11px] font-mono text-slate-400 pr-1">
                                               kg
                                             </span>
                                           </div>
+                                        ) : (
+                                          ex.loadType !== 'bodyweight' &&
+                                          ex.loadType !== 'none' && (
+                                            <div className="relative flex items-center">
+                                              {ex.loadType === 'double_kg' && (
+                                                <span className="text-[11px] font-mono font-bold text-orange-500 mr-1">
+                                                  2×
+                                                </span>
+                                              )}
+                                              <input
+                                                type="number"
+                                                step="0.5"
+                                                min={0}
+                                                title="Base exercise weight (kg)"
+                                                value={ex.weight || ''}
+                                                placeholder={String(ghostEx?.weight ?? 16)}
+                                                onChange={(e) => {
+                                                  const val = parseFloat(e.target.value) || 0;
+                                                  updateDraftWorkout(draft.logUuid, (curr) => {
+                                                    const next = [...curr.exercises];
+                                                    next[exIdx] = { ...next[exIdx], weight: val };
+                                                    return { ...curr, exercises: next };
+                                                  });
+                                                }}
+                                                className="w-14 px-1.5 py-1 text-xs font-mono font-bold tabular-nums text-center rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder:text-slate-400/70 focus:ring-2 focus:ring-orange-500 focus:outline-none"
+                                              />
+                                              <span className="text-[11px] font-mono text-slate-400 ml-1 pr-1">
+                                                kg
+                                              </span>
+                                            </div>
+                                          )
                                         )}
                                       </div>
 

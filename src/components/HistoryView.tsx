@@ -140,7 +140,8 @@ export const HistoryView: React.FC = () => {
               const effW = getEffectiveImplementWeightKg(
                 ex.loadType,
                 ex.weight,
-                s.weightOverride
+                s.weightOverride,
+                ex.secondaryWeightKg
               );
               if (effW > maxSingleWeightKg) maxSingleWeightKg = effW;
             }
@@ -540,7 +541,7 @@ export const HistoryView: React.FC = () => {
                                 {ex.exerciseName}
                               </span>
                               <span className="font-mono text-[11px] px-1.5 py-0.2 rounded bg-slate-200/70 dark:bg-slate-700 text-slate-700 dark:text-slate-300 tabular-nums">
-                                {formatLoadBadge(ex.loadType, ex.weight, ex.ruckLoadKg)}
+                                {formatLoadBadge(ex.loadType, ex.weight, ex.ruckLoadKg, ex.secondaryWeightKg)}
                               </span>
                             </div>
 

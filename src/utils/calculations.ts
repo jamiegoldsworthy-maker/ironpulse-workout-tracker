@@ -158,19 +158,27 @@ export function calculateSetLoadKg(
   loadType: LoadType,
   baseWeight: number,
   reps: number,
-  weightOverride?: number
+  weightOverride?: number,
+  secondaryWeightKg = 0
 ): number {
   const cleanReps = Math.max(0, Number(reps) || 0);
-  const effectiveWeight =
-    weightOverride !== undefined && weightOverride !== null && !Number.isNaN(Number(weightOverride))
-      ? Math.max(0, Number(weightOverride))
-      : Math.max(0, Number(baseWeight) || 0);
+  const hasOverride =
+    weightOverride !== undefined && weightOverride !== null && !Number.isNaN(Number(weightOverride));
+  const effectiveWeight = hasOverride
+    ? Math.max(0, Number(weightOverride))
+    : Math.max(0, Number(baseWeight) || 0);
 
   if (cleanReps === 0) return 0;
 
   switch (loadType) {
     case 'double_kg':
       return 2 * effectiveWeight * cleanReps;
+    case 'offset_kg': {
+      const combined = hasOverride
+        ? effectiveWeight
+        : effectiveWeight + Math.max(0, Number(secondaryWeightKg) || 0);
+      return combined * cleanReps;
+    }
     case 'single_kg':
     case 'bw_plus_kg':
     case 'ruck_kg':
@@ -188,13 +196,18 @@ export function calculateSetLoadKg(
 export function getEffectiveImplementWeightKg(
   loadType: LoadType,
   baseWeight: number,
-  weightOverride?: number
+  weightOverride?: number,
+  secondaryWeightKg = 0
 ): number {
-  const w =
-    weightOverride !== undefined && weightOverride !== null && !Number.isNaN(Number(weightOverride))
-      ? Math.max(0, Number(weightOverride))
-      : Math.max(0, Number(baseWeight) || 0);
+  const hasOverride =
+    weightOverride !== undefined && weightOverride !== null && !Number.isNaN(Number(weightOverride));
+  const w = hasOverride
+    ? Math.max(0, Number(weightOverride))
+    : Math.max(0, Number(baseWeight) || 0);
   if (loadType === 'double_kg') return 2 * w;
+  if (loadType === 'offset_kg') {
+    return hasOverride ? w : w + Math.max(0, Number(secondaryWeightKg) || 0);
+  }
   if (loadType === 'single_kg' || loadType === 'bw_plus_kg' || loadType === 'ruck_kg') return w;
   return 0;
 }
@@ -207,7 +220,8 @@ export function calculateExerciseTotals(
   baseWeight: number,
   sets: SetEntry[],
   isPerSide = false,
-  metricType: ExerciseMetricType = 'reps'
+  metricType: ExerciseMetricType = 'reps',
+  secondaryWeightKg = 0
 ): {
   totalSets: number;
   totalReps: number;
@@ -228,10 +242,21 @@ export function calculateExerciseTotals(
     totalReps += effectiveReps;
 
     if (isRepMetric) {
-      const setLoad = calculateSetLoadKg(loadType, baseWeight, effectiveReps, s.weightOverride);
+      const setLoad = calculateSetLoadKg(
+        loadType,
+        baseWeight,
+        effectiveReps,
+        s.weightOverride,
+        secondaryWeightKg
+      );
       totalLoadKg += setLoad;
 
-      const effectiveKg = getEffectiveImplementWeightKg(loadType, baseWeight, s.weightOverride);
+      const effectiveKg = getEffectiveImplementWeightKg(
+        loadType,
+        baseWeight,
+        s.weightOverride,
+        secondaryWeightKg
+      );
       if (effectiveKg > 0 && reps > 0) {
         // Epley formula: weight * (1 + reps / 30)
         const epley = effectiveKg * (1 + Math.min(reps, 30) / 30);
@@ -290,7 +315,8 @@ export function recalculateLoggedExercise(ex: LoggedExercise): LoggedExercise {
       ex.weight,
       ex.sets || [],
       Boolean(ex.isPerSide),
-      ex.metricType || 'reps'
+      ex.metricType || 'reps',
+      ex.secondaryWeightKg || 0
     );
     const rounds = Number(ex.roundsCompleted) || totals.totalSets || 0;
     const workSec = Number(ex.workSecPerRound) || 0;
@@ -313,7 +339,8 @@ export function recalculateLoggedExercise(ex: LoggedExercise): LoggedExercise {
     ex.weight,
     ex.sets || [],
     Boolean(ex.isPerSide),
-    ex.metricType || 'reps'
+    ex.metricType || 'reps',
+    ex.secondaryWeightKg || 0
   );
   return {
     ...ex,
@@ -335,23 +362,37 @@ export function formatExerciseMetricSummary(ex: {
   totalLoadKg: number;
   loadType: LoadType;
   weight: number;
+  secondaryWeightKg?: number;
 }): string {
   const metric = ex.metricType || 'reps';
   if (metric === 'distance') {
-    const effKg = getEffectiveImplementWeightKg(ex.loadType, ex.weight);
+    if (ex.loadType === 'offset_kg') {
+      return `${ex.totalReps}m @ ${ex.weight}+${ex.secondaryWeightKg ?? 0}kg`;
+    }
+    const effKg = getEffectiveImplementWeightKg(ex.loadType, ex.weight, undefined, ex.secondaryWeightKg);
     return effKg > 0 ? `${ex.totalReps}m @ ${effKg}kg` : `${ex.totalReps}m`;
   }
   if (metric === 'time') {
-    const effKg = getEffectiveImplementWeightKg(ex.loadType, ex.weight);
+    if (ex.loadType === 'offset_kg') {
+      return `${ex.totalReps}s @ ${ex.weight}+${ex.secondaryWeightKg ?? 0}kg`;
+    }
+    const effKg = getEffectiveImplementWeightKg(ex.loadType, ex.weight, undefined, ex.secondaryWeightKg);
     return effKg > 0 ? `${ex.totalReps}s @ ${effKg}kg` : `${ex.totalReps}s`;
   }
   return `${ex.totalLoadKg.toLocaleString()} kg`;
 }
 
-export function formatLoadBadge(loadType: LoadType, weight: number, ruckLoadKg?: number): string {
+export function formatLoadBadge(
+  loadType: LoadType,
+  weight: number,
+  ruckLoadKg?: number,
+  secondaryWeightKg?: number
+): string {
   switch (loadType) {
     case 'double_kg':
       return `2x ${weight}kg`;
+    case 'offset_kg':
+      return `${weight}+${secondaryWeightKg ?? 0} kg`;
     case 'single_kg':
       return `${weight}kg`;
     case 'bw_plus_kg':

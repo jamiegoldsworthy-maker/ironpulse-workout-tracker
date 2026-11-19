@@ -17,6 +17,7 @@ export type TrackingType = 'strength' | 'circuit' | 'cardio';
 export type LoadType =
   | 'single_kg'
   | 'double_kg'
+  | 'offset_kg'
   | 'bodyweight'
   | 'bw_plus_kg'
   | 'ruck_kg'
@@ -78,6 +79,7 @@ export interface PresetExercise {
   loadType: LoadType;
   metricType?: ExerciseMetricType;
   defaultWeight: number;
+  secondaryWeightKg?: number;
   defaultSets: number;
   defaultReps: string;
   repScheme?: RepSchemeConfig;
@@ -168,6 +170,7 @@ export interface LoggedExercise {
   loadType: LoadType;
   metricType?: ExerciseMetricType;
   weight: number; // Base weight in kg
+  secondaryWeightKg?: number; // Second bell/implement weight for offset_kg
   side?: ExerciseSide;
   isPerSide?: boolean;
   groupId?: string;

@@ -247,6 +247,8 @@ function buildLoggedExerciseFromPreset(
     loadType: pe.loadType,
     metricType: pe.metricType || inferDefaultMetricType(pe.exerciseName),
     weight: Number(pe.defaultWeight) || 0,
+    secondaryWeightKg:
+      pe.secondaryWeightKg !== undefined ? Number(pe.secondaryWeightKg) || 0 : undefined,
     side: pe.side,
     isPerSide: pe.isPerSide,
     groupId: pe.groupId,
@@ -1121,6 +1123,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
               loadType: lex.loadType,
               metricType: lex.metricType,
               defaultWeight: lex.weight,
+              secondaryWeightKg: lex.secondaryWeightKg,
               defaultSets: Math.max(1, lex.sets.length || lex.roundsCompleted || 1),
               defaultReps:
                 lex.sets.length > 0 && lex.sets[0].reps > 0 ? String(lex.sets[0].reps) : '10',

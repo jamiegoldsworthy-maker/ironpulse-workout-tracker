@@ -133,7 +133,7 @@ export const ExerciseHistoryModal: React.FC<ExerciseHistoryModalProps> = ({
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div className="flex items-center gap-2">
                           <span className="text-xs font-bold px-2.5 py-1 rounded-lg bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 font-mono tabular-nums">
-                            {formatLoadBadge(ex.loadType, ex.weight, ex.ruckLoadKg)}
+                            {formatLoadBadge(ex.loadType, ex.weight, ex.ruckLoadKg, ex.secondaryWeightKg)}
                           </span>
                           {ex.trackingType === 'circuit' && ex.roundsCompleted ? (
                             <span className="text-xs font-semibold text-orange-600 dark:text-orange-400 inline-flex items-center gap-1">

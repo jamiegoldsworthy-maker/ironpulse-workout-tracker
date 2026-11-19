@@ -419,7 +419,7 @@ export const LibraryView: React.FC = () => {
                             ? `${ex.cardioMode || 'Cardio'} (${ex.defaultDistanceUnit || 'mi'})`
                             : `${ex.defaultSets} × ${ex.defaultReps}${
                                 ex.isPerSide ? '/side' : ''
-                              } @ ${formatLoadBadge(ex.loadType, ex.defaultWeight)}`}
+                              } @ ${formatLoadBadge(ex.loadType, ex.defaultWeight, undefined, ex.secondaryWeightKg)}`}
                         </span>
                       </div>
                     ))}
@@ -1614,6 +1614,7 @@ export const LibraryView: React.FC = () => {
                               >
                                 <option value="single_kg">1x Single (kg)</option>
                                 <option value="double_kg">2x Double (kg)</option>
+                                <option value="offset_kg">Offset / Uneven (kg)</option>
                                 <option value="bw_plus_kg">BW + Weight (kg)</option>
                                 <option value="bodyweight">Bodyweight (BW)</option>
                                 <option value="none">No Load</option>
@@ -1642,26 +1643,71 @@ export const LibraryView: React.FC = () => {
                               </select>
                             </div>
 
-                            <div>
-                              <label className="block text-[10px] font-semibold text-slate-400 mb-0.5">
-                                Weight (kg)
-                              </label>
-                              <input
-                                type="number"
-                                step="0.5"
-                                disabled={pe.loadType === 'bodyweight' || pe.loadType === 'none'}
-                                value={pe.defaultWeight}
-                                onChange={(e) => {
-                                  const next = [...editingPreset.exercises];
-                                  next[idx] = {
-                                    ...pe,
-                                    defaultWeight: parseFloat(e.target.value) || 0,
-                                  };
-                                  setEditingPreset({ ...editingPreset, exercises: next });
-                                }}
-                                className="w-full px-2 py-1.5 text-xs font-mono font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 disabled:opacity-40"
-                              />
-                            </div>
+                            {pe.loadType === 'offset_kg' ? (
+                              <div className="col-span-2 sm:col-span-1 grid grid-cols-2 gap-1.5">
+                                <div>
+                                  <label className="block text-[10px] font-semibold text-slate-400 mb-0.5">
+                                    Weight A (kg)
+                                  </label>
+                                  <input
+                                    type="number"
+                                    step="0.5"
+                                    min={0}
+                                    value={pe.defaultWeight}
+                                    onChange={(e) => {
+                                      const next = [...editingPreset.exercises];
+                                      next[idx] = {
+                                        ...pe,
+                                        defaultWeight: parseFloat(e.target.value) || 0,
+                                      };
+                                      setEditingPreset({ ...editingPreset, exercises: next });
+                                    }}
+                                    className="w-full px-1.5 py-1.5 text-xs font-mono font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-center"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="block text-[10px] font-semibold text-slate-400 mb-0.5">
+                                    Weight B (kg)
+                                  </label>
+                                  <input
+                                    type="number"
+                                    step="0.5"
+                                    min={0}
+                                    value={pe.secondaryWeightKg ?? 0}
+                                    onChange={(e) => {
+                                      const next = [...editingPreset.exercises];
+                                      next[idx] = {
+                                        ...pe,
+                                        secondaryWeightKg: parseFloat(e.target.value) || 0,
+                                      };
+                                      setEditingPreset({ ...editingPreset, exercises: next });
+                                    }}
+                                    className="w-full px-1.5 py-1.5 text-xs font-mono font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-center"
+                                  />
+                                </div>
+                              </div>
+                            ) : (
+                              <div>
+                                <label className="block text-[10px] font-semibold text-slate-400 mb-0.5">
+                                  Weight (kg)
+                                </label>
+                                <input
+                                  type="number"
+                                  step="0.5"
+                                  disabled={pe.loadType === 'bodyweight' || pe.loadType === 'none'}
+                                  value={pe.defaultWeight}
+                                  onChange={(e) => {
+                                    const next = [...editingPreset.exercises];
+                                    next[idx] = {
+                                      ...pe,
+                                      defaultWeight: parseFloat(e.target.value) || 0,
+                                    };
+                                    setEditingPreset({ ...editingPreset, exercises: next });
+                                  }}
+                                  className="w-full px-2 py-1.5 text-xs font-mono font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 disabled:opacity-40"
+                                />
+                              </div>
+                            )}
 
                             {isSequenceMode ? (
                               <div>
