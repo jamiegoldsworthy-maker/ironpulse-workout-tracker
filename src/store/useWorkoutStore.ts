@@ -109,6 +109,8 @@ interface WorkoutStoreState {
   clearSyncError: () => void;
   setTheme: (theme: ThemeMode) => void;
   setDefaultAutoStartRestTimer: (enabled: boolean) => void;
+  setKeepScreenAwake: (enabled: boolean) => void;
+  setTimerSoundEnabled: (enabled: boolean) => void;
   setDefaultDistanceUnit: (unit: DistanceUnit) => void;
   setActiveProgram: (programUuid?: string) => void;
 
@@ -626,6 +628,36 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         if (get().authUser) {
           upsertFirestoreDoc('wt_meta', get().authUser!.uid, nextMeta, get().authUser!.uid).catch((err) => {
             console.error('[Sync] Failed to save timer pref to Firestore:', err);
+            set({ syncStatus: 'error', lastSyncError: err?.message || 'Failed to sync preferences' });
+          });
+        }
+      },
+
+      setKeepScreenAwake: (enabled) => {
+        const nextMeta = {
+          ...get().meta,
+          keepScreenAwake: enabled,
+          updatedAt: new Date().toISOString(),
+        };
+        set({ meta: nextMeta });
+        if (get().authUser) {
+          upsertFirestoreDoc('wt_meta', get().authUser!.uid, nextMeta, get().authUser!.uid).catch((err) => {
+            console.error('[Sync] Failed to save wake lock pref to Firestore:', err);
+            set({ syncStatus: 'error', lastSyncError: err?.message || 'Failed to sync preferences' });
+          });
+        }
+      },
+
+      setTimerSoundEnabled: (enabled) => {
+        const nextMeta = {
+          ...get().meta,
+          timerSoundEnabled: enabled,
+          updatedAt: new Date().toISOString(),
+        };
+        set({ meta: nextMeta });
+        if (get().authUser) {
+          upsertFirestoreDoc('wt_meta', get().authUser!.uid, nextMeta, get().authUser!.uid).catch((err) => {
+            console.error('[Sync] Failed to save timer sound pref to Firestore:', err);
             set({ syncStatus: 'error', lastSyncError: err?.message || 'Failed to sync preferences' });
           });
         }

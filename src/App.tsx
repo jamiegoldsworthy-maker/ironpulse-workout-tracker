@@ -38,6 +38,36 @@ export const App: React.FC = () => {
   }, [meta.theme]);
 
   useEffect(() => {
+    if (activeTab !== 'log' || meta.keepScreenAwake === false) return;
+    if (typeof navigator === 'undefined' || !('wakeLock' in navigator)) return;
+
+    let wakeLock: any = null;
+    const requestWake = async () => {
+      try {
+        if (document.visibilityState === 'visible') {
+          wakeLock = await (navigator as any).wakeLock.request('screen');
+        }
+      } catch {
+        // Ignore wake lock permission/battery-saver restrictions
+      }
+    };
+    requestWake();
+
+    const onVisChange = () => {
+      if (document.visibilityState === 'visible') {
+        requestWake();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisChange);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisChange);
+      if (wakeLock) {
+        wakeLock.release().catch(() => {});
+      }
+    };
+  }, [activeTab, meta.keepScreenAwake]);
+
+  useEffect(() => {
     initFirebaseServices();
     const unsubscribe = subscribeToAuthChanges((user) => {
       if (user) {

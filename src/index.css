@@ -83,6 +83,7 @@
 }
 
 [data-theme='dark'] .dark\:bg-slate-900,
+[data-theme='dark'] .dark\:bg-slate-900\/50,
 [data-theme='dark'] .dark\:bg-slate-900\/90,
 [data-theme='dark'] .dark\:bg-slate-900\/95 {
   background-color: var(--bg-card) !important;
@@ -152,6 +153,7 @@
 }
 
 [data-theme='light'] .bg-slate-100,
+[data-theme='light'] .bg-slate-100\/70,
 [data-theme='light'] .bg-slate-100\/80,
 [data-theme='light'] .bg-slate-200,
 [data-theme='light'] .bg-slate-200\/60,
@@ -160,6 +162,7 @@
   background-color: var(--bg-input) !important;
 }
 
+[data-theme='light'] .border-slate-300,
 [data-theme='light'] .border-slate-200,
 [data-theme='light'] .border-slate-200\/60,
 [data-theme='light'] .border-slate-200\/70,

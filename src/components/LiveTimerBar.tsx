@@ -19,41 +19,49 @@ function playTimerBeep(type: 'countdown' | 'work' | 'rest' | 'finish') {
     const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
     if (!AudioCtx) return;
     const ctx = new AudioCtx();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.connect(gain);
-    gain.connect(ctx.destination);
+    const compressor = ctx.createDynamicsCompressor();
+    compressor.threshold.setValueAtTime(-12, ctx.currentTime);
+    compressor.knee.setValueAtTime(12, ctx.currentTime);
+    compressor.ratio.setValueAtTime(8, ctx.currentTime);
+    compressor.attack.setValueAtTime(0.002, ctx.currentTime);
+    compressor.release.setValueAtTime(0.15, ctx.currentTime);
+    compressor.connect(ctx.destination);
+
+    const playTone = (
+      freq: number,
+      startTime: number,
+      duration: number,
+      peakGain: number,
+      wave: OscillatorType = 'triangle'
+    ) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = wave;
+      osc.frequency.setValueAtTime(freq, startTime);
+      gain.gain.setValueAtTime(0.001, startTime);
+      gain.gain.exponentialRampToValueAtTime(peakGain, startTime + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
+      osc.connect(gain);
+      gain.connect(compressor);
+      osc.start(startTime);
+      osc.stop(startTime + duration);
+    };
 
     const now = ctx.currentTime;
     if (type === 'countdown') {
-      osc.frequency.setValueAtTime(520, now);
-      gain.gain.setValueAtTime(0.12, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
-      osc.start(now);
-      osc.stop(now + 0.12);
+      playTone(880, now, 0.14, 0.55, 'triangle');
     } else if (type === 'work') {
-      osc.frequency.setValueAtTime(880, now);
-      gain.gain.setValueAtTime(0.25, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
-      osc.start(now);
-      osc.stop(now + 0.35);
+      playTone(1046.5, now, 0.28, 0.65, 'square');
     } else if (type === 'rest') {
-      osc.frequency.setValueAtTime(440, now);
-      gain.gain.setValueAtTime(0.2, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
-      osc.start(now);
-      osc.stop(now + 0.3);
+      playTone(659.25, now, 0.25, 0.5, 'triangle');
     } else {
-      osc.frequency.setValueAtTime(660, now);
-      osc.frequency.setValueAtTime(990, now + 0.15);
-      gain.gain.setValueAtTime(0.28, now);
-      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
-      osc.start(now);
-      osc.stop(now + 0.5);
+      // Loud 1320 Hz double-chime on 0
+      playTone(1320, now, 0.18, 0.8, 'triangle');
+      playTone(1320, now + 0.2, 0.35, 0.85, 'triangle');
     }
 
     if (typeof navigator !== 'undefined' && navigator.vibrate) {
-      navigator.vibrate(type === 'finish' ? [180, 80, 220] : type === 'countdown' ? 40 : 120);
+      navigator.vibrate(type === 'finish' ? [180, 80, 220] : type === 'countdown' ? 50 : 120);
     }
   } catch {
     // Ignore audio context restrictions if not interacted yet
@@ -73,9 +81,10 @@ export const LiveTimerBar: React.FC = () => {
     setTimerExpanded,
     tickTimer,
     setDefaultAutoStartRestTimer,
+    setTimerSoundEnabled,
   } = useWorkoutStore();
 
-  const [soundEnabled, setSoundEnabled] = useState(true);
+  const soundEnabled = meta.timerSoundEnabled !== false;
   const [customRestInput, setCustomRestInput] = useState('75');
   const [circuitRoundsInput, setCircuitRoundsInput] = useState(String(timer.totalRounds ?? 15));
   const [circuitWorkInput, setCircuitWorkInput] = useState(String(timer.workSec ?? 60));
@@ -158,13 +167,18 @@ export const LiveTimerBar: React.FC = () => {
     <div className={`${containerPositionClass} max-w-full overflow-x-hidden`}>
       <div className="max-w-3xl w-full mx-auto pointer-events-auto">
         <div
-          className={`rounded-2xl shadow-lg border transition-all duration-200 overflow-hidden backdrop-blur-md ${
-            timer.isRunning
+          style={{
+            backgroundColor: timer.isRunning
               ? isWorkPhase
-                ? 'bg-orange-600/95 text-white border-orange-400/70 shadow-orange-500/20'
-                : 'bg-slate-900/95 text-white border-slate-700/80 shadow-slate-950/30'
-              : 'bg-white/95 dark:bg-slate-900/95 text-slate-900 dark:text-slate-100 border-slate-200/70 dark:border-slate-800/80 shadow-slate-950/10'
-          }`}
+                ? 'var(--accent-rust)'
+                : 'var(--bg-card)'
+              : 'var(--bg-card)',
+            borderColor: timer.isRunning
+              ? 'var(--accent-orange)'
+              : 'var(--border-card)',
+            color: timer.isRunning && isWorkPhase ? '#F7F3EE' : 'var(--text-primary)',
+          }}
+          className="rounded-2xl shadow-lg border transition-all duration-200 overflow-hidden backdrop-blur-md"
         >
           {/* Progress Strip */}
           <div className="h-1 w-full bg-black/10 dark:bg-white/10">
@@ -214,7 +228,7 @@ export const LiveTimerBar: React.FC = () => {
                           ? timer.isRunning
                             ? 'bg-white text-orange-600'
                             : 'bg-orange-500/15 text-orange-600 dark:text-orange-400'
-                          : 'bg-slate-700 text-slate-200'
+                          : 'bg-[var(--bg-inset)] text-[var(--text-secondary)]'
                       }`}
                     >
                       {timer.phase === 'work' ? 'WORK' : 'REST'}
@@ -377,10 +391,10 @@ export const LiveTimerBar: React.FC = () => {
 
                   <button
                     type="button"
-                    onClick={() => setSoundEnabled(!soundEnabled)}
+                    onClick={() => setTimerSoundEnabled(!soundEnabled)}
                     data-tooltip={soundEnabled ? 'Mute timer beeps' : 'Unmute timer beeps'}
                     title="Toggle audio & vibration alerts"
-                    className="p-1.5 rounded-lg bg-slate-200/70 dark:bg-slate-800 text-slate-700 dark:text-slate-300"
+                    className="p-1.5 rounded-lg bg-[var(--bg-inset)] text-[var(--text-secondary)] border border-[var(--border-subtle)]"
                   >
                     {soundEnabled ? (
                       <Volume2 className="w-4 h-4 text-orange-500" />
@@ -391,7 +405,8 @@ export const LiveTimerBar: React.FC = () => {
                 </div>
               </div>
 
-              {/* Rest Presets */}
+              {/* Rest Presets (only shown in Rest Timer mode) */}
+              {timer.mode === 'rest' && (
               <div className="space-y-1.5">
                 <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
                   Quick Rest Presets
@@ -432,16 +447,18 @@ export const LiveTimerBar: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => startRestTimer(parseOrZero(customRestInput))}
-                      className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-slate-900 dark:bg-slate-700 text-white hover:bg-orange-500 transition-colors"
+                      className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-[var(--bg-inset)] border border-[var(--border-card)] text-[var(--text-primary)] hover:bg-orange-500 hover:text-white transition-colors"
                     >
                       Set Sec
                     </button>
                   </div>
                 </div>
               </div>
+              )}
 
-              {/* Circuit / EMOM Builder */}
-              <div className="pt-2 border-t border-slate-200/70 dark:border-slate-800 space-y-2">
+              {/* Circuit / EMOM Builder (only shown in Circuit / EMOM mode) */}
+              {timer.mode === 'circuit' && (
+              <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
                     Circuit / EMOM Intervals (0s Work = Rep-Based, 0s Rest = EMOM)
@@ -538,6 +555,7 @@ export const LiveTimerBar: React.FC = () => {
                   </button>
                 </div>
               </div>
+              )}
             </div>
           )}
         </div>

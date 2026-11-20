@@ -52,12 +52,16 @@ export const SettingsView: React.FC = () => {
     exercises: globalExercises,
     logs,
     meta,
+    logDensityMode,
+    setLogDensityMode,
     authUser,
     syncStatus,
     lastSyncError,
     setTheme,
     setDefaultDistanceUnit,
     setDefaultAutoStartRestTimer,
+    setKeepScreenAwake,
+    setTimerSoundEnabled,
     upsertPreset,
     applyAiImportPayload,
     commitReconciledLegacyImport,
@@ -1037,6 +1041,61 @@ export const SettingsView: React.FC = () => {
                 ))}
               </div>
             </div>
+
+            {/* Default View Density */}
+            <div className="space-y-1.5">
+              <label className="block text-xs font-semibold text-slate-500">
+                Default Log View
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                {(['compact', 'detailed'] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    onClick={() => setLogDensityMode(mode)}
+                    className={`py-2 px-3 rounded-2xl text-xs font-bold capitalize border ${
+                      logDensityMode === mode
+                        ? 'bg-orange-500 text-white border-orange-500'
+                        : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700'
+                    }`}
+                  >
+                    {mode}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Keep Screen Awake Toggle */}
+            <label className="flex items-center justify-between p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 cursor-pointer">
+              <div>
+                <div className="text-xs font-bold">Keep Screen Awake</div>
+                <div className="text-[11px] text-slate-500">
+                  Prevent display sleep while logging workouts
+                </div>
+              </div>
+              <input
+                type="checkbox"
+                checked={meta.keepScreenAwake !== false}
+                onChange={(e) => setKeepScreenAwake(e.target.checked)}
+                className="rounded accent-orange-500 w-4 h-4"
+              />
+            </label>
+
+            {/* Timer Countdown Beeps Toggle */}
+            <label className="flex items-center justify-between p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 cursor-pointer">
+              <div>
+                <div className="text-xs font-bold">Timer Countdown Beeps</div>
+                <div className="text-[11px] text-slate-500">
+                  Play 3-2-1 countdown &amp; completion chimes
+                </div>
+              </div>
+              <input
+                type="checkbox"
+                checked={meta.timerSoundEnabled !== false}
+                onChange={(e) => setTimerSoundEnabled(e.target.checked)}
+                className="rounded accent-orange-500 w-4 h-4"
+              />
+            </label>
 
             {/* Auto-Start Rest Timer Toggle */}
             <label className="flex items-center justify-between p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 cursor-pointer">

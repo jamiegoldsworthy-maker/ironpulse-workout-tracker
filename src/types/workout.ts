@@ -243,6 +243,8 @@ export interface UserMeta {
   activeProgramUuid?: string;
   theme: ThemeMode;
   defaultAutoStartRestTimer: boolean;
+  keepScreenAwake?: boolean;
+  timerSoundEnabled?: boolean;
   defaultDistanceUnit: DistanceUnit;
   categories?: string[];
   updatedAt: string;

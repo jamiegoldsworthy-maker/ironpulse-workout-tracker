@@ -1006,6 +1006,8 @@ export const SEED_META: UserMeta = {
   activeProgramUuid: 'prog-hybrid-kb-ruck',
   theme: 'dark',
   defaultAutoStartRestTimer: true,
+  keepScreenAwake: true,
+  timerSoundEnabled: true,
   defaultDistanceUnit: 'mi',
   updatedAt: NOW_ISO,
 };
