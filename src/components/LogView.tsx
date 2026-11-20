@@ -106,6 +106,7 @@ export const LogView: React.FC = () => {
   const [editMenuOpen, setEditMenuOpen] = useState<boolean>(false);
   const [openExerciseMenuKey, setOpenExerciseMenuKey] = useState<string | null>(null);
   const [openCueKey, setOpenCueKey] = useState<string | null>(null);
+  const [visibleRirKeys, setVisibleRirKeys] = useState<Record<string, boolean>>({});
   const [editingCueKey, setEditingCueKey] = useState<string | null>(null);
   const [modifiedStructureLogUuids, setModifiedStructureLogUuids] = useState<
     Record<string, boolean>
@@ -424,20 +425,39 @@ export const LogView: React.FC = () => {
             </button>
 
             {isCompactRow && (
-              <button
-                type="button"
-                onClick={() => {
-                  setOpenExerciseMenuKey(null);
-                  setExpandedCompactExercises((prev) => ({
-                    ...prev,
-                    [exKey]: true,
-                  }));
-                }}
-                className="w-full px-2.5 py-2 rounded-xl text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-2 transition-colors"
-              >
-                <ChevronDown className="w-3.5 h-3.5 text-slate-500 shrink-0" />
-                Expand Details &amp; Sets
-              </button>
+              <>
+                {draft.exercises[exIdx]?.trackingType !== 'mobility' &&
+                  draft.exercises[exIdx]?.trackingType !== 'cardio' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setOpenExerciseMenuKey(null);
+                        setVisibleRirKeys((prev) => ({
+                          ...prev,
+                          [exKey]: !prev[exKey],
+                        }));
+                      }}
+                      className="w-full px-2.5 py-2 rounded-xl text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-2 transition-colors"
+                    >
+                      <SlidersHorizontal className="w-3.5 h-3.5 text-orange-500 shrink-0" />
+                      {visibleRirKeys[exKey] ? 'Hide RIR' : 'Show RIR'}
+                    </button>
+                  )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOpenExerciseMenuKey(null);
+                    setExpandedCompactExercises((prev) => ({
+                      ...prev,
+                      [exKey]: true,
+                    }));
+                  }}
+                  className="w-full px-2.5 py-2 rounded-xl text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-2 transition-colors"
+                >
+                  <ChevronDown className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                  Expand Details &amp; Sets
+                </button>
+              </>
             )}
 
             <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
@@ -1771,11 +1791,6 @@ export const LogView: React.FC = () => {
                                       )}
                                       <h3 className="font-display font-bold text-sm text-[var(--text-primary)] whitespace-normal break-words leading-snug flex-1 min-w-0">
                                         {ex.exerciseName}
-                                        {ex.isPerSide && (
-                                          <span className="ml-1 text-[10px] font-mono font-bold text-orange-500">
-                                            ×2
-                                          </span>
-                                        )}
                                       </h3>
                                     </div>
 
@@ -1826,11 +1841,11 @@ export const LogView: React.FC = () => {
 
                                       {/* Inline Weight Pill */}
                                       {ex.trackingType === 'mobility' ? null : ex.loadType === 'bodyweight' || ex.loadType === 'none' ? (
-                                        <span className="px-2 py-0.5 rounded-lg bg-[var(--bg-input)] border border-[var(--border-subtle)] text-[11px] font-mono font-semibold text-[var(--text-secondary)]">
+                                        <span className="h-10 px-3 inline-flex items-center rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] text-base font-mono font-bold text-[var(--text-secondary)]">
                                           {ex.loadType === 'bodyweight' ? 'BW' : '—'}
                                         </span>
                                       ) : ex.loadType === 'offset_kg' ? (
-                                        <div className="inline-flex items-center px-1.5 py-0.5 rounded-lg bg-[var(--bg-input)] border border-[var(--border-subtle)] text-[11px] font-mono font-bold">
+                                        <div className="h-10 px-3 inline-flex items-center gap-0.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] text-base font-mono font-bold">
                                           <input
                                             type="number"
                                             step="0.5"
@@ -1846,7 +1861,7 @@ export const LogView: React.FC = () => {
                                                 return { ...curr, exercises: next };
                                               });
                                             }}
-                                            className="w-8 bg-transparent text-center text-[var(--text-primary)] focus:outline-none tabular-nums"
+                                            className="w-10 bg-transparent text-center text-[var(--text-primary)] focus:outline-none tabular-nums"
                                           />
                                           <span className="text-orange-500">+</span>
                                           <input
@@ -1867,12 +1882,12 @@ export const LogView: React.FC = () => {
                                                 return { ...curr, exercises: next };
                                               });
                                             }}
-                                            className="w-8 bg-transparent text-center text-[var(--text-primary)] focus:outline-none tabular-nums"
+                                            className="w-10 bg-transparent text-center text-[var(--text-primary)] focus:outline-none tabular-nums"
                                           />
-                                          <span className="text-[var(--text-muted)] text-[10px]">kg</span>
+                                          <span className="text-[var(--text-muted)] text-xs">kg</span>
                                         </div>
                                       ) : (
-                                        <label className="inline-flex items-center px-1.5 py-0.5 rounded-lg bg-[var(--bg-input)] border border-[var(--border-subtle)] text-[11px] font-mono font-bold">
+                                        <label className="h-10 px-3 inline-flex items-center gap-0.5 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] text-base font-mono font-bold">
                                           {ex.loadType === 'double_kg' && (
                                             <span className="text-orange-500 mr-0.5">2×</span>
                                           )}
@@ -1891,9 +1906,9 @@ export const LogView: React.FC = () => {
                                                 return { ...curr, exercises: next };
                                               });
                                             }}
-                                            className="w-9 bg-transparent text-center text-[var(--text-primary)] focus:outline-none tabular-nums"
+                                            className="w-11 bg-transparent text-center text-[var(--text-primary)] focus:outline-none tabular-nums"
                                           />
-                                          <span className="text-[var(--text-muted)] text-[10px]">kg</span>
+                                          <span className="text-[var(--text-muted)] text-xs">kg</span>
                                         </label>
                                       )}
 
@@ -2126,40 +2141,44 @@ export const LogView: React.FC = () => {
                                     {(ex.metricType === 'distance' || ex.metricType === 'time') && (
                                       <span className="text-[10px] font-mono font-bold text-orange-600 dark:text-orange-400 px-1.5 py-0.5 rounded bg-orange-500/10">
                                         {ex.totalReps > 0
-                                          ? formatExerciseMetricSummary(ex)
+                                          ? ex.metricType === 'distance'
+                                            ? `${ex.totalReps}m total${ex.isPerSide ? ' (L+R)' : ''}`
+                                            : formatExerciseMetricSummary(ex)
                                           : ex.metricType === 'distance'
                                           ? 'm'
                                           : 's'}
                                       </span>
                                     )}
 
-                                    <label
-                                      title="Reps in Reserve"
-                                      className="ml-auto inline-flex items-center gap-1 h-8 px-2 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] text-xs font-mono font-bold text-[var(--text-secondary)]"
-                                    >
-                                      <span className="text-[10px]">RIR</span>
-                                      <input
-                                        type="number"
-                                        min={0}
-                                        max={10}
-                                        value={ex.rir ?? ''}
-                                        placeholder={
-                                          ghostEx?.rir !== undefined ? String(ghostEx.rir) : '2'
-                                        }
-                                        onChange={(e) => {
-                                          const val =
-                                            e.target.value === ''
-                                              ? undefined
-                                              : Math.max(0, parseInt(e.target.value, 10) || 0);
-                                          updateDraftWorkout(draft.logUuid, (curr) => {
-                                            const next = [...curr.exercises];
-                                            next[exIdx] = { ...next[exIdx], rir: val };
-                                            return { ...curr, exercises: next };
-                                          });
-                                        }}
-                                        className="w-6 bg-transparent text-center text-[var(--text-primary)] focus:outline-none tabular-nums"
-                                      />
-                                    </label>
+                                    {visibleRirKeys[exKey] && (
+                                      <label
+                                        title="Reps in Reserve"
+                                        className="ml-auto inline-flex items-center gap-1 h-8 px-2 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] text-xs font-mono font-bold text-[var(--text-secondary)]"
+                                      >
+                                        <span className="text-[10px]">RIR</span>
+                                        <input
+                                          type="number"
+                                          min={0}
+                                          max={10}
+                                          value={ex.rir ?? ''}
+                                          placeholder={
+                                            ghostEx?.rir !== undefined ? String(ghostEx.rir) : '2'
+                                          }
+                                          onChange={(e) => {
+                                            const val =
+                                              e.target.value === ''
+                                                ? undefined
+                                                : Math.max(0, parseInt(e.target.value, 10) || 0);
+                                            updateDraftWorkout(draft.logUuid, (curr) => {
+                                              const next = [...curr.exercises];
+                                              next[exIdx] = { ...next[exIdx], rir: val };
+                                              return { ...curr, exercises: next };
+                                            });
+                                          }}
+                                          className="w-6 bg-transparent text-center text-[var(--text-primary)] focus:outline-none tabular-nums"
+                                        />
+                                      </label>
+                                    )}
                                   </div>
                                 )}
                               </div>

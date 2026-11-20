@@ -102,6 +102,15 @@ export const LibraryView: React.FC = () => {
 
   useEffect(() => {
     if (!editingPreset) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [Boolean(editingPreset)]);
+
+  useEffect(() => {
+    if (!editingPreset) return;
     // Always start with Programs, Tags, Timer & Notes collapsed into summary pills
     setActiveMetaPanel(null);
     setCategoryManagerOpen(false);
@@ -123,6 +132,37 @@ export const LibraryView: React.FC = () => {
     if (returnTab && returnTab !== 'library') {
       setActiveTab(returnTab);
     }
+  };
+
+  const addExerciseToPreset = () => {
+    if (!editingPreset) return;
+    const isMobCategory = /^(mobility|yoga)$/i.test((editingPreset.workoutType || '').trim());
+    const newEx: PresetExercise = isMobCategory
+      ? {
+          exerciseUuid: `ex-${uuidv4()}`,
+          exerciseName: '',
+          category: editingPreset.workoutType || 'Mobility',
+          trackingType: 'mobility',
+          loadType: 'none',
+          defaultWeight: 0,
+          defaultSets: 1,
+          defaultReps: '',
+          defaultDurationMin: 0,
+        }
+      : {
+          exerciseUuid: `ex-${uuidv4()}`,
+          exerciseName: 'New Exercise',
+          category: 'Strength',
+          trackingType: 'strength',
+          loadType: 'single_kg',
+          defaultWeight: 16,
+          defaultSets: 3,
+          defaultReps: '10',
+        };
+    setEditingPreset({
+      ...editingPreset,
+      exercises: [...editingPreset.exercises, newEx],
+    });
   };
 
   const allTags = useMemo(() => {
@@ -499,7 +539,7 @@ export const LibraryView: React.FC = () => {
               </button>
             </div>
 
-            <div className="p-5 overflow-y-auto space-y-4 flex-1">
+            <div className="p-4 sm:p-5 overflow-y-auto overflow-x-hidden overscroll-contain space-y-4 flex-1">
               {/* Row 1: Workout Name + Category (with +/Edit Manager) */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="sm:col-span-2">
@@ -1366,54 +1406,12 @@ export const LibraryView: React.FC = () => {
               })()}
 
               {/* Exercises List */}
-              <div className="space-y-3 pt-2 border-t border-slate-100 dark:border-slate-800">
-                {(() => {
-                  const isMobCategory = /^(mobility|yoga)$/i.test(
-                    (editingPreset.workoutType || '').trim()
-                  );
-                  const addExerciseToPreset = () => {
-                    const newEx: PresetExercise = isMobCategory
-                      ? {
-                          exerciseUuid: `ex-${uuidv4()}`,
-                          exerciseName: '',
-                          category: editingPreset.workoutType || 'Mobility',
-                          trackingType: 'mobility',
-                          loadType: 'none',
-                          defaultWeight: 0,
-                          defaultSets: 1,
-                          defaultReps: '',
-                          defaultDurationMin: 0,
-                        }
-                      : {
-                          exerciseUuid: `ex-${uuidv4()}`,
-                          exerciseName: 'New Exercise',
-                          category: 'Strength',
-                          trackingType: 'strength',
-                          loadType: 'single_kg',
-                          defaultWeight: 16,
-                          defaultSets: 3,
-                          defaultReps: '10',
-                        };
-                    setEditingPreset({
-                      ...editingPreset,
-                      exercises: [...editingPreset.exercises, newEx],
-                    });
-                  };
-
-                  return (
-                    <>
-                      <div className="sticky top-0 z-10 flex items-center justify-between py-2 -mx-1 px-1 bg-white/95 dark:bg-slate-900/95 backdrop-blur-sm border-b border-slate-100/80 dark:border-slate-800/80">
-                        <label className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                          Exercises ({editingPreset.exercises.length})
-                        </label>
-                        <button
-                          type="button"
-                          onClick={addExerciseToPreset}
-                          className="px-3 py-1.5 rounded-xl bg-orange-500/10 text-orange-600 dark:text-orange-400 text-xs font-bold hover:bg-orange-500 hover:text-white transition-colors"
-                        >
-                          + Add Exercise
-                        </button>
-                      </div>
+              <div className="space-y-3 pt-2 border-t border-slate-100 dark:border-slate-800 min-w-0">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                    Exercises ({editingPreset.exercises.length})
+                  </label>
+                </div>
 
                 {(() => {
                   const isSequenceMode =
@@ -1692,7 +1690,7 @@ export const LibraryView: React.FC = () => {
                             </div>
                           </div>
                         ) : pe.trackingType === 'cardio' ? (
-                          <div className="grid grid-cols-3 gap-2.5">
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 min-w-0">
                             <div>
                               <label className="block text-[10px] font-semibold text-slate-400 mb-0.5">
                                 Cardio Mode
@@ -2226,17 +2224,6 @@ export const LibraryView: React.FC = () => {
                   );
                 })()}
 
-                      <button
-                        type="button"
-                        onClick={addExerciseToPreset}
-                        className="w-full py-2.5 rounded-2xl border-2 border-dashed border-orange-500/35 bg-orange-500/[0.04] hover:bg-orange-500/10 hover:border-orange-500/60 text-orange-600 dark:text-orange-400 text-xs font-bold transition-colors"
-                      >
-                        + Add Exercise
-                      </button>
-                    </>
-                  );
-                })()}
-
                 <datalist id="global-exercises-datalist">
                   {globalExercises.map((ge) => (
                     <option key={ge.exerciseUuid} value={ge.exerciseName} />
@@ -2245,26 +2232,35 @@ export const LibraryView: React.FC = () => {
               </div>
             </div>
 
-            <div className="px-5 py-4 border-t border-slate-100 dark:border-slate-800 flex justify-end gap-2">
+            <div className="px-4 sm:px-5 py-3.5 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
               <button
                 type="button"
-                onClick={closePresetEditorModal}
-                className="px-4 py-2 rounded-xl text-xs font-semibold bg-slate-100 dark:bg-slate-800"
+                onClick={addExerciseToPreset}
+                className="px-3.5 py-2 rounded-xl bg-orange-500/12 hover:bg-orange-500 text-orange-600 dark:text-orange-400 hover:text-white text-xs font-bold transition-colors"
               >
-                Cancel
+                + Add Exercise
               </button>
-              <button
-                type="button"
-                onClick={() => {
-                  upsertPreset(editingPreset);
-                  const savedTitle = editingPreset.title;
-                  closePresetEditorModal();
-                  showToast(`Saved "${savedTitle}"!`);
-                }}
-                className="px-5 py-2 rounded-xl text-xs font-bold bg-orange-500 hover:bg-orange-600 text-white shadow-sm"
-              >
-                Save Workout
-              </button>
+              <div className="flex items-center gap-2 ml-auto">
+                <button
+                  type="button"
+                  onClick={closePresetEditorModal}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold bg-slate-100 dark:bg-slate-800"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    upsertPreset(editingPreset);
+                    const savedTitle = editingPreset.title;
+                    closePresetEditorModal();
+                    showToast(`Saved "${savedTitle}"!`);
+                  }}
+                  className="px-5 py-2 rounded-xl text-xs font-bold bg-orange-500 hover:bg-orange-600 text-white shadow-sm"
+                >
+                  Save Workout
+                </button>
+              </div>
             </div>
           </div>
         </div>
