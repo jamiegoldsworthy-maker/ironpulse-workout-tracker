@@ -1477,22 +1477,22 @@ export const LogView: React.FC = () => {
                         };
 
                         return (
-                          <div className="p-3.5 rounded-2xl bg-slate-900 dark:bg-slate-800/80 text-white border border-slate-700/80 space-y-2.5">
+                          <div className="p-3.5 rounded-2xl bg-[var(--bg-inset)] text-[var(--text-primary)] border border-[var(--border-card)] space-y-2.5">
                             {/* Top Ladder Info + Single vs Multi-Ladder Switch */}
                             {hasLadderExercises && (
-                              <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-700/70">
-                                <span className="text-[11px] font-mono font-bold text-orange-400">
+                              <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-[var(--border-subtle)]">
+                                <span className="text-[11px] font-mono font-bold text-orange-500">
                                   Ladder: {refSeq[0]} → {refSeq[refSeq.length - 1]} •{' '}
                                   {refRungCount} rungs ({refTotalReps} reps/ladder)
                                 </span>
-                                <div className="inline-flex rounded-lg bg-slate-800 dark:bg-slate-900 p-0.5 border border-slate-700">
+                                <div className="inline-flex rounded-lg bg-[var(--bg-card)] p-0.5 border border-[var(--border-card)]">
                                   <button
                                     type="button"
                                     onClick={() => syncComplexCompletedRounds(completedRounds)}
                                     className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition-colors ${
                                       !isMultiLadderMode
                                         ? 'bg-orange-500 text-white'
-                                        : 'text-slate-400 hover:text-white'
+                                        : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
                                     }`}
                                   >
                                     Single Ladder
@@ -1503,7 +1503,7 @@ export const LogView: React.FC = () => {
                                     className={`px-2 py-0.5 rounded-md text-[10px] font-bold transition-colors ${
                                       isMultiLadderMode
                                         ? 'bg-orange-500 text-white'
-                                        : 'text-slate-400 hover:text-white'
+                                        : 'text-[var(--text-muted)] hover:text-[var(--text-primary)]'
                                     }`}
                                   >
                                     Multi-Ladder (AMRAP)
@@ -1516,24 +1516,24 @@ export const LogView: React.FC = () => {
                               {/* Target Rounds Stepper (hidden in Multi-Ladder AMRAP) */}
                               {!isMultiLadderMode && (
                                 <div className="flex items-center gap-2">
-                                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                                  <span className="text-[11px] font-bold uppercase tracking-wider text-[var(--text-secondary)]">
                                     {hasLadderExercises ? 'Target Rungs' : 'Target Rounds'}
                                   </span>
-                                  <div className="inline-flex items-center rounded-xl bg-slate-800 dark:bg-slate-900 border border-slate-700 p-0.5">
+                                  <div className="inline-flex items-center rounded-xl bg-[var(--bg-card)] border border-[var(--border-card)] p-0.5">
                                     <button
                                       type="button"
                                       onClick={() => updateTargetRounds(targetRounds - 1)}
-                                      className="p-1.5 rounded-lg hover:bg-slate-700 text-slate-300"
+                                      className="p-1.5 rounded-lg hover:bg-[var(--bg-inset)] text-[var(--text-secondary)]"
                                     >
                                       <Minus className="w-3.5 h-3.5" />
                                     </button>
-                                    <span className="px-2.5 font-mono text-sm font-bold tabular-nums">
+                                    <span className="px-2.5 font-mono text-sm font-bold tabular-nums text-[var(--text-primary)]">
                                       {targetRounds}
                                     </span>
                                     <button
                                       type="button"
                                       onClick={() => updateTargetRounds(targetRounds + 1)}
-                                      className="p-1.5 rounded-lg hover:bg-slate-700 text-slate-300"
+                                      className="p-1.5 rounded-lg hover:bg-[var(--bg-inset)] text-[var(--text-secondary)]"
                                     >
                                       <Plus className="w-3.5 h-3.5" />
                                     </button>
@@ -1545,20 +1545,20 @@ export const LogView: React.FC = () => {
                               {hasLadderExercises && isMultiLadderMode ? (
                                 <div className="flex flex-wrap items-center gap-3 w-full justify-between">
                                   <div className="flex items-center gap-2">
-                                    <span className="text-[11px] font-bold uppercase tracking-wider text-orange-400">
+                                    <span className="text-[11px] font-bold uppercase tracking-wider text-orange-500">
                                       Ladders Completed
                                     </span>
-                                    <div className="inline-flex items-center rounded-xl bg-slate-800 dark:bg-slate-900 border border-orange-500/40 p-0.5">
+                                    <div className="inline-flex items-center rounded-xl bg-[var(--bg-card)] border border-orange-500/40 p-0.5">
                                       <button
                                         type="button"
                                         onClick={() =>
                                           syncMultiLadder(laddersCompleted - 1, extraRungs)
                                         }
-                                        className="p-1.5 rounded-lg hover:bg-slate-700 text-slate-300"
+                                        className="p-1.5 rounded-lg hover:bg-[var(--bg-inset)] text-[var(--text-secondary)]"
                                       >
                                         <Minus className="w-3.5 h-3.5" />
                                       </button>
-                                      <span className="px-3 font-mono text-sm font-extrabold tabular-nums text-orange-400">
+                                      <span className="px-3 font-mono text-sm font-extrabold tabular-nums text-orange-500">
                                         {laddersCompleted}
                                       </span>
                                       <button
@@ -1566,7 +1566,7 @@ export const LogView: React.FC = () => {
                                         onClick={() =>
                                           syncMultiLadder(laddersCompleted + 1, extraRungs)
                                         }
-                                        className="p-1.5 rounded-lg hover:bg-slate-700 text-slate-300"
+                                        className="p-1.5 rounded-lg hover:bg-[var(--bg-inset)] text-[var(--text-secondary)]"
                                       >
                                         <Plus className="w-3.5 h-3.5" />
                                       </button>
@@ -1574,20 +1574,20 @@ export const LogView: React.FC = () => {
                                   </div>
 
                                   <div className="flex items-center gap-2">
-                                    <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                                    <span className="text-[11px] font-bold uppercase tracking-wider text-[var(--text-secondary)]">
                                       + Extra Rungs
                                     </span>
-                                    <div className="inline-flex items-center rounded-xl bg-slate-800 dark:bg-slate-900 border border-slate-700 p-0.5">
+                                    <div className="inline-flex items-center rounded-xl bg-[var(--bg-card)] border border-[var(--border-card)] p-0.5">
                                       <button
                                         type="button"
                                         onClick={() =>
                                           syncMultiLadder(laddersCompleted, extraRungs - 1)
                                         }
-                                        className="p-1.5 rounded-lg hover:bg-slate-700 text-slate-300"
+                                        className="p-1.5 rounded-lg hover:bg-[var(--bg-inset)] text-[var(--text-secondary)]"
                                       >
                                         <Minus className="w-3.5 h-3.5" />
                                       </button>
-                                      <span className="px-2.5 font-mono text-sm font-bold tabular-nums">
+                                      <span className="px-2.5 font-mono text-sm font-bold tabular-nums text-[var(--text-primary)]">
                                         {extraRungs}
                                       </span>
                                       <button
@@ -1595,13 +1595,13 @@ export const LogView: React.FC = () => {
                                         onClick={() =>
                                           syncMultiLadder(laddersCompleted, extraRungs + 1)
                                         }
-                                        className="p-1.5 rounded-lg hover:bg-slate-700 text-slate-300"
+                                        className="p-1.5 rounded-lg hover:bg-[var(--bg-inset)] text-[var(--text-secondary)]"
                                       >
                                         <Plus className="w-3.5 h-3.5" />
                                       </button>
                                     </div>
                                     {extraRungs > 0 && (
-                                      <span className="text-[10px] font-mono text-orange-300">
+                                      <span className="text-[10px] font-mono text-orange-500">
                                         (+{refSeq.slice(0, extraRungs).join(', ')})
                                       </span>
                                     )}
@@ -1609,20 +1609,20 @@ export const LogView: React.FC = () => {
                                 </div>
                               ) : mode === 'emom_complex' || hasLadderExercises ? (
                                 <div className="flex flex-wrap items-center gap-2 ml-auto">
-                                  <span className="text-[11px] font-bold uppercase tracking-wider text-orange-400">
+                                  <span className="text-[11px] font-bold uppercase tracking-wider text-orange-500">
                                     {hasLadderExercises ? 'Rungs Completed' : 'Completed'}
                                   </span>
-                                  <div className="inline-flex items-center rounded-xl bg-slate-800 dark:bg-slate-900 border border-orange-500/40 p-0.5">
+                                  <div className="inline-flex items-center rounded-xl bg-[var(--bg-card)] border border-orange-500/40 p-0.5">
                                     <button
                                       type="button"
                                       onClick={() =>
                                         syncComplexCompletedRounds(completedRounds - 1)
                                       }
-                                      className="p-1.5 rounded-lg hover:bg-slate-700 text-slate-300"
+                                      className="p-1.5 rounded-lg hover:bg-[var(--bg-inset)] text-[var(--text-secondary)]"
                                     >
                                       <Minus className="w-3.5 h-3.5" />
                                     </button>
-                                    <span className="px-3 font-mono text-sm font-extrabold tabular-nums text-orange-400">
+                                    <span className="px-3 font-mono text-sm font-extrabold tabular-nums text-orange-500">
                                       {completedRounds} / {targetRounds}
                                     </span>
                                     <button
@@ -1630,7 +1630,7 @@ export const LogView: React.FC = () => {
                                       onClick={() =>
                                         syncComplexCompletedRounds(completedRounds + 1)
                                       }
-                                      className="p-1.5 rounded-lg hover:bg-slate-700 text-slate-300"
+                                      className="p-1.5 rounded-lg hover:bg-[var(--bg-inset)] text-[var(--text-secondary)]"
                                     >
                                       <Plus className="w-3.5 h-3.5" />
                                     </button>
@@ -1646,7 +1646,7 @@ export const LogView: React.FC = () => {
                                   </button>
                                 </div>
                               ) : (
-                                <div className="text-xs font-semibold text-orange-400 ml-auto flex items-center gap-1.5">
+                                <div className="text-xs font-semibold text-orange-500 ml-auto flex items-center gap-1.5">
                                   <Flame className="w-4 h-4" />
                                   AMRAP Circuit ({targetRounds} Rounds)
                                 </div>
@@ -2073,32 +2073,35 @@ export const LogView: React.FC = () => {
                                       </span>
                                     )}
 
-                                    <div className="flex items-center gap-1 ml-auto">
-                                      <span className="text-[10px] font-mono text-slate-400">
-                                        RIR
-                                      </span>
-                                      <input
-                                        type="number"
-                                        min={0}
-                                        max={10}
-                                        value={ex.rir ?? ''}
-                                        placeholder={
-                                          ghostEx?.rir !== undefined ? String(ghostEx.rir) : '2'
-                                        }
-                                        onChange={(e) => {
-                                          const val =
-                                            e.target.value === ''
-                                              ? undefined
-                                              : Math.max(0, parseInt(e.target.value, 10) || 0);
-                                          updateDraftWorkout(draft.logUuid, (curr) => {
-                                            const next = [...curr.exercises];
-                                            next[exIdx] = { ...next[exIdx], rir: val };
-                                            return { ...curr, exercises: next };
-                                          });
-                                        }}
-                                        className="w-9 h-8 rounded-lg text-center font-mono text-xs font-bold tabular-nums bg-amber-500/10 border border-amber-500/25 text-amber-800 dark:text-amber-300 focus:outline-none focus:ring-1 focus:ring-orange-500"
-                                      />
-                                    </div>
+                                    {visibleRirKeys[exKey] && (
+                                      <label
+                                        title="Reps in Reserve"
+                                        className="ml-auto inline-flex items-center gap-1 h-8 px-2 rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] text-xs font-mono font-bold text-[var(--text-secondary)]"
+                                      >
+                                        <span className="text-[10px]">RIR</span>
+                                        <input
+                                          type="number"
+                                          min={0}
+                                          max={10}
+                                          value={ex.rir ?? ''}
+                                          placeholder={
+                                            ghostEx?.rir !== undefined ? String(ghostEx.rir) : '2'
+                                          }
+                                          onChange={(e) => {
+                                            const val =
+                                              e.target.value === ''
+                                                ? undefined
+                                                : Math.max(0, parseInt(e.target.value, 10) || 0);
+                                            updateDraftWorkout(draft.logUuid, (curr) => {
+                                              const next = [...curr.exercises];
+                                              next[exIdx] = { ...next[exIdx], rir: val };
+                                              return { ...curr, exercises: next };
+                                            });
+                                          }}
+                                          className="w-6 bg-transparent text-center text-[var(--text-primary)] focus:outline-none tabular-nums"
+                                        />
+                                      </label>
+                                    )}
                                   </div>
                                 ) : (
                                   <div className="flex flex-wrap items-center gap-1.5">
