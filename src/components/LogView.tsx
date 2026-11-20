@@ -340,7 +340,8 @@ export const LogView: React.FC = () => {
     draft: DraftWorkoutCard,
     exIdx: number,
     exKey: string,
-    isCompactRow: boolean
+    isCompactRow: boolean,
+    ghostEx?: LoggedExercise
   ) => {
     const isOpen = openExerciseMenuKey === exKey;
     return (
@@ -398,6 +399,20 @@ export const LogView: React.FC = () => {
               Exercise History
             </button>
 
+            {ghostEx && (
+              <button
+                type="button"
+                onClick={() => {
+                  setOpenExerciseMenuKey(null);
+                  handleAcceptGhostForExercise(draft, exIdx, ghostEx);
+                }}
+                className="w-full px-2.5 py-2 rounded-xl text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-2 transition-colors"
+              >
+                <Check className="w-3.5 h-3.5 text-orange-500 shrink-0" />
+                Fill Last Session
+              </button>
+            )}
+
             <button
               type="button"
               disabled={exIdx === 0}
@@ -424,40 +439,62 @@ export const LogView: React.FC = () => {
               Move Down
             </button>
 
+            {draft.exercises[exIdx]?.trackingType !== 'mobility' &&
+              draft.exercises[exIdx]?.trackingType !== 'cardio' && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOpenExerciseMenuKey(null);
+                      setVisibleRirKeys((prev) => ({
+                        ...prev,
+                        [exKey]: !prev[exKey],
+                      }));
+                    }}
+                    className="w-full px-2.5 py-2 rounded-xl text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-2 transition-colors"
+                  >
+                    <SlidersHorizontal className="w-3.5 h-3.5 text-orange-500 shrink-0" />
+                    {visibleRirKeys[exKey] ? 'Hide RIR' : 'Show RIR'}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOpenExerciseMenuKey(null);
+                      updateDraftWorkout(draft.logUuid, (curr) => {
+                        const next = [...curr.exercises];
+                        next[exIdx] = {
+                          ...next[exIdx],
+                          isPerSide: !next[exIdx].isPerSide,
+                        };
+                        return { ...curr, exercises: next };
+                      });
+                    }}
+                    className="w-full px-2.5 py-2 rounded-xl text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-between gap-2 transition-colors"
+                  >
+                    <span>Per Side (×2 L+R)</span>
+                    {draft.exercises[exIdx]?.isPerSide && (
+                      <Check className="w-3.5 h-3.5 text-orange-500 shrink-0" />
+                    )}
+                  </button>
+                </>
+              )}
+
             {isCompactRow && (
-              <>
-                {draft.exercises[exIdx]?.trackingType !== 'mobility' &&
-                  draft.exercises[exIdx]?.trackingType !== 'cardio' && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setOpenExerciseMenuKey(null);
-                        setVisibleRirKeys((prev) => ({
-                          ...prev,
-                          [exKey]: !prev[exKey],
-                        }));
-                      }}
-                      className="w-full px-2.5 py-2 rounded-xl text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-2 transition-colors"
-                    >
-                      <SlidersHorizontal className="w-3.5 h-3.5 text-orange-500 shrink-0" />
-                      {visibleRirKeys[exKey] ? 'Hide RIR' : 'Show RIR'}
-                    </button>
-                  )}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setOpenExerciseMenuKey(null);
-                    setExpandedCompactExercises((prev) => ({
-                      ...prev,
-                      [exKey]: true,
-                    }));
-                  }}
-                  className="w-full px-2.5 py-2 rounded-xl text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-2 transition-colors"
-                >
-                  <ChevronDown className="w-3.5 h-3.5 text-slate-500 shrink-0" />
-                  Expand Details &amp; Sets
-                </button>
-              </>
+              <button
+                type="button"
+                onClick={() => {
+                  setOpenExerciseMenuKey(null);
+                  setExpandedCompactExercises((prev) => ({
+                    ...prev,
+                    [exKey]: true,
+                  }));
+                }}
+                className="w-full px-2.5 py-2 rounded-xl text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-2 transition-colors"
+              >
+                <ChevronDown className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                Expand Details &amp; Sets
+              </button>
             )}
 
             <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
@@ -1795,7 +1832,7 @@ export const LogView: React.FC = () => {
                                     </div>
 
                                     <div className="shrink-0">
-                                      {renderExerciseMenu(draft, exIdx, exKey, true)}
+                                      {renderExerciseMenu(draft, exIdx, exKey, true, ghostEx)}
                                     </div>
                                   </div>
 
@@ -1891,13 +1928,20 @@ export const LogView: React.FC = () => {
                                           {ex.loadType === 'double_kg' && (
                                             <span className="text-orange-500 mr-0.5">2×</span>
                                           )}
+                                          {ex.loadType === 'bw_plus_kg' && (
+                                            <span className="text-orange-500 mr-0.5 text-xs">BW+</span>
+                                          )}
                                           <input
                                             type="number"
                                             step="0.5"
                                             min={0}
                                             title="Weight (kg)"
                                             value={ex.weight || ''}
-                                            placeholder={String(ghostEx?.weight ?? 16)}
+                                            placeholder={
+                                              ex.loadType === 'bw_plus_kg'
+                                                ? String(ghostEx?.weight ?? 0)
+                                                : String(ghostEx?.weight ?? 16)
+                                            }
                                             onChange={(e) => {
                                               const val = parseFloat(e.target.value) || 0;
                                               updateDraftWorkout(draft.logUuid, (curr) => {
@@ -1910,21 +1954,6 @@ export const LogView: React.FC = () => {
                                           />
                                           <span className="text-[var(--text-muted)] text-xs">kg</span>
                                         </label>
-                                      )}
-
-                                      {ghostEx && (
-                                        <button
-                                          type="button"
-                                          data-tooltip="Fill sets & weight from your last session"
-                                          title="Fill sets & weight from your last session"
-                                          onClick={() =>
-                                            handleAcceptGhostForExercise(draft, exIdx, ghostEx)
-                                          }
-                                          className="px-1.5 py-1 rounded-lg bg-orange-500/12 hover:bg-orange-500 text-orange-500 hover:text-white text-[10px] font-bold inline-flex items-center gap-0.5 transition-colors"
-                                        >
-                                          <Check className="w-3 h-3" />
-                                          <span className="hidden sm:inline">Fill Last</span>
-                                        </button>
                                       )}
                                     </div>
                                   </div>
@@ -2138,18 +2167,6 @@ export const LogView: React.FC = () => {
                                       </button>
                                     )}
 
-                                    {(ex.metricType === 'distance' || ex.metricType === 'time') && (
-                                      <span className="text-[10px] font-mono font-bold text-orange-600 dark:text-orange-400 px-1.5 py-0.5 rounded bg-orange-500/10">
-                                        {ex.totalReps > 0
-                                          ? ex.metricType === 'distance'
-                                            ? `${ex.totalReps}m total${ex.isPerSide ? ' (L+R)' : ''}`
-                                            : formatExerciseMetricSummary(ex)
-                                          : ex.metricType === 'distance'
-                                          ? 'm'
-                                          : 's'}
-                                      </span>
-                                    )}
-
                                     {visibleRirKeys[exKey] && (
                                       <label
                                         title="Reps in Reserve"
@@ -2203,29 +2220,11 @@ export const LogView: React.FC = () => {
                                     >
                                       {stepBadge || exIdx + 1}
                                     </span>
-                                    <span className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-md bg-slate-200/80 dark:bg-slate-800 text-slate-600 dark:text-slate-400">
-                                      {ex.category}
-                                    </span>
                                   </div>
 
                                   {/* Exercise Action Icons */}
                                   <div className="flex items-center gap-1">
-                                    {ghostEx && (
-                                      <button
-                                        type="button"
-                                        data-tooltip="Fill sets & weight from your last session"
-                                        title="Fill sets & weight from your last session"
-                                        onClick={() =>
-                                          handleAcceptGhostForExercise(draft, exIdx, ghostEx)
-                                        }
-                                        className="px-2.5 py-1 rounded-xl bg-orange-500/10 hover:bg-orange-500 text-orange-600 dark:text-orange-400 hover:text-white text-[11px] font-bold inline-flex items-center gap-1 transition-colors"
-                                      >
-                                        <Check className="w-3.5 h-3.5" />
-                                        Fill Last
-                                      </button>
-                                    )}
-
-                                    {renderExerciseMenu(draft, exIdx, exKey, false)}
+                                    {renderExerciseMenu(draft, exIdx, exKey, false, ghostEx)}
 
                                     {logDensityMode === 'compact' && (
                                       <button
@@ -2253,51 +2252,12 @@ export const LogView: React.FC = () => {
                                     </span>
                                   )}
                                   <span>{ex.exerciseName}</span>
-                                  {ex.isPerSide && (
-                                    <span className="px-1.5 py-0.5 rounded-md bg-orange-500/15 text-orange-600 dark:text-orange-400 text-[10px] font-mono font-bold">
-                                      ×2 L+R
-                                    </span>
-                                  )}
                                   {presetTargetLabel && (
-                                    <span className="px-2 py-0.5 rounded-md bg-slate-200/70 dark:bg-slate-800 text-[11px] font-mono font-semibold text-slate-500 dark:text-slate-400 tabular-nums">
+                                    <span className="text-xs font-mono font-semibold text-[var(--text-secondary)] tabular-nums ml-1">
                                       Target: {presetTargetLabel}
                                     </span>
                                   )}
                                 </h3>
-                                {editingCueKey === exKey ? (
-                                  <div className="mt-1 flex items-center gap-1.5">
-                                    <input
-                                      type="text"
-                                      autoFocus
-                                      value={ex.exerciseNotes || ''}
-                                      placeholder="Add coaching cue or exercise note..."
-                                      onChange={(e) => {
-                                        const val = e.target.value;
-                                        updateDraftWorkout(draft.logUuid, (curr) => {
-                                          const next = [...curr.exercises];
-                                          next[exIdx] = { ...next[exIdx], exerciseNotes: val };
-                                          return { ...curr, exercises: next };
-                                        });
-                                      }}
-                                      onKeyDown={(e) => {
-                                        if (e.key === 'Enter' || e.key === 'Escape') {
-                                          setEditingCueKey(null);
-                                        }
-                                      }}
-                                      onBlur={() => setEditingCueKey(null)}
-                                      className="flex-1 min-w-0 px-2.5 py-1 rounded-lg bg-amber-500/10 border border-amber-500/40 text-[11px] text-amber-900 dark:text-amber-200 font-medium focus:outline-none focus:ring-1 focus:ring-amber-500"
-                                    />
-                                  </div>
-                                ) : cueNote ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => setEditingCueKey(exKey)}
-                                    title="Tap to edit coaching cue"
-                                    className="coach-cue-banner mt-1 w-full text-left px-2.5 py-1 rounded-lg border text-[11px] font-medium leading-snug break-words transition-colors"
-                                  >
-                                    Coach cue: {cueNote}
-                                  </button>
-                                ) : null}
 
                                 {/* Ghost Benchmark Subtitle */}
                                 {ghost && ghostEx && (
@@ -2551,8 +2511,13 @@ export const LogView: React.FC = () => {
                                           ex.loadType !== 'none' && (
                                             <div className="relative flex items-center">
                                               {ex.loadType === 'double_kg' && (
-                                                <span className="text-[11px] font-mono font-bold text-orange-500 mr-1">
+                                                <span className="text-xs font-mono font-bold text-orange-500 mr-1">
                                                   2×
+                                                </span>
+                                              )}
+                                              {ex.loadType === 'bw_plus_kg' && (
+                                                <span className="text-xs font-mono font-bold text-orange-500 mr-1">
+                                                  BW+
                                                 </span>
                                               )}
                                               <input
@@ -2561,7 +2526,11 @@ export const LogView: React.FC = () => {
                                                 min={0}
                                                 title="Base exercise weight (kg)"
                                                 value={ex.weight || ''}
-                                                placeholder={String(ghostEx?.weight ?? 16)}
+                                                placeholder={
+                                                  ex.loadType === 'bw_plus_kg'
+                                                    ? String(ghostEx?.weight ?? 0)
+                                                    : String(ghostEx?.weight ?? 16)
+                                                }
                                                 onChange={(e) => {
                                                   const val = parseFloat(e.target.value) || 0;
                                                   updateDraftWorkout(draft.logUuid, (curr) => {
@@ -2570,9 +2539,9 @@ export const LogView: React.FC = () => {
                                                     return { ...curr, exercises: next };
                                                   });
                                                 }}
-                                                className="w-14 px-1.5 py-1 text-xs font-mono font-bold tabular-nums text-center rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder:text-slate-400/70 focus:ring-2 focus:ring-orange-500 focus:outline-none"
+                                                className="w-16 h-10 px-2 text-base font-mono font-bold tabular-nums text-center rounded-xl bg-[var(--bg-input)] border border-[var(--border-subtle)] text-[var(--text-primary)] placeholder:text-[var(--text-muted)] focus:ring-2 focus:ring-orange-500 focus:outline-none"
                                               />
-                                              <span className="text-[11px] font-mono text-slate-400 ml-1 pr-1">
+                                              <span className="text-xs font-mono text-[var(--text-muted)] ml-1 pr-1">
                                                 kg
                                               </span>
                                             </div>
@@ -2580,35 +2549,11 @@ export const LogView: React.FC = () => {
                                         )}
                                       </div>
 
-                                      {/* Compact RIR & Per-Side (x2) Toggle */}
-                                      <div className="flex items-center gap-2 ml-auto">
-                                        <button
-                                          type="button"
-                                          data-tooltip="Unilateral Per Side (×2 L+R)"
-                                          title="Toggle Per Side (×2 L+R) calculation"
-                                          onClick={() => {
-                                            updateDraftWorkout(draft.logUuid, (curr) => {
-                                              const next = [...curr.exercises];
-                                              next[exIdx] = {
-                                                ...next[exIdx],
-                                                isPerSide: !next[exIdx].isPerSide,
-                                              };
-                                              return { ...curr, exercises: next };
-                                            });
-                                          }}
-                                          className={`px-2 py-1.5 rounded-xl text-[11px] font-bold border transition-colors ${
-                                            ex.isPerSide
-                                              ? 'bg-orange-500 text-white border-orange-500 shadow-2xs'
-                                              : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-500 hover:border-orange-500'
-                                          }`}
-                                        >
-                                          ×2 L+R
-                                        </button>
-
-                                        <div className="flex items-center gap-1.5">
+                                      {visibleRirKeys[exKey] && (
+                                        <div className="flex items-center gap-1.5 ml-auto">
                                           <span
                                             title="Reps in Reserve after your last set"
-                                            className="text-[11px] font-mono font-semibold text-slate-400"
+                                            className="text-[11px] font-mono font-semibold text-[var(--text-muted)]"
                                           >
                                             RIR
                                           </span>
@@ -2632,10 +2577,10 @@ export const LogView: React.FC = () => {
                                                 return { ...curr, exercises: next };
                                               });
                                             }}
-                                            className="w-12 h-9 rounded-xl text-center font-mono text-xs font-bold tabular-nums bg-amber-500/10 border border-amber-500/30 text-amber-800 dark:text-amber-300 placeholder:text-amber-500/50 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                                            className="w-12 h-9 rounded-xl text-center font-mono text-xs font-bold tabular-nums bg-[var(--bg-input)] border border-[var(--border-subtle)] text-[var(--text-primary)] focus:outline-none focus:ring-2 focus:ring-orange-500"
                                           />
                                         </div>
-                                      </div>
+                                      )}
                                     </div>
 
                                     {/* COMPLEX / LADDER SINGLE ROW vs DYNAMIC SET BOXES */}
@@ -2945,6 +2890,41 @@ export const LogView: React.FC = () => {
                                       )}
                                     </div>
                                   </div>
+
+                                  {editingCueKey === exKey ? (
+                                    <div className="flex items-center gap-1.5">
+                                      <input
+                                        type="text"
+                                        autoFocus
+                                        value={ex.exerciseNotes || ''}
+                                        placeholder="Add coaching cue or exercise note..."
+                                        onChange={(e) => {
+                                          const val = e.target.value;
+                                          updateDraftWorkout(draft.logUuid, (curr) => {
+                                            const next = [...curr.exercises];
+                                            next[exIdx] = { ...next[exIdx], exerciseNotes: val };
+                                            return { ...curr, exercises: next };
+                                          });
+                                        }}
+                                        onKeyDown={(e) => {
+                                          if (e.key === 'Enter' || e.key === 'Escape') {
+                                            setEditingCueKey(null);
+                                          }
+                                        }}
+                                        onBlur={() => setEditingCueKey(null)}
+                                        className="flex-1 min-w-0 px-2.5 py-1 rounded-lg bg-[var(--bg-input)] border border-orange-500/50 text-[11px] text-[var(--text-primary)] font-medium focus:outline-none focus:ring-1 focus:ring-orange-500"
+                                      />
+                                    </div>
+                                  ) : cueNote ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => setEditingCueKey(exKey)}
+                                      title="Tap to edit coaching cue"
+                                      className="coach-cue-banner w-full text-left px-2.5 py-1 rounded-lg border text-[11px] font-medium leading-snug break-words transition-colors"
+                                    >
+                                      Coach cue: {cueNote}
+                                    </button>
+                                  ) : null}
                                 </div>
                               ) : (
                                 /* CARDIO ENTRY */
