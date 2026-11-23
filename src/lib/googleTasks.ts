@@ -98,11 +98,16 @@ export async function acquireGoogleTasksToken(interactive: boolean): Promise<str
 }
 
 async function tasksFetch(url: string, token: string, init?: RequestInit): Promise<Response> {
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+  };
+  if (init?.body) {
+    headers['Content-Type'] = 'application/json';
+  }
   const res = await fetch(url, {
     ...init,
     headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
+      ...headers,
       ...(init?.headers || {}),
     },
   });
@@ -115,7 +120,7 @@ async function tasksFetch(url: string, token: string, init?: RequestInit): Promi
 async function resolveTasksListId(token: string): Promise<string> {
   if (resolvedListIdCache) return resolvedListIdCache;
   const checkRes = await tasksFetch(
-    `https://tasks.googleapis.com/tasks/v1/lists/${encodeURIComponent(PREFERRED_LIST_ID)}`,
+    `https://tasks.googleapis.com/tasks/v1/users/@me/lists/${encodeURIComponent(PREFERRED_LIST_ID)}`,
     token
   );
   if (checkRes.ok) {
