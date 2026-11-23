@@ -29,7 +29,8 @@ import {
 import { AiNotesPatchPayload } from '../utils/aiCoachPatch';
 import {
   PendingTaskCompletion,
-  markGoogleTaskCompletedSilently,
+  completeGoogleTaskForSchedule,
+  deleteGoogleTaskForSchedule,
   syncGoogleTasksTwoWay,
 } from '../lib/googleTasks';
 import {
@@ -1120,6 +1121,10 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           schedules: nextSchedules,
         });
 
+        if (target?.scheduleItemUuid) {
+          void deleteGoogleTaskForSchedule(target.scheduleItemUuid);
+        }
+
         if (state.authUser) {
           const uid = state.authUser.uid;
           set({ syncStatus: 'syncing', lastSyncError: undefined });
@@ -1307,8 +1312,12 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
             : {}),
         });
 
-        if (finalStatus === 'completed' && matchedScheduleIdForTasks) {
-          void markGoogleTaskCompletedSilently(matchedScheduleIdForTasks);
+        if (matchedScheduleIdForTasks) {
+          if (finalStatus === 'completed') {
+            void completeGoogleTaskForSchedule(matchedScheduleIdForTasks);
+          } else if (finalStatus === 'did_not_complete') {
+            void deleteGoogleTaskForSchedule(matchedScheduleIdForTasks);
+          }
         }
 
         if (state.authUser) {
@@ -1727,7 +1736,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           lastTasksSync: {
             timestamp: nowIso,
             status: 'success',
-            message: `${res.pushedCount} pushed, ${res.pulledCompleted.length} completed, ${res.pulledReschedules.length} moved`,
+            message: `${res.pushedCount} pushed, ${res.pulledCompleted.length} completed, ${res.pulledReschedules.length} moved, ${res.deletedStaleCount} cleaned`,
           },
         });
 
@@ -2260,6 +2269,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           date,
           existing.filter((i) => i.scheduleItemUuid !== scheduleItemUuid)
         );
+        void deleteGoogleTaskForSchedule(scheduleItemUuid);
       },
 
       autoFillSchedule: (programUuid, startDate, endDate, conflictMode) => {
@@ -2389,6 +2399,10 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           draftWorkouts: state.draftWorkouts.filter((d) => d.logUuid !== logUuid),
           schedules: nextSchedules,
         });
+
+        if (targetLog?.scheduleItemUuid) {
+          void deleteGoogleTaskForSchedule(targetLog.scheduleItemUuid);
+        }
 
         if (state.authUser) {
           const uid = state.authUser.uid;

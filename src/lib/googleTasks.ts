@@ -196,6 +196,7 @@ export async function syncGoogleTasksTwoWay(params: {
   pulledCompleted: PendingTaskCompletion[];
   pulledReschedules: TaskReschedulePatch[];
   pushedCount: number;
+  deletedStaleCount: number;
   error?: string;
 }> {
   try {
@@ -207,57 +208,95 @@ export async function syncGoogleTasksTwoWay(params: {
         pulledCompleted: [],
         pulledReschedules: [],
         pushedCount: 0,
+        deletedStaleCount: 0,
       };
     }
 
     const listId = await resolveTasksListId(token);
     const remoteTasks = await fetchAllTasksInList(listId, token);
 
-    const taskByEntryId = new Map<string, GoogleTaskItem>();
-    for (const task of remoteTasks) {
-      const entryId = extractIronPulseEntryId(task.notes);
-      if (entryId) {
-        taskByEntryId.set(entryId, task);
+    const endDate = shiftIsoDate(params.todayIso, 6);
+    const scheduleByEntryId = new Map<string, { date: string; item: ScheduledItem }>();
+    for (const [date, daySch] of Object.entries(params.schedules)) {
+      for (const item of daySch?.items || []) {
+        scheduleByEntryId.set(item.scheduleItemUuid, { date, item });
       }
     }
 
+    const taskByEntryId = new Map<string, GoogleTaskItem>();
     const pulledCompleted: PendingTaskCompletion[] = [];
     const pulledReschedules: TaskReschedulePatch[] = [];
+    let deletedStaleCount = 0;
 
-    // 1. Inbound: Check all local schedule items against remote Google Tasks
-    for (const [date, daySch] of Object.entries(params.schedules)) {
-      for (const item of daySch.items || []) {
-        const task = taskByEntryId.get(item.scheduleItemUuid);
-        if (!task) continue;
+    // 1. Inbound: Check tasks in today..today+6 window for completions & reschedules
+    for (const task of remoteTasks) {
+      const entryId = extractIronPulseEntryId(task.notes);
+      if (!entryId) continue;
 
-        const taskDueDate = task.due ? task.due.slice(0, 10) : null;
-        if (taskDueDate && taskDueDate !== date) {
-          pulledReschedules.push({
-            scheduleItemUuid: item.scheduleItemUuid,
-            fromDate: date,
-            toDate: taskDueDate,
-          });
-        }
+      const localEntry = scheduleByEntryId.get(entryId);
+      const taskDueDate = task.due ? task.due.slice(0, 10) : null;
 
-        if (
-          task.status === 'completed' &&
-          item.status !== 'completed' &&
-          !params.hasCompletedLogFor(taskDueDate || date, item)
-        ) {
-          const matchedPreset = params.presets.find((p) => p.presetUuid === item.presetUuid);
-          pulledCompleted.push({
-            scheduleItemUuid: item.scheduleItemUuid,
-            date: taskDueDate || date,
-            presetUuid: item.presetUuid,
-            workoutTitle: matchedPreset?.title || 'Scheduled Workout',
-            slotRole: item.slotRole || 'Primary',
-          });
+      if (localEntry) {
+        const isInWindow =
+          (localEntry.date >= params.todayIso && localEntry.date <= endDate) ||
+          (taskDueDate !== null && taskDueDate >= params.todayIso && taskDueDate <= endDate);
+
+        if (isInWindow) {
+          if (taskDueDate && taskDueDate !== localEntry.date) {
+            pulledReschedules.push({
+              scheduleItemUuid: entryId,
+              fromDate: localEntry.date,
+              toDate: taskDueDate,
+            });
+          }
+
+          if (
+            task.status === 'completed' &&
+            localEntry.item.status !== 'completed' &&
+            !params.hasCompletedLogFor(taskDueDate || localEntry.date, localEntry.item)
+          ) {
+            const matchedPreset = params.presets.find(
+              (p) => p.presetUuid === localEntry.item.presetUuid
+            );
+            pulledCompleted.push({
+              scheduleItemUuid: entryId,
+              date: taskDueDate || localEntry.date,
+              presetUuid: localEntry.item.presetUuid,
+              workoutTitle: matchedPreset?.title || 'Scheduled Workout',
+              slotRole: localEntry.item.slotRole || 'Primary',
+            });
+          }
         }
       }
+
+      // 2. Sweep stale, past-due, orphaned, or reopened past-due IronPulse tasks
+      const isOrphaned = !localEntry;
+      const isPastDue =
+        (taskDueDate !== null && taskDueDate < params.todayIso) ||
+        (localEntry !== undefined && localEntry.date < params.todayIso);
+      const isReopenedPastDue =
+        localEntry !== undefined &&
+        localEntry.item.status !== 'completed' &&
+        localEntry.date < params.todayIso;
+
+      if (isOrphaned || isPastDue || isReopenedPastDue) {
+        const delRes = await tasksFetch(
+          `https://tasks.googleapis.com/tasks/v1/lists/${encodeURIComponent(
+            listId
+          )}/tasks/${encodeURIComponent(task.id)}`,
+          token,
+          { method: 'DELETE' }
+        );
+        if (delRes.ok) {
+          deletedStaleCount += 1;
+        }
+        continue;
+      }
+
+      taskByEntryId.set(entryId, task);
     }
 
-    // 2. Outbound: Push incomplete schedule entries from today through today + 6 days
-    const endDate = shiftIsoDate(params.todayIso, 6);
+    // 3. Outbound: Push/update all incomplete schedule entries from today through today + 6 days
     let pushedCount = 0;
 
     const targetDates = Object.keys(params.schedules)
@@ -268,7 +307,6 @@ export async function syncGoogleTasksTwoWay(params: {
       const daySch = params.schedules[date];
       for (const item of daySch?.items || []) {
         if (item.status !== 'pending') continue;
-        // If Google Tasks already marked it completed inbound, don't overwrite it back to needsAction
         const existingTask = taskByEntryId.get(item.scheduleItemUuid);
         if (existingTask?.status === 'completed') continue;
 
@@ -305,6 +343,7 @@ export async function syncGoogleTasksTwoWay(params: {
       pulledCompleted,
       pulledReschedules,
       pushedCount,
+      deletedStaleCount,
     };
   } catch (err: any) {
     return {
@@ -312,18 +351,19 @@ export async function syncGoogleTasksTwoWay(params: {
       pulledCompleted: [],
       pulledReschedules: [],
       pushedCount: 0,
+      deletedStaleCount: 0,
       error: err?.message || 'Google Tasks sync failed',
     };
   }
 }
 
-export async function markGoogleTaskCompletedSilently(scheduleItemUuid: string): Promise<void> {
+export async function completeGoogleTaskForSchedule(scheduleId: string): Promise<void> {
   try {
     const token = getCachedGoogleTasksToken();
-    if (!token || !scheduleItemUuid) return;
+    if (!token || !scheduleId) return;
     const listId = await resolveTasksListId(token);
     const tasks = await fetchAllTasksInList(listId, token);
-    const match = tasks.find((t) => extractIronPulseEntryId(t.notes) === scheduleItemUuid);
+    const match = tasks.find((t) => extractIronPulseEntryId(t.notes) === scheduleId);
     if (!match || match.status === 'completed') return;
 
     await tasksFetch(
@@ -340,3 +380,26 @@ export async function markGoogleTaskCompletedSilently(scheduleItemUuid: string):
     // Swallow network/auth errors so offline workout completion never fails
   }
 }
+
+export async function deleteGoogleTaskForSchedule(scheduleId: string): Promise<void> {
+  try {
+    const token = getCachedGoogleTasksToken();
+    if (!token || !scheduleId) return;
+    const listId = await resolveTasksListId(token);
+    const tasks = await fetchAllTasksInList(listId, token);
+    const match = tasks.find((t) => extractIronPulseEntryId(t.notes) === scheduleId);
+    if (!match) return;
+
+    await tasksFetch(
+      `https://tasks.googleapis.com/tasks/v1/lists/${encodeURIComponent(
+        listId
+      )}/tasks/${encodeURIComponent(match.id)}`,
+      token,
+      { method: 'DELETE' }
+    );
+  } catch {
+    // Swallow network/auth errors silently
+  }
+}
+
+export const markGoogleTaskCompletedSilently = completeGoogleTaskForSchedule;
