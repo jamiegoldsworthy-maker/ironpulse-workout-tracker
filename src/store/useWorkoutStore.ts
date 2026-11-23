@@ -157,6 +157,7 @@ interface WorkoutStoreState {
     status?: 'completed' | 'did_not_complete',
     alsoUpdatePreset?: boolean
   ) => Promise<{ ok: boolean; error?: string }>;
+  resetDraftWorkoutToNotStarted: (logUuid: string) => Promise<void>;
   syncDraftToFirestore: (logUuid: string) => Promise<{ ok: boolean; error?: string }>;
   saveAllDraftWorkouts: () => Promise<void>;
 
@@ -1440,6 +1441,80 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         return { ok: true };
       },
 
+      resetDraftWorkoutToNotStarted: async (logUuid) => {
+        clearPendingDraftSync(logUuid);
+        const state = get();
+        const draft = state.draftWorkouts.find((d) => d.logUuid === logUuid);
+        if (!draft) return;
+
+        const clearedExercises = draft.exercises.map((ex) => ({
+          ...ex,
+          isCompleted: false,
+          totalSets: 0,
+          totalReps: 0,
+          totalLoadKg: 0,
+          sets: (ex.sets || []).map((s) => ({ ...s, reps: 0 })),
+        }));
+
+        const nextDrafts = state.draftWorkouts.map((d) =>
+          d.logUuid === logUuid
+            ? {
+                ...d,
+                isSaved: false,
+                status: 'in_progress' as const,
+                exercises: clearedExercises,
+                totalSessionVolumeKg: 0,
+                updatedAt: new Date().toISOString(),
+              }
+            : d
+        );
+
+        const nextLogs = state.logs.filter((l) => l.logUuid !== logUuid);
+        const nextSchedules = { ...state.schedules };
+        let matchedSchedId = draft.scheduleItemUuid;
+
+        const daySched = nextSchedules[draft.date];
+        if (daySched) {
+          nextSchedules[draft.date] = {
+            ...daySched,
+            items: daySched.items.map((it) => {
+              if (
+                it.scheduleItemUuid === draft.scheduleItemUuid ||
+                it.linkedLogUuid === logUuid ||
+                (!draft.scheduleItemUuid && it.presetUuid === draft.presetUuid)
+              ) {
+                matchedSchedId = it.scheduleItemUuid;
+                return { ...it, status: 'pending', linkedLogUuid: null };
+              }
+              return it;
+            }),
+            updatedAt: new Date().toISOString(),
+          };
+        }
+
+        set({
+          draftWorkouts: nextDrafts,
+          logs: nextLogs,
+          schedules: nextSchedules,
+          excludedFromTasksIds: matchedSchedId
+            ? state.excludedFromTasksIds.filter((id) => id !== matchedSchedId)
+            : state.excludedFromTasksIds,
+        });
+
+        if (state.authUser) {
+          const uid = state.authUser.uid;
+          await removeFirestoreDoc('wt_logs', logUuid).catch(() => {});
+          if (nextSchedules[draft.date]) {
+            await upsertFirestoreDoc(
+              'wt_schedule',
+              `${uid}_${draft.date}`,
+              nextSchedules[draft.date],
+              uid
+            ).catch(() => {});
+          }
+        }
+      },
+
       saveAllDraftWorkouts: async () => {
         const drafts = get().draftWorkouts;
         for (const d of drafts) {
@@ -1778,6 +1853,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           schedules: state.schedules,
           presets: state.presets,
           excludedFromTasksIds: state.excludedFromTasksIds,
+          dismissedTaskCompletionIds: state.dismissedTaskCompletionIds,
           hasCompletedLogFor: (date, item) =>
             get().logs.some(
               (l) =>

@@ -87,6 +87,7 @@ export const LogView: React.FC = () => {
     updateDraftWorkout,
     removeDraftWorkout,
     saveDraftWorkout,
+    resetDraftWorkoutToNotStarted,
     getGhostExerciseData,
     startRestTimer,
     startCircuitTimer,
@@ -108,6 +109,7 @@ export const LogView: React.FC = () => {
   const [activeCardIdx, setActiveCardIdx] = useState<number>(0);
   const [editMenuOpen, setEditMenuOpen] = useState<boolean>(false);
   const [openExerciseMenuKey, setOpenExerciseMenuKey] = useState<string | null>(null);
+  const [openStatusMenuLogUuid, setOpenStatusMenuLogUuid] = useState<string | null>(null);
   const [openCueKey, setOpenCueKey] = useState<string | null>(null);
   const [visibleRirKeys, setVisibleRirKeys] = useState<Record<string, boolean>>({});
   const [editingCueKey, setEditingCueKey] = useState<string | null>(null);
@@ -196,7 +198,7 @@ export const LogView: React.FC = () => {
   };
 
   useEffect(() => {
-    if (!openExerciseMenuKey && !openCueKey) return;
+    if (!openExerciseMenuKey && !openCueKey && !openStatusMenuLogUuid) return;
     const handleOutside = (e: MouseEvent) => {
       const target = e.target as HTMLElement | null;
       if (openExerciseMenuKey && !target?.closest('[data-exercise-menu]')) {
@@ -205,11 +207,15 @@ export const LogView: React.FC = () => {
       if (openCueKey && !target?.closest('[data-cue-popover]')) {
         setOpenCueKey(null);
       }
+      if (openStatusMenuLogUuid && !target?.closest('[data-status-menu]')) {
+        setOpenStatusMenuLogUuid(null);
+      }
     };
     const handleEsc = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setOpenExerciseMenuKey(null);
         setOpenCueKey(null);
+        setOpenStatusMenuLogUuid(null);
       }
     };
     document.addEventListener('mousedown', handleOutside);
@@ -218,7 +224,7 @@ export const LogView: React.FC = () => {
       document.removeEventListener('mousedown', handleOutside);
       document.removeEventListener('keydown', handleEsc);
     };
-  }, [openExerciseMenuKey, openCueKey]);
+  }, [openExerciseMenuKey, openCueKey, openStatusMenuLogUuid]);
 
   useEffect(() => {
     if (!editMenuOpen) return;
@@ -1037,6 +1043,15 @@ export const LogView: React.FC = () => {
                 draft.exercises.length > 0 &&
                 (draft.exercises.every((e) => e.trackingType === 'mobility') ||
                   /^(mobility|yoga)$/i.test((draft.workoutType || '').trim()));
+              const hasEnteredAnySet = draft.exercises.some(
+                (ex) =>
+                  ex.sets?.some((s) => s.reps > 0) ||
+                  ex.isCompleted ||
+                  (ex.distance ?? 0) > 0 ||
+                  (ex.durationSec ?? 0) > 0
+              );
+              const isDidNotComplete =
+                draft.isSaved && draft.status === 'did_not_complete';
 
               const activeWeekNumber: number | null = (() => {
                 const coachMatch = draft.coachNotes?.match(/\[?W(?:eek\s*)?(\d+)\]?/i);
@@ -1176,7 +1191,9 @@ export const LogView: React.FC = () => {
                   onTouchMove={handleWorkoutCardTouchMove}
                   onTouchEnd={(e) => handleWorkoutCardTouchEnd(e, cardIdx)}
                   className={`touch-pan-y rounded-3xl bg-white dark:bg-slate-900 border transition-all overflow-hidden ${
-                    draft.isSaved
+                    isDidNotComplete
+                      ? 'opacity-60 border-[var(--border-subtle)]'
+                      : draft.isSaved
                       ? draft.status === 'completed'
                         ? 'border-emerald-500/35 dark:border-emerald-500/25'
                         : 'border-amber-500/35'
@@ -1196,23 +1213,87 @@ export const LogView: React.FC = () => {
                         <span className="font-mono text-[10px] font-medium px-1.5 py-0.5 rounded-md text-slate-400 dark:text-slate-500 tabular-nums">
                           #{draft.displayId.replace(/^ID-/i, '')}
                         </span>
-                        {draft.isSaved ? (
-                          <span
-                            className={`inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-lg ${
-                              draft.status === 'completed'
-                                ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
-                                : 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+                        <div className="relative" data-status-menu>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setOpenStatusMenuLogUuid(
+                                openStatusMenuLogUuid === draft.logUuid ? null : draft.logUuid
+                              )
+                            }
+                            title="Change workout status or reset to Not Started"
+                            className={`inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-lg transition-colors ${
+                              draft.isSaved
+                                ? draft.status === 'completed'
+                                  ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                                  : 'bg-[var(--bg-input)] text-[var(--text-muted)] border border-[var(--border-subtle)]'
+                                : hasEnteredAnySet
+                                ? 'bg-[var(--bg-input)] text-[var(--text-secondary)] border border-[var(--border-subtle)]'
+                                : 'bg-[var(--bg-input)] text-[var(--text-muted)] border border-[var(--border-subtle)]'
                             }`}
                           >
-                            <CheckCircle2 className="w-3 h-3" />
-                            {draft.status === 'completed' ? 'Saved' : 'Incomplete'}
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400">
-                            <span className="w-1.5 h-1.5 rounded-full bg-orange-500" />
-                            In Progress
-                          </span>
-                        )}
+                            {draft.isSaved ? (
+                              <>
+                                <CheckCircle2 className="w-3 h-3" />
+                                {draft.status === 'completed' ? 'Saved' : 'Did Not Complete'}
+                              </>
+                            ) : hasEnteredAnySet ? (
+                              <>
+                                <span className="w-1.5 h-1.5 rounded-full bg-orange-500" />
+                                In Progress
+                              </>
+                            ) : (
+                              <>
+                                <span className="w-1.5 h-1.5 rounded-full bg-[var(--text-muted)]" />
+                                Not Started
+                              </>
+                            )}
+                          </button>
+
+                          {openStatusMenuLogUuid === draft.logUuid && (
+                            <div className="absolute left-0 top-full mt-1.5 w-44 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-card)] shadow-xl p-1.5 z-40 space-y-0.5">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setOpenStatusMenuLogUuid(null);
+                                  void resetDraftWorkoutToNotStarted(draft.logUuid);
+                                  triggerToast('Reset workout to Not Started');
+                                }}
+                                className="w-full px-2.5 py-1.5 rounded-xl text-left text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-inset)]"
+                              >
+                                Not Started (Reset)
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setOpenStatusMenuLogUuid(null);
+                                  updateDraftWorkout(draft.logUuid, (curr) => ({
+                                    ...curr,
+                                    isSaved: false,
+                                    status: 'in_progress',
+                                  }));
+                                }}
+                                className="w-full px-2.5 py-1.5 rounded-xl text-left text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-inset)]"
+                              >
+                                In Progress
+                              </button>
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  setOpenStatusMenuLogUuid(null);
+                                  await saveDraftWorkout(
+                                    draft.logUuid,
+                                    'did_not_complete',
+                                    draft.updatePresetOnSave
+                                  );
+                                }}
+                                className="w-full px-2.5 py-1.5 rounded-xl text-left text-xs font-semibold text-[var(--text-muted)] hover:bg-[var(--bg-inset)]"
+                              >
+                                Did Not Complete
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       </div>
 
                       {/* Header Right Actions */}

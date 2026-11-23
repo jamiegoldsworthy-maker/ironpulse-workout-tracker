@@ -38,6 +38,11 @@ const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Frid
 const SHORT_DAYS_MON_FIRST = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const SLOT_ROLES = ['Primary', 'Secondary', 'Core', 'Mobility', 'Finisher', 'Conditioning'];
 
+function formatScheduleStatusLabel(status: string): string {
+  if (status === 'did_not_complete') return 'Did Not Complete';
+  return status.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 function buildMonthCalendarGrid(year: number, monthZeroIndexed: number): Array<{
   isoDate: string;
   dayNum: number;
@@ -573,7 +578,9 @@ export const PlanView: React.FC = () => {
                         return (
                           <div
                             key={item.scheduleItemUuid}
-                            className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/70 dark:border-slate-800 space-y-2"
+                            className={`p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/70 dark:border-slate-800 space-y-2 transition-opacity ${
+                              item.status === 'did_not_complete' ? 'opacity-55' : ''
+                            }`}
                           >
                             <div className="flex flex-wrap items-center justify-between gap-2">
                               <div className="flex items-center gap-2 min-w-0">
@@ -586,12 +593,30 @@ export const PlanView: React.FC = () => {
                               </div>
 
                               <div className="flex items-center gap-1 shrink-0">
-                                <span
-                                  className={`text-[10px] font-bold px-2 py-0.5 rounded-full inline-flex items-center gap-1 capitalize ${
+                                <button
+                                  type="button"
+                                  disabled={item.status !== 'did_not_complete'}
+                                  title={
+                                    item.status === 'did_not_complete'
+                                      ? 'Tap to mark Pending again'
+                                      : undefined
+                                  }
+                                  onClick={() => {
+                                    if (item.status !== 'did_not_complete') return;
+                                    updateDailySchedule(
+                                      date,
+                                      items.map((it) =>
+                                        it.scheduleItemUuid === item.scheduleItemUuid
+                                          ? { ...it, status: 'pending' }
+                                          : it
+                                      )
+                                    );
+                                  }}
+                                  className={`text-[10px] font-bold px-2 py-0.5 rounded-full inline-flex items-center gap-1 ${
                                     item.status === 'completed'
                                       ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
-                                      : item.status === 'skipped'
-                                      ? 'bg-slate-200 dark:bg-slate-700 text-slate-500'
+                                      : item.status === 'skipped' || item.status === 'did_not_complete'
+                                      ? 'bg-[var(--bg-input)] text-[var(--text-muted)] border border-[var(--border-subtle)] cursor-pointer hover:text-[var(--text-primary)]'
                                       : 'bg-amber-500/10 text-amber-700 dark:text-amber-300'
                                   }`}
                                 >
@@ -600,8 +625,8 @@ export const PlanView: React.FC = () => {
                                   ) : (
                                     <Clock className="w-3 h-3" />
                                   )}
-                                  {item.status}
-                                </span>
+                                  {formatScheduleStatusLabel(item.status)}
+                                </button>
 
                                 {isEditingThisDay && (
                                   <>
@@ -993,7 +1018,9 @@ export const PlanView: React.FC = () => {
                   return (
                     <div
                       key={item.scheduleItemUuid}
-                      className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/70 dark:border-slate-800 space-y-2"
+                      className={`p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/70 dark:border-slate-800 space-y-2 transition-opacity ${
+                        item.status === 'did_not_complete' ? 'opacity-55' : ''
+                      }`}
                     >
                       {/* Top Badge Row: Slot Role + Status + Actions (Never Overlaps!) */}
                       <div className="flex items-center justify-between gap-2">
@@ -1001,10 +1028,30 @@ export const PlanView: React.FC = () => {
                           <span className="px-2 py-0.5 rounded-md text-[10px] font-bold uppercase bg-orange-500/15 text-orange-600 dark:text-orange-400">
                             {item.slotRole}
                           </span>
-                          <span
+                          <button
+                            type="button"
+                            disabled={item.status !== 'did_not_complete'}
+                            title={
+                              item.status === 'did_not_complete'
+                                ? 'Tap to mark Pending again'
+                                : undefined
+                            }
+                            onClick={() => {
+                              if (item.status !== 'did_not_complete') return;
+                              updateDailySchedule(
+                                selectedDate,
+                                selectedDayItems.map((it) =>
+                                  it.scheduleItemUuid === item.scheduleItemUuid
+                                    ? { ...it, status: 'pending' }
+                                    : it
+                                )
+                              );
+                            }}
                             className={`text-[10px] font-bold px-2 py-0.5 rounded-full inline-flex items-center gap-1 ${
                               item.status === 'completed'
                                 ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                                : item.status === 'did_not_complete' || item.status === 'skipped'
+                                ? 'bg-[var(--bg-input)] text-[var(--text-muted)] border border-[var(--border-subtle)] cursor-pointer hover:text-[var(--text-primary)]'
                                 : 'bg-amber-500/10 text-amber-700 dark:text-amber-300'
                             }`}
                           >
@@ -1013,8 +1060,8 @@ export const PlanView: React.FC = () => {
                             ) : (
                               <Clock className="w-3 h-3" />
                             )}
-                            {item.status}
-                          </span>
+                            {formatScheduleStatusLabel(item.status)}
+                          </button>
                         </div>
 
                         <div className="flex items-center gap-1">

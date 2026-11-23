@@ -279,6 +279,7 @@ export async function syncGoogleTasksTwoWay(params: {
   schedules: Record<string, DailySchedule>;
   presets: WorkoutPreset[];
   excludedFromTasksIds?: string[];
+  dismissedTaskCompletionIds?: string[];
   hasCompletedLogFor: (date: string, item: ScheduledItem) => boolean;
 }): Promise<{
   ok: boolean;
@@ -330,6 +331,7 @@ export async function syncGoogleTasksTwoWay(params: {
     let deletedStaleCount = 0;
 
     const excludedSet = new Set(params.excludedFromTasksIds || []);
+    const dismissedSet = new Set(params.dismissedTaskCompletionIds || []);
     const hasHydratedSchedules = scheduleByEntryId.size > 0;
 
     // 1. Inbound: Check tasks in today..today+6 window for completions & reschedules
@@ -357,6 +359,7 @@ export async function syncGoogleTasksTwoWay(params: {
 
           if (
             isActiveCompletedTask(task) &&
+            !dismissedSet.has(entryId) &&
             localEntry.item.status !== 'completed' &&
             !params.hasCompletedLogFor(taskDueDate || localEntry.date, localEntry.item)
           ) {
@@ -392,7 +395,10 @@ export async function syncGoogleTasksTwoWay(params: {
         continue;
       }
 
-      taskByEntryId.set(entryId, task);
+      // Only index active needsAction tasks so completed/archived tasks don't block pushing fresh tasks
+      if (task.status !== 'completed') {
+        taskByEntryId.set(entryId, task);
+      }
     }
 
     // 3. Outbound: Push/update all incomplete schedule entries from today through today + 6 days
@@ -408,7 +414,6 @@ export async function syncGoogleTasksTwoWay(params: {
         if (item.status !== 'pending') continue;
         if (excludedSet.has(item.scheduleItemUuid)) continue;
         const existingTask = taskByEntryId.get(item.scheduleItemUuid);
-        if (existingTask?.status === 'completed') continue;
 
         const preset = params.presets.find((p) => p.presetUuid === item.presetUuid);
         const payload = {
