@@ -29,6 +29,7 @@ import {
 import { AiNotesPatchPayload } from '../utils/aiCoachPatch';
 import {
   PendingTaskCompletion,
+  TasksActionResult,
   completeGoogleTaskForSchedule,
   deleteGoogleTaskForSchedule,
   syncGoogleTasksTwoWay,
@@ -106,6 +107,8 @@ interface WorkoutStoreState {
 
   // Google Tasks Sync
   pendingTaskCompletions: PendingTaskCompletion[];
+  excludedFromTasksIds: string[];
+  tasksActionToast: { status: 'synced' | 'no-token'; message: string } | null;
   lastTasksSync: {
     timestamp: string;
     status: 'success' | 'failed';
@@ -623,6 +626,8 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
       sessionStopwatchStartMs: null,
       sessionStopwatchAccumulatedMs: 0,
       pendingTaskCompletions: [],
+      excludedFromTasksIds: [],
+      tasksActionToast: null,
       lastTasksSync: null,
 
       setActiveTab: (tab) => set({ activeTab: tab }),
@@ -1115,14 +1120,39 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           };
         }
 
+        const targetSchedId = target?.scheduleItemUuid;
         set({
           draftWorkouts: nextDrafts,
           logs: nextLogs,
           schedules: nextSchedules,
+          ...(targetSchedId && !state.excludedFromTasksIds.includes(targetSchedId)
+            ? { excludedFromTasksIds: [...state.excludedFromTasksIds, targetSchedId] }
+            : {}),
         });
 
-        if (target?.scheduleItemUuid) {
-          void deleteGoogleTaskForSchedule(target.scheduleItemUuid);
+        if (target) {
+          void deleteGoogleTaskForSchedule({
+            scheduleId: targetSchedId,
+            date: target.date || state.activeDate,
+            workoutName: target.workoutTitleSnapshot,
+          }).then((res) => {
+            if (res.status === 'synced' || res.status === 'no-token') {
+              const nowIso = new Date().toISOString();
+              set({
+                tasksActionToast:
+                  res.status === 'synced'
+                    ? { status: 'synced', message: '✓ Synced to Tasks' }
+                    : {
+                        status: 'no-token',
+                        message: '⚠ Not synced (Tasks session expired — tap Master Sync)',
+                      },
+                ...(res.status === 'synced'
+                  ? { lastTasksSync: { timestamp: nowIso, status: 'success', message: 'Task removed' } }
+                  : {}),
+              });
+              setTimeout(() => set({ tasksActionToast: null }), 3500);
+            }
+          });
         }
 
         if (state.authUser) {
@@ -1295,12 +1325,25 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           updatedAt: now,
         };
 
+        let nextExcludedIds = state.excludedFromTasksIds;
+        if (matchedScheduleIdForTasks) {
+          if (finalStatus === 'completed') {
+            nextExcludedIds = nextExcludedIds.filter((id) => id !== matchedScheduleIdForTasks);
+          } else if (
+            finalStatus === 'did_not_complete' &&
+            !nextExcludedIds.includes(matchedScheduleIdForTasks)
+          ) {
+            nextExcludedIds = [...nextExcludedIds, matchedScheduleIdForTasks];
+          }
+        }
+
         set({
           logs: nextLogs,
           draftWorkouts: nextDrafts,
           schedules: nextSchedules,
           presets: nextPresets,
           meta: nextMeta,
+          excludedFromTasksIds: nextExcludedIds,
           ...(finalStatus === 'completed'
             ? {
                 sessionStopwatchStartMs: null,
@@ -1312,12 +1355,43 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
             : {}),
         });
 
-        if (matchedScheduleIdForTasks) {
-          if (finalStatus === 'completed') {
-            void completeGoogleTaskForSchedule(matchedScheduleIdForTasks);
-          } else if (finalStatus === 'did_not_complete') {
-            void deleteGoogleTaskForSchedule(matchedScheduleIdForTasks);
+        const handleTasksFeedback = (res: TasksActionResult) => {
+          if (res.status === 'synced' || res.status === 'no-token') {
+            const nowIso = new Date().toISOString();
+            set({
+              tasksActionToast:
+                res.status === 'synced'
+                  ? { status: 'synced', message: '✓ Synced to Tasks' }
+                  : {
+                      status: 'no-token',
+                      message: '⚠ Not synced (Tasks session expired — tap Master Sync)',
+                    },
+              ...(res.status === 'synced'
+                ? {
+                    lastTasksSync: {
+                      timestamp: nowIso,
+                      status: 'success',
+                      message: finalStatus === 'completed' ? 'Task completed' : 'Task removed',
+                    },
+                  }
+                : {}),
+            });
+            setTimeout(() => set({ tasksActionToast: null }), 3500);
           }
+        };
+
+        if (finalStatus === 'completed') {
+          void completeGoogleTaskForSchedule({
+            scheduleId: matchedScheduleIdForTasks,
+            date: draft.date,
+            workoutName: draft.workoutTitleSnapshot,
+          }).then(handleTasksFeedback);
+        } else if (finalStatus === 'did_not_complete') {
+          void deleteGoogleTaskForSchedule({
+            scheduleId: matchedScheduleIdForTasks,
+            date: draft.date,
+            workoutName: draft.workoutTitleSnapshot,
+          }).then(handleTasksFeedback);
         }
 
         if (state.authUser) {
@@ -1670,6 +1744,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           todayIso,
           schedules: state.schedules,
           presets: state.presets,
+          excludedFromTasksIds: state.excludedFromTasksIds,
           hasCompletedLogFor: (date, item) =>
             get().logs.some(
               (l) =>
@@ -2265,11 +2340,39 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
       removeScheduledItemFromDate: (date, scheduleItemUuid) => {
         const state = get();
         const existing = state.schedules[date]?.items || [];
+        const removedItem = existing.find((i) => i.scheduleItemUuid === scheduleItemUuid);
+        const matchedPreset = removedItem
+          ? state.presets.find((p) => p.presetUuid === removedItem.presetUuid)
+          : undefined;
         get().updateDailySchedule(
           date,
           existing.filter((i) => i.scheduleItemUuid !== scheduleItemUuid)
         );
-        void deleteGoogleTaskForSchedule(scheduleItemUuid);
+        if (!state.excludedFromTasksIds.includes(scheduleItemUuid)) {
+          set({ excludedFromTasksIds: [...state.excludedFromTasksIds, scheduleItemUuid] });
+        }
+        void deleteGoogleTaskForSchedule({
+          scheduleId: scheduleItemUuid,
+          date,
+          workoutName: matchedPreset?.title,
+        }).then((res) => {
+          if (res.status === 'synced' || res.status === 'no-token') {
+            const nowIso = new Date().toISOString();
+            set({
+              tasksActionToast:
+                res.status === 'synced'
+                  ? { status: 'synced', message: '✓ Synced to Tasks' }
+                  : {
+                      status: 'no-token',
+                      message: '⚠ Not synced (Tasks session expired — tap Master Sync)',
+                    },
+              ...(res.status === 'synced'
+                ? { lastTasksSync: { timestamp: nowIso, status: 'success', message: 'Task removed' } }
+                : {}),
+            });
+            setTimeout(() => set({ tasksActionToast: null }), 3500);
+          }
+        });
       },
 
       autoFillSchedule: (programUuid, startDate, endDate, conflictMode) => {
@@ -2398,10 +2501,40 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           logs: state.logs.filter((l) => l.logUuid !== logUuid),
           draftWorkouts: state.draftWorkouts.filter((d) => d.logUuid !== logUuid),
           schedules: nextSchedules,
+          ...(targetLog?.scheduleItemUuid &&
+          !state.excludedFromTasksIds.includes(targetLog.scheduleItemUuid)
+            ? {
+                excludedFromTasksIds: [
+                  ...state.excludedFromTasksIds,
+                  targetLog.scheduleItemUuid,
+                ],
+              }
+            : {}),
         });
 
-        if (targetLog?.scheduleItemUuid) {
-          void deleteGoogleTaskForSchedule(targetLog.scheduleItemUuid);
+        if (targetLog) {
+          void deleteGoogleTaskForSchedule({
+            scheduleId: targetLog.scheduleItemUuid,
+            date: targetLog.date,
+            workoutName: targetLog.workoutTitleSnapshot,
+          }).then((res) => {
+            if (res.status === 'synced' || res.status === 'no-token') {
+              const nowIso = new Date().toISOString();
+              set({
+                tasksActionToast:
+                  res.status === 'synced'
+                    ? { status: 'synced', message: '✓ Synced to Tasks' }
+                    : {
+                        status: 'no-token',
+                        message: '⚠ Not synced (Tasks session expired — tap Master Sync)',
+                      },
+                ...(res.status === 'synced'
+                  ? { lastTasksSync: { timestamp: nowIso, status: 'success', message: 'Task removed' } }
+                  : {}),
+              });
+              setTimeout(() => set({ tasksActionToast: null }), 3500);
+            }
+          });
         }
 
         if (state.authUser) {
@@ -3482,6 +3615,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         sessionStopwatchStartMs: state.sessionStopwatchStartMs,
         sessionStopwatchAccumulatedMs: state.sessionStopwatchAccumulatedMs,
         lastTasksSync: state.lastTasksSync,
+        excludedFromTasksIds: state.excludedFromTasksIds,
       }),
       onRehydrateStorage: () => (rehydratedState, error) => {
         if (error || !rehydratedState) return;

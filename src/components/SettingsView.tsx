@@ -20,6 +20,10 @@ import {
 } from 'lucide-react';
 import { ImportAiNotesPatchModal } from './ImportAiNotesPatchModal';
 import { buildAiCoachExportPayload } from '../utils/aiCoachPatch';
+import {
+  GOOGLE_TASKS_TARGET_LIST_ID,
+  getCachedGoogleTasksToken,
+} from '../lib/googleTasks';
 import { useWorkoutStore } from '../store/useWorkoutStore';
 import { AIImportPayload, DistanceUnit, ThemeMode, WorkoutPreset } from '../types/workout';
 import {
@@ -69,7 +73,11 @@ export const SettingsView: React.FC = () => {
     pushLocalToCloud,
     resetToDemoSeed,
     setActiveTab,
+    lastTasksSync,
+    runGoogleTasksSync,
   } = useWorkoutStore();
+
+  const [isSyncingTasks, setIsSyncingTasks] = useState(false);
 
   const [activeSection, setActiveSection] = useState<
     'sheet_import' | 'ai_drawer' | 'cloud_prefs'
@@ -1158,8 +1166,97 @@ export const SettingsView: React.FC = () => {
               </button>
             </div>
           </div>
+
+          {/* Google Tasks Sync Card */}
+          <div className="bg-white dark:bg-slate-900 rounded-3xl p-5 border border-slate-200/80 dark:border-slate-800 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h3 className="font-display font-bold text-base">Google Tasks Sync</h3>
+                <p className="text-xs text-slate-500">
+                  Two-way sync for today &amp; upcoming 6 days with stale-task cleanup.
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={isSyncingTasks}
+                onClick={async () => {
+                  setIsSyncingTasks(true);
+                  const res = await runGoogleTasksSync(true);
+                  setIsSyncingTasks(false);
+                  if (res.ok) {
+                    showNotice(
+                      `Google Tasks Master Sync complete (${res.pushed} pushed, ${res.pulled} completed)`
+                    );
+                  } else if (res.error) {
+                    showNotice(`Google Tasks sync failed: ${res.error}`);
+                  }
+                }}
+                className="px-3.5 py-2 rounded-2xl bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white text-xs font-bold inline-flex items-center gap-1.5 transition-colors"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSyncingTasks ? 'animate-spin' : ''}`} />
+                {isSyncingTasks ? 'Syncing...' : 'Master Sync'}
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
+              <div className="p-3 rounded-2xl bg-[var(--bg-inset)] border border-[var(--border-subtle)] space-y-0.5">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">
+                  Connection / Token Status
+                </div>
+                <div
+                  className="font-bold"
+                  style={{
+                    color: getCachedGoogleTasksToken()
+                      ? 'var(--accent-sage)'
+                      : 'var(--accent-orange)',
+                  }}
+                >
+                  {getCachedGoogleTasksToken()
+                    ? 'Active (this session)'
+                    : 'Needs authorization on next sync'}
+                </div>
+              </div>
+
+              <div className="p-3 rounded-2xl bg-[var(--bg-inset)] border border-[var(--border-subtle)] space-y-0.5 min-w-0">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">
+                  Target List ID
+                </div>
+                <div className="font-mono text-[11px] text-[var(--text-secondary)] truncate">
+                  {GOOGLE_TASKS_TARGET_LIST_ID}
+                </div>
+              </div>
+            </div>
+
+            <div className="text-xs text-[var(--text-secondary)]">
+              {lastTasksSync ? (
+                <span
+                  style={{
+                    color:
+                      lastTasksSync.status === 'success'
+                        ? 'var(--accent-sage)'
+                        : 'var(--accent-rust)',
+                  }}
+                  className="font-semibold"
+                >
+                  Last sync:{' '}
+                  {new Date(lastTasksSync.timestamp).toLocaleTimeString([], {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })}{' '}
+                  · {lastTasksSync.status === 'success' ? 'Success' : 'Failed'}
+                  {lastTasksSync.message ? ` (${lastTasksSync.message})` : ''}
+                </span>
+              ) : (
+                <span className="text-[var(--text-muted)]">Not synced yet this session.</span>
+              )}
+            </div>
+          </div>
         </div>
       )}
+
+      <div className="pt-2 pb-4 text-center text-[11px] font-mono text-[var(--text-muted)]">
+        Build: {__APP_BUILD__} ({__APP_BUILD_TIME__})
+      </div>
 
       <ImportAiNotesPatchModal
         open={aiNotesModalOpen}

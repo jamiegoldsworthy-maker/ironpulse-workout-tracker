@@ -97,6 +97,7 @@ export const LogView: React.FC = () => {
     timer,
     sessionStopwatchStartMs,
     startSessionStopwatch,
+    tasksActionToast,
   } = useWorkoutStore();
 
   const [collapsedCards, setCollapsedCards] = useState<Record<string, boolean>>({});
@@ -756,6 +757,24 @@ export const LogView: React.FC = () => {
             <CheckCircle2 className="w-4 h-4 shrink-0 text-orange-400 dark:text-white" />
           )}
           <span className="truncate">{toastState.msg}</span>
+        </div>
+      )}
+
+      {tasksActionToast && (
+        <div
+          style={{
+            borderColor:
+              tasksActionToast.status === 'synced'
+                ? 'var(--accent-sage)'
+                : 'var(--accent-orange)',
+            color:
+              tasksActionToast.status === 'synced'
+                ? 'var(--accent-sage)'
+                : 'var(--accent-orange)',
+          }}
+          className="rounded-2xl bg-[var(--bg-card)] border px-3.5 py-2 text-xs font-bold flex items-center gap-2 shadow-xs"
+        >
+          <span>{tasksActionToast.message}</span>
         </div>
       )}
 

@@ -8,9 +8,15 @@ import { DailySchedule, ScheduledItem, WorkoutPreset } from '../types/workout';
 import { shiftIsoDate } from '../utils/calculations';
 
 export const GOOGLE_TASKS_SCOPE = 'https://www.googleapis.com/auth/tasks';
-const PREFERRED_LIST_ID = 'MDUzMDg2ODk5MjYwNjQzOTk5MzY6MDow';
+export const GOOGLE_TASKS_TARGET_LIST_ID = 'MDUzMDg2ODk5MjYwNjQzOTk5MzY6MDow';
+const PREFERRED_LIST_ID = GOOGLE_TASKS_TARGET_LIST_ID;
 const TOKEN_STORAGE_KEY = 'ironpulse_google_tasks_token';
 const TOKEN_EXPIRY_KEY = 'ironpulse_google_tasks_token_exp';
+
+export interface TasksActionResult {
+  status: 'synced' | 'no-token' | 'not-found' | 'error';
+  detail?: string;
+}
 
 let resolvedListIdCache: string | null = null;
 
@@ -189,6 +195,7 @@ export async function syncGoogleTasksTwoWay(params: {
   todayIso: string;
   schedules: Record<string, DailySchedule>;
   presets: WorkoutPreset[];
+  excludedFromTasksIds?: string[];
   hasCompletedLogFor: (date: string, item: ScheduledItem) => boolean;
 }): Promise<{
   ok: boolean;
@@ -228,6 +235,8 @@ export async function syncGoogleTasksTwoWay(params: {
     const pulledReschedules: TaskReschedulePatch[] = [];
     let deletedStaleCount = 0;
 
+    const excludedSet = new Set(params.excludedFromTasksIds || []);
+
     // 1. Inbound: Check tasks in today..today+6 window for completions & reschedules
     for (const task of remoteTasks) {
       const entryId = extractIronPulseEntryId(task.notes);
@@ -236,7 +245,7 @@ export async function syncGoogleTasksTwoWay(params: {
       const localEntry = scheduleByEntryId.get(entryId);
       const taskDueDate = task.due ? task.due.slice(0, 10) : null;
 
-      if (localEntry) {
+      if (localEntry && !excludedSet.has(entryId)) {
         const isInWindow =
           (localEntry.date >= params.todayIso && localEntry.date <= endDate) ||
           (taskDueDate !== null && taskDueDate >= params.todayIso && taskDueDate <= endDate);
@@ -269,8 +278,9 @@ export async function syncGoogleTasksTwoWay(params: {
         }
       }
 
-      // 2. Sweep stale, past-due, orphaned, or reopened past-due IronPulse tasks
+      // 2. Sweep stale, past-due, orphaned, excluded, or reopened past-due IronPulse tasks
       const isOrphaned = !localEntry;
+      const isExcluded = excludedSet.has(entryId);
       const isPastDue =
         (taskDueDate !== null && taskDueDate < params.todayIso) ||
         (localEntry !== undefined && localEntry.date < params.todayIso);
@@ -279,7 +289,7 @@ export async function syncGoogleTasksTwoWay(params: {
         localEntry.item.status !== 'completed' &&
         localEntry.date < params.todayIso;
 
-      if (isOrphaned || isPastDue || isReopenedPastDue) {
+      if (isOrphaned || isExcluded || isPastDue || isReopenedPastDue) {
         const delRes = await tasksFetch(
           `https://tasks.googleapis.com/tasks/v1/lists/${encodeURIComponent(
             listId
@@ -307,6 +317,7 @@ export async function syncGoogleTasksTwoWay(params: {
       const daySch = params.schedules[date];
       for (const item of daySch?.items || []) {
         if (item.status !== 'pending') continue;
+        if (excludedSet.has(item.scheduleItemUuid)) continue;
         const existingTask = taskByEntryId.get(item.scheduleItemUuid);
         if (existingTask?.status === 'completed') continue;
 
@@ -357,16 +368,50 @@ export async function syncGoogleTasksTwoWay(params: {
   }
 }
 
-export async function completeGoogleTaskForSchedule(scheduleId: string): Promise<void> {
+export interface TaskLookupInput {
+  scheduleId?: string;
+  date?: string;
+  workoutName?: string;
+}
+
+function findMatchingTask(
+  tasks: GoogleTaskItem[],
+  lookup: TaskLookupInput
+): GoogleTaskItem | undefined {
+  if (lookup.scheduleId) {
+    const byTag = tasks.find((t) => extractIronPulseEntryId(t.notes) === lookup.scheduleId);
+    if (byTag) return byTag;
+  }
+  if (lookup.date && lookup.workoutName) {
+    const needle = lookup.workoutName.trim().toLowerCase();
+    return tasks.find((t) => {
+      const dueDate = t.due ? t.due.slice(0, 10) : '';
+      return dueDate === lookup.date && (t.title || '').toLowerCase().includes(needle);
+    });
+  }
+  return undefined;
+}
+
+export async function completeGoogleTaskForSchedule(
+  scheduleIdOrLookup: string | TaskLookupInput
+): Promise<TasksActionResult> {
+  const lookup: TaskLookupInput =
+    typeof scheduleIdOrLookup === 'string'
+      ? { scheduleId: scheduleIdOrLookup }
+      : scheduleIdOrLookup;
   try {
     const token = getCachedGoogleTasksToken();
-    if (!token || !scheduleId) return;
+    if (!token) return { status: 'no-token' };
+    if (!lookup.scheduleId && !(lookup.date && lookup.workoutName)) {
+      return { status: 'not-found' };
+    }
     const listId = await resolveTasksListId(token);
     const tasks = await fetchAllTasksInList(listId, token);
-    const match = tasks.find((t) => extractIronPulseEntryId(t.notes) === scheduleId);
-    if (!match || match.status === 'completed') return;
+    const match = findMatchingTask(tasks, lookup);
+    if (!match) return { status: 'not-found' };
+    if (match.status === 'completed') return { status: 'synced' };
 
-    await tasksFetch(
+    const res = await tasksFetch(
       `https://tasks.googleapis.com/tasks/v1/lists/${encodeURIComponent(
         listId
       )}/tasks/${encodeURIComponent(match.id)}`,
@@ -376,29 +421,44 @@ export async function completeGoogleTaskForSchedule(scheduleId: string): Promise
         body: JSON.stringify({ status: 'completed' }),
       }
     );
-  } catch {
-    // Swallow network/auth errors so offline workout completion never fails
+    return res.ok
+      ? { status: 'synced' }
+      : { status: 'error', detail: `HTTP ${res.status}` };
+  } catch (err: any) {
+    return { status: 'error', detail: err?.message || 'Network error' };
   }
 }
 
-export async function deleteGoogleTaskForSchedule(scheduleId: string): Promise<void> {
+export async function deleteGoogleTaskForSchedule(
+  scheduleIdOrLookup: string | TaskLookupInput
+): Promise<TasksActionResult> {
+  const lookup: TaskLookupInput =
+    typeof scheduleIdOrLookup === 'string'
+      ? { scheduleId: scheduleIdOrLookup }
+      : scheduleIdOrLookup;
   try {
     const token = getCachedGoogleTasksToken();
-    if (!token || !scheduleId) return;
+    if (!token) return { status: 'no-token' };
+    if (!lookup.scheduleId && !(lookup.date && lookup.workoutName)) {
+      return { status: 'not-found' };
+    }
     const listId = await resolveTasksListId(token);
     const tasks = await fetchAllTasksInList(listId, token);
-    const match = tasks.find((t) => extractIronPulseEntryId(t.notes) === scheduleId);
-    if (!match) return;
+    const match = findMatchingTask(tasks, lookup);
+    if (!match) return { status: 'not-found' };
 
-    await tasksFetch(
+    const res = await tasksFetch(
       `https://tasks.googleapis.com/tasks/v1/lists/${encodeURIComponent(
         listId
       )}/tasks/${encodeURIComponent(match.id)}`,
       token,
       { method: 'DELETE' }
     );
-  } catch {
-    // Swallow network/auth errors silently
+    return res.ok
+      ? { status: 'synced' }
+      : { status: 'error', detail: `HTTP ${res.status}` };
+  } catch (err: any) {
+    return { status: 'error', detail: err?.message || 'Network error' };
   }
 }
 

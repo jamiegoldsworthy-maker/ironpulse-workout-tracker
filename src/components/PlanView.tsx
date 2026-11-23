@@ -85,6 +85,7 @@ export const PlanView: React.FC = () => {
     clearFutureScheduledWorkoutsForProgram,
     autoFillSchedule,
     lastTasksSync,
+    tasksActionToast,
     runGoogleTasksSync,
   } = useWorkoutStore();
 
@@ -429,6 +430,24 @@ export const PlanView: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {tasksActionToast && (
+        <div
+          style={{
+            borderColor:
+              tasksActionToast.status === 'synced'
+                ? 'var(--accent-sage)'
+                : 'var(--accent-orange)',
+            color:
+              tasksActionToast.status === 'synced'
+                ? 'var(--accent-sage)'
+                : 'var(--accent-orange)',
+          }}
+          className="rounded-2xl bg-[var(--bg-card)] border px-3.5 py-2 text-xs font-bold flex items-center gap-2 shadow-xs"
+        >
+          <span>{tasksActionToast.message}</span>
+        </div>
+      )}
 
       {/* SUB-TAB 0: UPCOMING AGENDA VIEW (DEFAULT) */}
       {subTab === 'upcoming' ? (
