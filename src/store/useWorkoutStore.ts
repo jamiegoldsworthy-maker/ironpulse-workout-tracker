@@ -30,6 +30,7 @@ import { AiNotesPatchPayload } from '../utils/aiCoachPatch';
 import {
   PendingTaskCompletion,
   TasksActionResult,
+  checkCompletedTasksInbound as fetchCompletedTasksInbound,
   completeGoogleTaskForSchedule,
   deleteGoogleTaskForSchedule,
   syncGoogleTasksTwoWay,
@@ -194,6 +195,7 @@ interface WorkoutStoreState {
   resetSessionStopwatch: () => void;
 
   // Google Tasks Sync Actions
+  checkCompletedTasksInbound: () => Promise<void>;
   runGoogleTasksSync: (interactive: boolean) => Promise<{
     ok: boolean;
     pulled: number;
@@ -1734,6 +1736,27 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
 
       resetSessionStopwatch: () => {
         set({ sessionStopwatchStartMs: null, sessionStopwatchAccumulatedMs: 0 });
+      },
+
+      checkCompletedTasksInbound: async () => {
+        const state = get();
+        const todayIso = getTodayIsoDate();
+        const res = await fetchCompletedTasksInbound({
+          todayIso,
+          schedules: state.schedules,
+          presets: state.presets,
+          excludedFromTasksIds: state.excludedFromTasksIds,
+          hasCompletedLogFor: (date, item) =>
+            get().logs.some(
+              (l) =>
+                l.status === 'completed' &&
+                (l.scheduleItemUuid === item.scheduleItemUuid ||
+                  (l.date === date && l.presetUuid === item.presetUuid))
+            ),
+        });
+        if (res.ok && res.pulledCompleted.length > 0) {
+          set({ pendingTaskCompletions: res.pulledCompleted });
+        }
       },
 
       runGoogleTasksSync: async (interactive) => {

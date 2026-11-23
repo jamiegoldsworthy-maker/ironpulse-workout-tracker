@@ -19,6 +19,7 @@ export interface TasksActionResult {
 }
 
 let resolvedListIdCache: string | null = null;
+let isSyncingTasks = false;
 
 export interface GoogleTaskItem {
   id: string;
@@ -190,6 +191,81 @@ function buildTaskNotes(item: ScheduledItem, preset?: WorkoutPreset): string {
   return lines.join('\n');
 }
 
+export async function checkCompletedTasksInbound(params: {
+  todayIso: string;
+  schedules: Record<string, DailySchedule>;
+  presets: WorkoutPreset[];
+  excludedFromTasksIds?: string[];
+  hasCompletedLogFor: (date: string, item: ScheduledItem) => boolean;
+}): Promise<{
+  ok: boolean;
+  skipped?: boolean;
+  pulledCompleted: PendingTaskCompletion[];
+}> {
+  if (isSyncingTasks) {
+    return { ok: false, skipped: true, pulledCompleted: [] };
+  }
+  const token = getCachedGoogleTasksToken();
+  if (!token) {
+    return { ok: false, skipped: true, pulledCompleted: [] };
+  }
+
+  const scheduleByEntryId = new Map<string, { date: string; item: ScheduledItem }>();
+  for (const [date, daySch] of Object.entries(params.schedules)) {
+    for (const item of daySch?.items || []) {
+      scheduleByEntryId.set(item.scheduleItemUuid, { date, item });
+    }
+  }
+  if (scheduleByEntryId.size === 0) {
+    return { ok: false, skipped: true, pulledCompleted: [] };
+  }
+
+  isSyncingTasks = true;
+  try {
+    const listId = await resolveTasksListId(token);
+    const remoteTasks = await fetchAllTasksInList(listId, token);
+    const endDate = shiftIsoDate(params.todayIso, 6);
+    const excludedSet = new Set(params.excludedFromTasksIds || []);
+    const pulledCompleted: PendingTaskCompletion[] = [];
+
+    for (const task of remoteTasks) {
+      const entryId = extractIronPulseEntryId(task.notes);
+      if (!entryId || excludedSet.has(entryId)) continue;
+      const localEntry = scheduleByEntryId.get(entryId);
+      if (!localEntry) continue;
+
+      const taskDueDate = task.due ? task.due.slice(0, 10) : null;
+      const isInWindow =
+        (localEntry.date >= params.todayIso && localEntry.date <= endDate) ||
+        (taskDueDate !== null && taskDueDate >= params.todayIso && taskDueDate <= endDate);
+
+      if (
+        isInWindow &&
+        task.status === 'completed' &&
+        localEntry.item.status !== 'completed' &&
+        !params.hasCompletedLogFor(taskDueDate || localEntry.date, localEntry.item)
+      ) {
+        const matchedPreset = params.presets.find(
+          (p) => p.presetUuid === localEntry.item.presetUuid
+        );
+        pulledCompleted.push({
+          scheduleItemUuid: entryId,
+          date: taskDueDate || localEntry.date,
+          presetUuid: localEntry.item.presetUuid,
+          workoutTitle: matchedPreset?.title || 'Scheduled Workout',
+          slotRole: localEntry.item.slotRole || 'Primary',
+        });
+      }
+    }
+
+    return { ok: true, pulledCompleted };
+  } catch {
+    return { ok: false, pulledCompleted: [] };
+  } finally {
+    isSyncingTasks = false;
+  }
+}
+
 export async function syncGoogleTasksTwoWay(params: {
   interactive: boolean;
   todayIso: string;
@@ -206,6 +282,17 @@ export async function syncGoogleTasksTwoWay(params: {
   deletedStaleCount: number;
   error?: string;
 }> {
+  if (isSyncingTasks) {
+    return {
+      ok: false,
+      skipped: true,
+      pulledCompleted: [],
+      pulledReschedules: [],
+      pushedCount: 0,
+      deletedStaleCount: 0,
+    };
+  }
+  isSyncingTasks = true;
   try {
     const token = await acquireGoogleTasksToken(params.interactive);
     if (!token) {
@@ -236,6 +323,7 @@ export async function syncGoogleTasksTwoWay(params: {
     let deletedStaleCount = 0;
 
     const excludedSet = new Set(params.excludedFromTasksIds || []);
+    const hasHydratedSchedules = scheduleByEntryId.size > 0;
 
     // 1. Inbound: Check tasks in today..today+6 window for completions & reschedules
     for (const task of remoteTasks) {
@@ -278,18 +366,11 @@ export async function syncGoogleTasksTwoWay(params: {
         }
       }
 
-      // 2. Sweep stale, past-due, orphaned, excluded, or reopened past-due IronPulse tasks
-      const isOrphaned = !localEntry;
+      // 2. Sweep ONLY past-due tasks (due < today) or explicitly excluded tasks (never delete unhydrated/unknown tasks)
       const isExcluded = excludedSet.has(entryId);
-      const isPastDue =
-        (taskDueDate !== null && taskDueDate < params.todayIso) ||
-        (localEntry !== undefined && localEntry.date < params.todayIso);
-      const isReopenedPastDue =
-        localEntry !== undefined &&
-        localEntry.item.status !== 'completed' &&
-        localEntry.date < params.todayIso;
+      const isPastDue = taskDueDate !== null && taskDueDate < params.todayIso;
 
-      if (isOrphaned || isExcluded || isPastDue || isReopenedPastDue) {
+      if (hasHydratedSchedules && (isExcluded || isPastDue)) {
         const delRes = await tasksFetch(
           `https://tasks.googleapis.com/tasks/v1/lists/${encodeURIComponent(
             listId
@@ -365,6 +446,8 @@ export async function syncGoogleTasksTwoWay(params: {
       deletedStaleCount: 0,
       error: err?.message || 'Google Tasks sync failed',
     };
+  } finally {
+    isSyncingTasks = false;
   }
 }
 

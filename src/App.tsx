@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { Layout } from './components/Layout';
 import { LogView } from './components/LogView';
 import { PlanView } from './components/PlanView';
@@ -14,10 +14,12 @@ export const App: React.FC = () => {
     activeTab,
     meta,
     authUser,
+    hasCompletedCloudBootstrap,
     setAuthUser,
     startRealtimeSync,
-    runGoogleTasksSync,
+    checkCompletedTasksInbound,
   } = useWorkoutStore();
+  const hasCheckedTasksInboundRef = useRef(false);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -99,16 +101,13 @@ export const App: React.FC = () => {
   }, [authUser?.uid, startRealtimeSync]);
 
   useEffect(() => {
-    if (!authUser?.uid) return;
-    const silentPull = () => {
-      if (getCachedGoogleTasksToken()) {
-        void runGoogleTasksSync(false);
-      }
-    };
-    silentPull();
-    window.addEventListener('focus', silentPull);
-    return () => window.removeEventListener('focus', silentPull);
-  }, [authUser?.uid, runGoogleTasksSync]);
+    if (!authUser?.uid || !hasCompletedCloudBootstrap) return;
+    if (hasCheckedTasksInboundRef.current) return;
+    hasCheckedTasksInboundRef.current = true;
+    if (getCachedGoogleTasksToken()) {
+      void checkCompletedTasksInbound();
+    }
+  }, [authUser?.uid, hasCompletedCloudBootstrap, checkCompletedTasksInbound]);
 
   return (
     <Layout>
