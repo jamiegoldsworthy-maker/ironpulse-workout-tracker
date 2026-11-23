@@ -27,8 +27,13 @@ export interface GoogleTaskItem {
   notes?: string;
   status?: 'needsAction' | 'completed';
   deleted?: boolean;
+  hidden?: boolean;
   due?: string;
   updated?: string;
+}
+
+function isActiveCompletedTask(task: GoogleTaskItem): boolean {
+  return task.status === 'completed' && !task.deleted && !task.hidden;
 }
 
 export interface PendingTaskCompletion {
@@ -230,7 +235,7 @@ export async function checkCompletedTasksInbound(params: {
     const pulledCompleted: PendingTaskCompletion[] = [];
 
     for (const task of remoteTasks) {
-      if (task.deleted) continue;
+      if (task.deleted || task.hidden) continue;
       const entryId = extractIronPulseEntryId(task.notes);
       if (!entryId || excludedSet.has(entryId)) continue;
       const localEntry = scheduleByEntryId.get(entryId);
@@ -243,8 +248,7 @@ export async function checkCompletedTasksInbound(params: {
 
       if (
         isInWindow &&
-        task.status === 'completed' &&
-        !task.deleted &&
+        isActiveCompletedTask(task) &&
         localEntry.item.status !== 'completed' &&
         !params.hasCompletedLogFor(taskDueDate || localEntry.date, localEntry.item)
       ) {
@@ -330,7 +334,7 @@ export async function syncGoogleTasksTwoWay(params: {
 
     // 1. Inbound: Check tasks in today..today+6 window for completions & reschedules
     for (const task of remoteTasks) {
-      if (task.deleted) continue;
+      if (task.deleted || task.hidden) continue;
       const entryId = extractIronPulseEntryId(task.notes);
       if (!entryId) continue;
 
@@ -352,7 +356,7 @@ export async function syncGoogleTasksTwoWay(params: {
           }
 
           if (
-            task.status === 'completed' &&
+            isActiveCompletedTask(task) &&
             localEntry.item.status !== 'completed' &&
             !params.hasCompletedLogFor(taskDueDate || localEntry.date, localEntry.item)
           ) {

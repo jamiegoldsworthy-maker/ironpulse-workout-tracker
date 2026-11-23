@@ -109,6 +109,7 @@ interface WorkoutStoreState {
   // Google Tasks Sync
   pendingTaskCompletions: PendingTaskCompletion[];
   excludedFromTasksIds: string[];
+  dismissedTaskCompletionIds: string[];
   tasksActionToast: { status: 'synced' | 'no-token'; message: string } | null;
   lastTasksSync: {
     timestamp: string;
@@ -629,6 +630,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
       sessionStopwatchAccumulatedMs: 0,
       pendingTaskCompletions: [],
       excludedFromTasksIds: [],
+      dismissedTaskCompletionIds: [],
       tasksActionToast: null,
       lastTasksSync: null,
 
@@ -1353,6 +1355,9 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
                 pendingTaskCompletions: state.pendingTaskCompletions.filter(
                   (p) => p.scheduleItemUuid !== matchedScheduleIdForTasks
                 ),
+                dismissedTaskCompletionIds: state.dismissedTaskCompletionIds.filter(
+                  (id) => id !== matchedScheduleIdForTasks
+                ),
               }
             : {}),
         });
@@ -1755,7 +1760,12 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
             ),
         });
         if (res.ok) {
-          set({ pendingTaskCompletions: res.pulledCompleted });
+          const dismissedSet = new Set(get().dismissedTaskCompletionIds);
+          set({
+            pendingTaskCompletions: res.pulledCompleted.filter(
+              (p) => !dismissedSet.has(p.scheduleItemUuid)
+            ),
+          });
         }
       },
 
@@ -1828,9 +1838,12 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           modifiedDates.add(r.toDate);
         }
 
+        const dismissedSet = new Set(get().dismissedTaskCompletionIds);
         set({
           schedules: nextSchedules,
-          pendingTaskCompletions: res.pulledCompleted,
+          pendingTaskCompletions: res.pulledCompleted.filter(
+            (p) => !dismissedSet.has(p.scheduleItemUuid)
+          ),
           lastTasksSync: {
             timestamp: nowIso,
             status: 'success',
@@ -1862,6 +1875,9 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           pendingTaskCompletions: s.pendingTaskCompletions.filter(
             (p) => p.scheduleItemUuid !== scheduleItemUuid
           ),
+          dismissedTaskCompletionIds: s.dismissedTaskCompletionIds.includes(scheduleItemUuid)
+            ? s.dismissedTaskCompletionIds
+            : [...s.dismissedTaskCompletionIds, scheduleItemUuid],
         }));
       },
 
@@ -3639,6 +3655,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         sessionStopwatchAccumulatedMs: state.sessionStopwatchAccumulatedMs,
         lastTasksSync: state.lastTasksSync,
         excludedFromTasksIds: state.excludedFromTasksIds,
+        dismissedTaskCompletionIds: state.dismissedTaskCompletionIds,
       }),
       onRehydrateStorage: () => (rehydratedState, error) => {
         if (error || !rehydratedState) return;
