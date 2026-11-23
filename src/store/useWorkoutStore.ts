@@ -1754,7 +1754,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
                   (l.date === date && l.presetUuid === item.presetUuid))
             ),
         });
-        if (res.ok && res.pulledCompleted.length > 0) {
+        if (res.ok) {
           set({ pendingTaskCompletions: res.pulledCompleted });
         }
       },

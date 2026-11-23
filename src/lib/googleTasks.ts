@@ -26,6 +26,7 @@ export interface GoogleTaskItem {
   title?: string;
   notes?: string;
   status?: 'needsAction' | 'completed';
+  deleted?: boolean;
   due?: string;
   updated?: string;
 }
@@ -229,6 +230,7 @@ export async function checkCompletedTasksInbound(params: {
     const pulledCompleted: PendingTaskCompletion[] = [];
 
     for (const task of remoteTasks) {
+      if (task.deleted) continue;
       const entryId = extractIronPulseEntryId(task.notes);
       if (!entryId || excludedSet.has(entryId)) continue;
       const localEntry = scheduleByEntryId.get(entryId);
@@ -242,6 +244,7 @@ export async function checkCompletedTasksInbound(params: {
       if (
         isInWindow &&
         task.status === 'completed' &&
+        !task.deleted &&
         localEntry.item.status !== 'completed' &&
         !params.hasCompletedLogFor(taskDueDate || localEntry.date, localEntry.item)
       ) {
@@ -327,6 +330,7 @@ export async function syncGoogleTasksTwoWay(params: {
 
     // 1. Inbound: Check tasks in today..today+6 window for completions & reschedules
     for (const task of remoteTasks) {
+      if (task.deleted) continue;
       const entryId = extractIronPulseEntryId(task.notes);
       if (!entryId) continue;
 
@@ -462,12 +466,15 @@ function findMatchingTask(
   lookup: TaskLookupInput
 ): GoogleTaskItem | undefined {
   if (lookup.scheduleId) {
-    const byTag = tasks.find((t) => extractIronPulseEntryId(t.notes) === lookup.scheduleId);
+    const byTag = tasks.find(
+      (t) => !t.deleted && extractIronPulseEntryId(t.notes) === lookup.scheduleId
+    );
     if (byTag) return byTag;
   }
   if (lookup.date && lookup.workoutName) {
     const needle = lookup.workoutName.trim().toLowerCase();
     return tasks.find((t) => {
+      if (t.deleted) return false;
       const dueDate = t.due ? t.due.slice(0, 10) : '';
       return dueDate === lookup.date && (t.title || '').toLowerCase().includes(needle);
     });
