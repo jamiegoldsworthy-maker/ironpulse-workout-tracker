@@ -170,7 +170,20 @@ export async function signInWithGoogle(): Promise<User | null> {
   const { auth } = initFirebaseServices();
   if (!auth) throw new Error('Firebase is not configured yet. Add your Firebase config in Settings.');
   const provider = new GoogleAuthProvider();
+  provider.addScope('https://www.googleapis.com/auth/tasks');
   const result = await signInWithPopup(auth, provider);
+  const credential = GoogleAuthProvider.credentialFromResult(result);
+  if (credential?.accessToken) {
+    try {
+      sessionStorage.setItem('ironpulse_google_tasks_token', credential.accessToken);
+      sessionStorage.setItem(
+        'ironpulse_google_tasks_token_exp',
+        String(Date.now() + 3300 * 1000)
+      );
+    } catch {
+      // ignore
+    }
+  }
   return result.user;
 }
 

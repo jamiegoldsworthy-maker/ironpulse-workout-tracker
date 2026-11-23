@@ -82,9 +82,16 @@ export const LiveTimerBar: React.FC = () => {
     tickTimer,
     setDefaultAutoStartRestTimer,
     setTimerSoundEnabled,
+    sessionStopwatchStartMs,
+    sessionStopwatchAccumulatedMs,
+    startSessionStopwatch,
+    pauseSessionStopwatch,
+    resetSessionStopwatch,
   } = useWorkoutStore();
 
   const soundEnabled = meta.timerSoundEnabled !== false;
+  const [drawerTab, setDrawerTab] = useState<'rest' | 'circuit' | 'stopwatch'>(timer.mode);
+  const [stopwatchNowMs, setStopwatchNowMs] = useState(() => Date.now());
   const [customRestInput, setCustomRestInput] = useState('75');
   const [circuitRoundsInput, setCircuitRoundsInput] = useState(String(timer.totalRounds ?? 15));
   const [circuitWorkInput, setCircuitWorkInput] = useState(String(timer.workSec ?? 60));
@@ -94,6 +101,35 @@ export const LiveTimerBar: React.FC = () => {
   const parseOrZero = (raw: string): number => {
     const parsed = parseInt(raw, 10);
     return Number.isNaN(parsed) ? 0 : Math.max(0, parsed);
+  };
+
+  useEffect(() => {
+    if (drawerTab !== 'stopwatch') {
+      setDrawerTab(timer.mode);
+    }
+  }, [timer.mode]);
+
+  useEffect(() => {
+    if (sessionStopwatchStartMs === null) return;
+    setStopwatchNowMs(Date.now());
+    const id = setInterval(() => setStopwatchNowMs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [sessionStopwatchStartMs]);
+
+  const totalStopwatchMs =
+    sessionStopwatchAccumulatedMs +
+    (sessionStopwatchStartMs !== null ? Math.max(0, stopwatchNowMs - sessionStopwatchStartMs) : 0);
+  const totalStopwatchSec = Math.floor(totalStopwatchMs / 1000);
+  const stopwatchActive = sessionStopwatchStartMs !== null || sessionStopwatchAccumulatedMs > 0;
+
+  const formatStopwatch = (sec: number): string => {
+    const hrs = Math.floor(sec / 3600);
+    const mins = Math.floor((sec % 3600) / 60);
+    const rem = sec % 60;
+    if (hrs > 0) {
+      return `${hrs}:${String(mins).padStart(2, '0')}:${String(rem).padStart(2, '0')}`;
+    }
+    return `${String(mins).padStart(2, '0')}:${String(rem).padStart(2, '0')}`;
   };
 
   useEffect(() => {
@@ -245,6 +281,15 @@ export const LiveTimerBar: React.FC = () => {
                     )}
                   </span>
                 )}
+
+                {stopwatchActive && (
+                  <span
+                    title="Workout session stopwatch"
+                    className="ml-1 px-1.5 py-0.5 rounded-md bg-[var(--bg-inset)] border border-[var(--border-subtle)] text-[10px] font-mono font-bold text-[var(--accent-orange)] tabular-nums shrink-0"
+                  >
+                    ⏱ {totalStopwatchSec >= 60 ? `${Math.floor(totalStopwatchSec / 60)}m` : `${totalStopwatchSec}s`}
+                  </span>
+                )}
               </div>
             </div>
 
@@ -344,34 +389,49 @@ export const LiveTimerBar: React.FC = () => {
           {timer.isExpanded && (
             <div className="px-4 pb-4 pt-2 border-t border-black/10 dark:border-white/10 bg-slate-50/95 dark:bg-slate-900/95 text-slate-900 dark:text-slate-100 space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="inline-flex rounded-xl bg-slate-200/80 dark:bg-slate-800 p-1">
+                <div className="inline-flex rounded-xl bg-[var(--bg-inset)] border border-[var(--border-subtle)] p-1">
                   <button
                     type="button"
-                    onClick={() => startRestTimer(60)}
+                    onClick={() => {
+                      setDrawerTab('rest');
+                      startRestTimer(60);
+                    }}
                     className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
-                      timer.mode === 'rest'
-                        ? 'bg-white dark:bg-slate-900 text-orange-600 shadow-sm'
-                        : 'text-slate-600 dark:text-slate-400'
+                      drawerTab === 'rest'
+                        ? 'bg-[var(--bg-card)] text-[var(--accent-orange)] shadow-sm'
+                        : 'text-[var(--text-secondary)]'
                     }`}
                   >
                     Rest Timer
                   </button>
                   <button
                     type="button"
-                    onClick={() =>
+                    onClick={() => {
+                      setDrawerTab('circuit');
                       startCircuitTimer(
                         parseOrZero(circuitRoundsInput),
                         parseOrZero(circuitWorkInput),
                         parseOrZero(circuitRestInput)
-                      )
-                    }
+                      );
+                    }}
                     className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
-                      timer.mode === 'circuit'
-                        ? 'bg-white dark:bg-slate-900 text-orange-600 shadow-sm'
-                        : 'text-slate-600 dark:text-slate-400'
+                      drawerTab === 'circuit'
+                        ? 'bg-[var(--bg-card)] text-[var(--accent-orange)] shadow-sm'
+                        : 'text-[var(--text-secondary)]'
                     }`}
                   >
                     Circuit / EMOM
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDrawerTab('stopwatch')}
+                    className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
+                      drawerTab === 'stopwatch'
+                        ? 'bg-[var(--bg-card)] text-[var(--accent-orange)] shadow-sm'
+                        : 'text-[var(--text-secondary)]'
+                    }`}
+                  >
+                    Stopwatch
                   </button>
                 </div>
 
@@ -405,8 +465,53 @@ export const LiveTimerBar: React.FC = () => {
                 </div>
               </div>
 
+              {/* Stopwatch Panel */}
+              {drawerTab === 'stopwatch' && (
+                <div className="p-3 rounded-2xl bg-[var(--bg-inset)] border border-[var(--border-card)] flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">
+                      Workout Session Elapsed
+                    </div>
+                    <div className="font-mono text-2xl font-extrabold tabular-nums text-[var(--text-primary)]">
+                      {formatStopwatch(totalStopwatchSec)}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        sessionStopwatchStartMs !== null
+                          ? pauseSessionStopwatch()
+                          : startSessionStopwatch()
+                      }
+                      className="px-3.5 py-2 rounded-xl bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold inline-flex items-center gap-1.5 transition-colors"
+                    >
+                      {sessionStopwatchStartMs !== null ? (
+                        <>
+                          <Pause className="w-3.5 h-3.5" />
+                          Pause
+                        </>
+                      ) : (
+                        <>
+                          <Play className="w-3.5 h-3.5" />
+                          Start
+                        </>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={resetSessionStopwatch}
+                      className="px-3 py-2 rounded-xl bg-[var(--bg-card)] border border-[var(--border-card)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] text-xs font-bold inline-flex items-center gap-1 transition-colors"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      Reset
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Rest Presets (only shown in Rest Timer mode) */}
-              {timer.mode === 'rest' && (
+              {drawerTab === 'rest' && (
               <div className="space-y-1.5">
                 <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
                   Quick Rest Presets
@@ -457,7 +562,7 @@ export const LiveTimerBar: React.FC = () => {
               )}
 
               {/* Circuit / EMOM Builder (only shown in Circuit / EMOM mode) */}
-              {timer.mode === 'circuit' && (
+              {drawerTab === 'circuit' && (
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">

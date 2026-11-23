@@ -19,6 +19,7 @@ import {
   Copy,
   CalendarX,
   ClipboardPaste,
+  RefreshCw,
 } from 'lucide-react';
 import { ImportAiNotesPatchModal } from './ImportAiNotesPatchModal';
 import { buildAiCoachExportPayload } from '../utils/aiCoachPatch';
@@ -83,7 +84,11 @@ export const PlanView: React.FC = () => {
     deleteProgram,
     clearFutureScheduledWorkoutsForProgram,
     autoFillSchedule,
+    lastTasksSync,
+    runGoogleTasksSync,
   } = useWorkoutStore();
+
+  const [isSyncingTasks, setIsSyncingTasks] = useState(false);
 
   const isMobile = useIsMobileView();
   const todayIso = getTodayIsoDate();
@@ -380,6 +385,48 @@ export const PlanView: React.FC = () => {
             <Plus className="w-3.5 h-3.5" />
             New
           </button>
+
+          <div className="flex flex-col items-end shrink-0">
+            <button
+              type="button"
+              disabled={isSyncingTasks}
+              onClick={async () => {
+                setIsSyncingTasks(true);
+                const res = await runGoogleTasksSync(true);
+                setIsSyncingTasks(false);
+                if (res.ok) {
+                  triggerNotice(
+                    `Google Tasks synced: ${res.pushed} pushed, ${res.pulled} completed, ${res.rescheduled} moved`
+                  );
+                } else if (res.error) {
+                  triggerNotice(`Tasks sync failed: ${res.error}`);
+                }
+              }}
+              title="Two-way sync upcoming 7 days with Google Tasks"
+              className="px-2.5 py-1.5 rounded-xl bg-[var(--bg-inset)] border border-[var(--border-card)] text-[var(--text-primary)] hover:border-[var(--accent-orange)] text-xs font-bold inline-flex items-center gap-1.5 transition-colors disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 text-[var(--accent-sage)] ${isSyncingTasks ? 'animate-spin' : ''}`} />
+              <span>{isSyncingTasks ? 'Syncing...' : 'Sync Tasks'}</span>
+            </button>
+            {lastTasksSync && (
+              <span
+                className="text-[10px] font-medium mt-0.5 tabular-nums"
+                style={{
+                  color:
+                    lastTasksSync.status === 'success'
+                      ? 'var(--accent-sage)'
+                      : 'var(--accent-rust)',
+                }}
+              >
+                Last sync:{' '}
+                {new Date(lastTasksSync.timestamp).toLocaleTimeString([], {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })}{' '}
+                · {lastTasksSync.status === 'success' ? 'Success' : 'Failed'}
+              </span>
+            )}
+          </div>
         </div>
       </div>
 

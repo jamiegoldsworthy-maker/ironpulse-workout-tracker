@@ -231,6 +231,8 @@ export interface WorkoutLog {
   sessionNotes?: string;
   totalSessionVolumeKg: number;
   durationSec?: number;
+  durationMinutes?: number;
+  elapsedSeconds?: number;
   exerciseUuids: string[];
   exercises: LoggedExercise[];
   createdAt: string;

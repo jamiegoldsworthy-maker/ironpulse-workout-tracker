@@ -95,6 +95,8 @@ export const LogView: React.FC = () => {
     upsertPreset,
     openPresetEditor,
     timer,
+    sessionStopwatchStartMs,
+    startSessionStopwatch,
   } = useWorkoutStore();
 
   const [collapsedCards, setCollapsedCards] = useState<Record<string, boolean>>({});
@@ -612,6 +614,10 @@ export const LogView: React.FC = () => {
       nextExs[exIdx] = targetEx;
       return { ...curr, exercises: nextExs };
     });
+
+    if (reps > 0 && sessionStopwatchStartMs === null) {
+      startSessionStopwatch();
+    }
 
     const currentEx = draft.exercises[exIdx];
     const nextEx = draft.exercises[exIdx + 1];

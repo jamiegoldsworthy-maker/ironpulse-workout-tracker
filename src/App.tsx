@@ -7,9 +7,17 @@ import { HistoryView } from './components/HistoryView';
 import { SettingsView } from './components/SettingsView';
 import { useWorkoutStore } from './store/useWorkoutStore';
 import { initFirebaseServices, subscribeToAuthChanges } from './services/firebase';
+import { getCachedGoogleTasksToken } from './lib/googleTasks';
 
 export const App: React.FC = () => {
-  const { activeTab, meta, authUser, setAuthUser, startRealtimeSync } = useWorkoutStore();
+  const {
+    activeTab,
+    meta,
+    authUser,
+    setAuthUser,
+    startRealtimeSync,
+    runGoogleTasksSync,
+  } = useWorkoutStore();
 
   useEffect(() => {
     const root = document.documentElement;
@@ -89,6 +97,18 @@ export const App: React.FC = () => {
     const stopRealtime = startRealtimeSync(authUser.uid);
     return () => stopRealtime();
   }, [authUser?.uid, startRealtimeSync]);
+
+  useEffect(() => {
+    if (!authUser?.uid) return;
+    const silentPull = () => {
+      if (getCachedGoogleTasksToken()) {
+        void runGoogleTasksSync(false);
+      }
+    };
+    silentPull();
+    window.addEventListener('focus', silentPull);
+    return () => window.removeEventListener('focus', silentPull);
+  }, [authUser?.uid, runGoogleTasksSync]);
 
   return (
     <Layout>
