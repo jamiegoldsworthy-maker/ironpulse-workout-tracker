@@ -26,6 +26,7 @@ import { buildAiCoachExportPayload } from '../utils/aiCoachPatch';
 import { useWorkoutStore } from '../store/useWorkoutStore';
 import { ProgramDayTemplate, WorkoutProgram } from '../types/workout';
 import {
+  formatLocalIsoDate,
   formatReadableDate,
   getTodayIsoDate,
   shiftIsoDate,
@@ -59,11 +60,8 @@ function buildMonthCalendarGrid(year: number, monthZeroIndexed: number): Array<{
       gridStartDate.getMonth(),
       gridStartDate.getDate() + i
     );
-    const y = dt.getFullYear();
-    const m = String(dt.getMonth() + 1).padStart(2, '0');
-    const d = String(dt.getDate()).padStart(2, '0');
     cells.push({
-      isoDate: `${y}-${m}-${d}`,
+      isoDate: formatLocalIsoDate(dt),
       dayNum: dt.getDate(),
       inCurrentMonth: dt.getMonth() === monthZeroIndexed,
     });

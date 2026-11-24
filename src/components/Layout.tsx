@@ -20,7 +20,12 @@ import {
   RefreshCw,
   CheckCircle2,
 } from 'lucide-react';
-import { useWorkoutStore } from '../store/useWorkoutStore';
+import {
+  AppTab,
+  parseAppTab,
+  persistActiveTab,
+  useWorkoutStore,
+} from '../store/useWorkoutStore';
 import { LiveTimerBar } from './LiveTimerBar';
 
 interface LayoutProps {
@@ -28,10 +33,10 @@ interface LayoutProps {
 }
 
 const NAV_ITEMS: Array<{
-  id: 'log' | 'plan' | 'library' | 'history' | 'settings';
+  id: AppTab;
   label: string;
   tooltip: string;
-  icon: any;
+  icon: React.ComponentType<{ className?: string }>;
 }> = [
   { id: 'log', label: 'Log', tooltip: 'Log workouts on the gym floor', icon: Dumbbell },
   { id: 'plan', label: 'Plan', tooltip: 'Calendar schedule & programming', icon: Calendar },
@@ -39,6 +44,32 @@ const NAV_ITEMS: Array<{
   { id: 'history', label: 'History', tooltip: 'Progress charts & past sessions', icon: BarChart3 },
   { id: 'settings', label: 'Settings', tooltip: 'Imports, AI sync & app settings', icon: Settings },
 ];
+
+const TAB_ORDER: readonly AppTab[] = NAV_ITEMS.map((item) => item.id);
+
+function isSwipeBlockedTarget(target: EventTarget | null, boundary: HTMLElement | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (
+    target.closest(
+      '[data-no-swipe], input, textarea, select, [role="slider"], [contenteditable="true"]'
+    )
+  ) {
+    return true;
+  }
+  let node: HTMLElement | null = target;
+  while (node && node !== boundary) {
+    const style = window.getComputedStyle(node);
+    const overflowX = style.overflowX;
+    if (
+      (overflowX === 'auto' || overflowX === 'scroll') &&
+      node.scrollWidth > node.clientWidth + 4
+    ) {
+      return true;
+    }
+    node = node.parentElement;
+  }
+  return false;
+}
 
 export const Layout: React.FC<LayoutProps> = ({ children }) => {
   const {
@@ -69,6 +100,62 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
 
   const [cogOpen, setCogOpen] = useState(false);
   const cogRef = useRef<HTMLDivElement>(null);
+  const mainRef = useRef<HTMLElement>(null);
+  const swipeStartRef = useRef<{ x: number; y: number } | null>(null);
+  const tabTransitionRef = useRef<{ prevTab: AppTab; direction: 'forward' | 'backward' | null }>({
+    prevTab: activeTab,
+    direction: null,
+  });
+
+  if (tabTransitionRef.current.prevTab !== activeTab) {
+    const prevIdx = TAB_ORDER.indexOf(tabTransitionRef.current.prevTab);
+    const nextIdx = TAB_ORDER.indexOf(activeTab);
+    tabTransitionRef.current = {
+      prevTab: activeTab,
+      direction: nextIdx > prevIdx ? 'forward' : 'backward',
+    };
+  }
+  const slideDirection = tabTransitionRef.current.direction;
+
+  // Mirror activeTab to hash/localStorage on mount & respond to browser hashchange
+  useEffect(() => {
+    persistActiveTab(activeTab);
+    const handleHashChange = () => {
+      const parsed = parseAppTab(window.location.hash);
+      if (parsed && parsed !== useWorkoutStore.getState().activeTab) {
+        setActiveTab(parsed);
+      }
+    };
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, [activeTab, setActiveTab]);
+
+  const handleMainTouchStart = (e: React.TouchEvent<HTMLElement>) => {
+    if (e.touches.length !== 1 || isSwipeBlockedTarget(e.target, mainRef.current)) {
+      swipeStartRef.current = null;
+      return;
+    }
+    swipeStartRef.current = {
+      x: e.touches[0].clientX,
+      y: e.touches[0].clientY,
+    };
+  };
+
+  const handleMainTouchEnd = (e: React.TouchEvent<HTMLElement>) => {
+    const start = swipeStartRef.current;
+    swipeStartRef.current = null;
+    if (!start || e.changedTouches.length !== 1) return;
+    const deltaX = e.changedTouches[0].clientX - start.x;
+    const deltaY = e.changedTouches[0].clientY - start.y;
+    if (Math.abs(deltaX) > 60 && Math.abs(deltaX) > Math.abs(deltaY) * 1.6) {
+      const currentIdx = TAB_ORDER.indexOf(activeTab);
+      if (deltaX < 0 && currentIdx < TAB_ORDER.length - 1) {
+        setActiveTab(TAB_ORDER[currentIdx + 1]);
+      } else if (deltaX > 0 && currentIdx > 0) {
+        setActiveTab(TAB_ORDER[currentIdx - 1]);
+      }
+    }
+  };
 
   useEffect(() => {
     if (!cogOpen) return;
@@ -178,7 +265,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
                     type="button"
                     title={item.tooltip}
                     onClick={() => setActiveTab(item.id)}
-                    className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-xs font-bold transition-all ${
+                    className={`tactile-pill w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-xs font-bold transition-all ${
                       isActive
                         ? 'bg-orange-500 text-white shadow-md shadow-orange-500/20'
                         : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
@@ -485,6 +572,9 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
 
           {/* Main View Content */}
           <main
+            ref={mainRef}
+            onTouchStart={handleMainTouchStart}
+            onTouchEnd={handleMainTouchEnd}
             className={`flex-1 w-full min-w-0 overflow-x-hidden mx-auto px-3 sm:px-5 pt-3.5 ${
               isForcedMobile ? 'max-w-full' : 'max-w-5xl'
             }`}
@@ -553,7 +643,30 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
                 </button>
               </div>
             )}
-            {children}
+            <div
+              key={activeTab}
+              className={
+                slideDirection === 'forward'
+                  ? 'screen-enter-forward'
+                  : slideDirection === 'backward'
+                  ? 'screen-enter-backward'
+                  : undefined
+              }
+            >
+              {children}
+            </div>
+
+            <footer
+              aria-label="App version"
+              className={`text-center text-[11px] font-mono select-none ${
+                activeTab === 'log' && timer.isOpen
+                  ? '-mt-36 pb-40 md:-mt-24 md:pb-28'
+                  : '-mt-16 pb-20 md:-mt-14 md:pb-6'
+              }`}
+              style={{ color: 'var(--text-muted)' }}
+            >
+              {__APP_VERSION__}
+            </footer>
           </main>
 
           {/* Sticky Live Timer Bar */}
@@ -574,15 +687,16 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
                   type="button"
                   title={item.tooltip}
                   onClick={() => setActiveTab(item.id)}
-                  className={`flex-1 flex flex-col items-center justify-center py-1 px-1 rounded-2xl transition-all min-w-0 ${
+                  className={`nav-tab-btn flex-1 flex flex-col items-center justify-center py-1 px-1 rounded-2xl transition-all min-w-0 ${
                     isActive
                       ? 'text-orange-500 font-bold'
                       : 'text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 font-medium'
                   }`}
                 >
                   <div
+                    key={isActive ? `${item.id}-active` : `${item.id}-idle`}
                     className={`px-2.5 py-1 rounded-full transition-colors ${
-                      isActive ? 'bg-orange-500/15' : ''
+                      isActive ? 'bg-orange-500/15 nav-pill-active-pop' : ''
                     }`}
                   >
                     <Icon className="w-4 h-4" />

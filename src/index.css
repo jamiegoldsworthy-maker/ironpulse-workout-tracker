@@ -4,6 +4,8 @@
 
 :root,
 [data-theme='dark'] {
+  --ease-spring-twang: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-tactile-pop: cubic-bezier(0.22, 1.35, 0.36, 1);
   --bg-app: #16181A;
   --bg-card: #232629;
   --bg-inset: #2D3135;
@@ -287,5 +289,175 @@
     opacity: 1;
     visibility: visible;
     transform: translateX(-50%) translateY(0);
+  }
+}
+
+/* Tactile Spring Bounce & Press/Release Feedback */
+button.bg-orange-500,
+.tactile-btn,
+.tactile-pill,
+.tactile-check,
+.nav-tab-btn,
+input[type='checkbox'] {
+  transition: transform 240ms var(--ease-tactile-pop), background-color 180ms ease,
+    border-color 180ms ease, color 180ms ease, box-shadow 200ms ease;
+  will-change: transform;
+}
+
+button.bg-orange-500:not(:disabled):active,
+.tactile-btn:not(:disabled):active,
+.tactile-pill:not(:disabled):active,
+.tactile-check:not(:disabled):active,
+.nav-tab-btn:not(:disabled):active,
+input[type='checkbox']:not(:disabled):active {
+  transform: scale(0.96);
+  transition-duration: 85ms;
+}
+
+@keyframes tactile-overshoot-pop {
+  0% {
+    transform: scale(0.96);
+  }
+  58% {
+    transform: scale(1.04);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+input[type='checkbox']:checked,
+.tactile-check[data-checked='true'] {
+  animation: tactile-overshoot-pop 240ms var(--ease-tactile-pop) both;
+}
+
+@keyframes nav-pill-spring-pop {
+  0% {
+    transform: scale(0.88);
+  }
+  58% {
+    transform: scale(1.06);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.nav-pill-active-pop {
+  animation: nav-pill-spring-pop 260ms var(--ease-spring-twang) both;
+}
+
+/* Sliding-Door Horizontal Screen Entry Transitions */
+@keyframes screen-slide-from-right {
+  0% {
+    opacity: 0.72;
+    transform: translateX(26px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes screen-slide-from-left {
+  0% {
+    opacity: 0.72;
+    transform: translateX(-26px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.screen-enter-forward {
+  animation: screen-slide-from-right 280ms var(--ease-spring-twang) both;
+}
+
+.screen-enter-backward {
+  animation: screen-slide-from-left 280ms var(--ease-spring-twang) both;
+}
+
+/* Active Timer Focus Card Pulsing Border Glow & Entrance */
+@keyframes timer-focus-enter {
+  0% {
+    opacity: 0.85;
+    transform: translateY(10px) scale(0.97);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes timer-glow-orange {
+  0%,
+  100% {
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.34), 0 0 0 1px var(--accent-orange),
+      0 0 18px rgba(255, 154, 75, 0.24);
+  }
+  50% {
+    box-shadow: 0 14px 36px rgba(0, 0, 0, 0.38), 0 0 0 2px var(--accent-orange),
+      0 0 28px rgba(255, 154, 75, 0.44);
+  }
+}
+
+@keyframes timer-glow-sage {
+  0%,
+  100% {
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.34), 0 0 0 1px var(--accent-sage),
+      0 0 18px rgba(79, 122, 108, 0.28);
+  }
+  50% {
+    box-shadow: 0 14px 36px rgba(0, 0, 0, 0.38), 0 0 0 2px var(--accent-sage),
+      0 0 28px rgba(79, 122, 108, 0.5);
+  }
+}
+
+.timer-focus-card {
+  animation: timer-focus-enter 280ms var(--ease-spring-twang) both;
+}
+
+.timer-focus-glow-orange {
+  border-color: var(--accent-orange) !important;
+  animation: timer-focus-enter 280ms var(--ease-spring-twang) both,
+    timer-glow-orange 2.4s ease-in-out infinite;
+}
+
+.timer-focus-glow-sage {
+  border-color: var(--accent-sage) !important;
+  animation: timer-focus-enter 280ms var(--ease-spring-twang) both,
+    timer-glow-sage 2.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .screen-enter-forward,
+  .screen-enter-backward,
+  .nav-pill-active-pop,
+  .timer-focus-card,
+  .timer-focus-glow-orange,
+  .timer-focus-glow-sage,
+  input[type='checkbox']:checked,
+  .tactile-check[data-checked='true'] {
+    animation: none !important;
+  }
+
+  button.bg-orange-500,
+  .tactile-btn,
+  .tactile-pill,
+  .tactile-check,
+  .nav-tab-btn,
+  input[type='checkbox'] {
+    transition-duration: 0.01ms !important;
+    transform: none !important;
+  }
+
+  button.bg-orange-500:active,
+  .tactile-btn:active,
+  .tactile-pill:active,
+  .tactile-check:active,
+  .nav-tab-btn:active,
+  input[type='checkbox']:active {
+    transform: none !important;
   }
 }

@@ -117,7 +117,6 @@ export const LogView: React.FC = () => {
     Record<string, boolean>
   >({});
   const editMenuRef = useRef<HTMLDivElement>(null);
-  const touchStartXRef = useRef<number | null>(null);
   const dateTouchStartRef = useRef<{ x: number; y: number } | null>(null);
   const cardTouchStartRef = useRef<{ x: number; y: number } | null>(null);
   const cardRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -786,6 +785,7 @@ export const LogView: React.FC = () => {
 
       {/* Top Date & Session Control Bar */}
       <div
+        data-no-swipe="true"
         onTouchStart={handleDateBarTouchStart}
         onTouchEnd={handleDateBarTouchEnd}
         className="bg-white dark:bg-slate-900 rounded-3xl p-3 sm:px-4 sm:py-3 border border-slate-200/70 dark:border-slate-800/80"
@@ -999,13 +999,16 @@ export const LogView: React.FC = () => {
                 <ChevronLeft className="w-4 h-4" /> Prev
               </button>
 
-              <div className="flex items-center gap-1.5 overflow-x-auto py-0.5 min-w-0 flex-1">
+              <div
+                data-no-swipe="true"
+                className="flex items-center gap-1.5 overflow-x-auto py-0.5 min-w-0 flex-1"
+              >
                 {draftWorkouts.map((d, idx) => (
                   <button
                     key={d.logUuid}
                     type="button"
                     onClick={() => setActiveCardIdx(idx)}
-                    className={`px-2.5 py-1 rounded-xl text-xs font-bold whitespace-nowrap transition-all flex items-center gap-1 shrink-0 ${
+                    className={`tactile-pill px-2.5 py-1 rounded-xl text-xs font-bold whitespace-nowrap transition-all flex items-center gap-1 shrink-0 ${
                       idx === activeCardIdx
                         ? 'bg-orange-500 text-white shadow-2xs'
                         : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
@@ -1091,6 +1094,7 @@ export const LogView: React.FC = () => {
                     ref={(el) => {
                       cardRefs.current[draft.logUuid] = el;
                     }}
+                    data-no-swipe={draftWorkouts.length > 1 ? 'true' : undefined}
                     onTouchStart={handleWorkoutCardTouchStart}
                     onTouchMove={handleWorkoutCardTouchMove}
                     onTouchEnd={(e) => handleWorkoutCardTouchEnd(e, cardIdx)}
@@ -1187,6 +1191,7 @@ export const LogView: React.FC = () => {
                   ref={(el) => {
                     cardRefs.current[draft.logUuid] = el;
                   }}
+                  data-no-swipe={draftWorkouts.length > 1 ? 'true' : undefined}
                   onTouchStart={handleWorkoutCardTouchStart}
                   onTouchMove={handleWorkoutCardTouchMove}
                   onTouchEnd={(e) => handleWorkoutCardTouchEnd(e, cardIdx)}
@@ -1781,6 +1786,7 @@ export const LogView: React.FC = () => {
                               >
                                 <button
                                   type="button"
+                                  data-checked={ex.isCompleted ? 'true' : 'false'}
                                   aria-label={
                                     ex.isCompleted ? 'Mark movement incomplete' : 'Mark movement done'
                                   }
@@ -1794,7 +1800,7 @@ export const LogView: React.FC = () => {
                                       return { ...curr, exercises: next };
                                     })
                                   }
-                                  className={`mt-0.5 w-5 h-5 rounded-md border flex items-center justify-center shrink-0 transition-colors ${
+                                  className={`tactile-check mt-0.5 w-5 h-5 rounded-md border flex items-center justify-center shrink-0 transition-colors ${
                                     ex.isCompleted
                                       ? 'bg-emerald-500 border-emerald-500 text-white'
                                       : 'bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-600 text-transparent hover:border-emerald-500'

@@ -53,6 +53,63 @@ import {
   upsertFirestoreDoc,
 } from '../services/firebase';
 
+export type AppTab = 'log' | 'plan' | 'library' | 'history' | 'settings';
+
+const ACTIVE_TAB_STORAGE_KEY = 'ironpulse_active_tab';
+const VALID_APP_TABS: readonly AppTab[] = ['log', 'plan', 'library', 'history', 'settings'];
+
+export function parseAppTab(raw: string | null | undefined): AppTab | null {
+  if (!raw) return null;
+  const normalized = raw.replace(/^#/, '').trim().toLowerCase();
+  return (VALID_APP_TABS as readonly string[]).includes(normalized)
+    ? (normalized as AppTab)
+    : null;
+}
+
+function getInitialActiveTab(): AppTab {
+  if (typeof window !== 'undefined') {
+    const fromHash = parseAppTab(window.location.hash);
+    if (fromHash) return fromHash;
+    try {
+      const fromStorage = parseAppTab(window.localStorage.getItem(ACTIVE_TAB_STORAGE_KEY));
+      if (fromStorage) return fromStorage;
+    } catch {
+      // Ignore storage access errors
+    }
+  }
+  return 'log';
+}
+
+export function persistActiveTab(tab: AppTab): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(ACTIVE_TAB_STORAGE_KEY, tab);
+  } catch {
+    // Ignore storage access errors
+  }
+  const targetHash = `#${tab}`;
+  if (window.location.hash !== targetHash) {
+    try {
+      window.history.replaceState(
+        null,
+        '',
+        `${window.location.pathname}${window.location.search}${targetHash}`
+      );
+    } catch {
+      window.location.hash = targetHash;
+    }
+  }
+}
+
+function getErrorMessage(err: unknown, fallback: string): string {
+  if (err instanceof Error && err.message) return err.message;
+  if (typeof err === 'object' && err !== null && 'message' in err) {
+    const msg = (err as { message?: unknown }).message;
+    if (typeof msg === 'string' && msg) return msg;
+  }
+  return fallback;
+}
+
 export interface DraftWorkoutCard extends WorkoutLog {
   isSaved: boolean;
   coachNotes?: string;
@@ -91,9 +148,9 @@ interface WorkoutStoreState {
   hasCompletedCloudBootstrap: boolean;
 
   // Active Navigation & Log Floor state
-  activeTab: 'log' | 'plan' | 'library' | 'history' | 'settings';
+  activeTab: AppTab;
   editingPresetUuid: string | null;
-  presetEditorReturnTab: 'log' | 'plan' | 'library' | 'history' | 'settings' | null;
+  presetEditorReturnTab: AppTab | null;
   viewportMode: 'auto' | 'mobile' | 'desktop';
   logLayoutMode: 'list' | 'cards';
   logDensityMode: 'compact' | 'detailed';
@@ -118,11 +175,8 @@ interface WorkoutStoreState {
   } | null;
 
   // Navigation & Theme
-  setActiveTab: (tab: 'log' | 'plan' | 'library' | 'history' | 'settings') => void;
-  openPresetEditor: (
-    presetUuid: string,
-    returnTab?: 'log' | 'plan' | 'library' | 'history' | 'settings'
-  ) => void;
+  setActiveTab: (tab: AppTab) => void;
+  openPresetEditor: (presetUuid: string, returnTab?: AppTab) => void;
   clearPresetEditor: () => void;
   setViewportMode: (mode: 'auto' | 'mobile' | 'desktop') => void;
   setLogLayoutMode: (mode: 'list' | 'cards') => void;
@@ -604,7 +658,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
       hasSeeded: false,
       hasCompletedCloudBootstrap: false,
 
-      activeTab: 'log',
+      activeTab: getInitialActiveTab(),
       editingPresetUuid: null,
       presetEditorReturnTab: null,
       viewportMode: 'auto',
@@ -635,13 +689,18 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
       tasksActionToast: null,
       lastTasksSync: null,
 
-      setActiveTab: (tab) => set({ activeTab: tab }),
-      openPresetEditor: (presetUuid, returnTab) =>
+      setActiveTab: (tab) => {
+        persistActiveTab(tab);
+        set({ activeTab: tab });
+      },
+      openPresetEditor: (presetUuid, returnTab) => {
+        persistActiveTab('library');
         set({
           editingPresetUuid: presetUuid,
           presetEditorReturnTab: returnTab || null,
           activeTab: 'library',
-        }),
+        });
+      },
       clearPresetEditor: () =>
         set({
           editingPresetUuid: null,
@@ -1054,8 +1113,8 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           await upsertFirestoreDoc('wt_logs', logRecord.logUuid, logRecord, state.authUser.uid);
           set({ syncStatus: 'synced', lastSyncError: undefined });
           return { ok: true };
-        } catch (err: any) {
-          const msg = err?.message || 'Failed to sync in-progress workout';
+        } catch (err: unknown) {
+          const msg = getErrorMessage(err, 'Failed to sync in-progress workout');
           console.error('[Sync] Debounced draft upsert failed:', err);
           set({ syncStatus: 'error', lastSyncError: msg });
           return { ok: false, error: msg };
@@ -1431,8 +1490,8 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
             await Promise.all(writes);
             set({ syncStatus: 'synced', lastSyncError: undefined });
             return { ok: true };
-          } catch (err: any) {
-            const msg = err?.message || 'Cloud sync failed while saving workout log';
+          } catch (err: unknown) {
+            const msg = getErrorMessage(err, 'Cloud sync failed while saving workout log');
             console.error('[Sync] saveDraftWorkout Firestore error:', err);
             set({ syncStatus: 'error', lastSyncError: msg });
             return { ok: false, error: msg };
@@ -2666,11 +2725,11 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
               );
             }
             set({ syncStatus: 'synced', lastSyncError: undefined });
-          } catch (err: any) {
+          } catch (err: unknown) {
             console.error('[Sync] Failed to delete log from Firestore:', err);
             set({
               syncStatus: 'error',
-              lastSyncError: err?.message || 'Failed to delete log from cloud',
+              lastSyncError: getErrorMessage(err, 'Failed to delete log from cloud'),
             });
           }
         }
@@ -3211,11 +3270,11 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
                 upsertFirestoreDoc('wt_schedule', `${uid}_${sch.date}`, sch, uid)
               ),
             ]);
-          } catch (err: any) {
+          } catch (err: unknown) {
             console.error('[Sync] Failed to sync AI notes patch:', err);
             set({
               syncStatus: 'error',
-              lastSyncError: err?.message || 'Failed to sync AI notes patch',
+              lastSyncError: getErrorMessage(err, 'Failed to sync AI notes patch'),
             });
             return {
               ok: false,
@@ -3223,7 +3282,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
               presetsUpdated,
               exercisesUpdated,
               schedulesUpdated,
-              error: err?.message || 'Saved locally, but cloud sync failed.',
+              error: getErrorMessage(err, 'Saved locally, but cloud sync failed.'),
             };
           }
         }
@@ -3550,11 +3609,11 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
             hasSeeded: true,
             hasCompletedCloudBootstrap: true,
           });
-        } catch (err: any) {
+        } catch (err: unknown) {
           console.error('[Sync] syncWithFirestore error:', err);
           set({
             syncStatus: 'error',
-            lastSyncError: err?.message || 'Firestore sync failed',
+            lastSyncError: getErrorMessage(err, 'Firestore sync failed'),
           });
         }
       },
@@ -3657,8 +3716,8 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           await get().syncWithFirestore();
 
           return { ok: true, pushedLogs: allLocalLogs.length };
-        } catch (err: any) {
-          const msg = err?.message || 'Push to Firestore failed';
+        } catch (err: unknown) {
+          const msg = getErrorMessage(err, 'Push to Firestore failed');
           console.error('[Sync] pushLocalToCloud error:', err);
           set({
             syncStatus: 'error',

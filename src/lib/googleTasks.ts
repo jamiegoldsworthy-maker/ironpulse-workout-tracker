@@ -36,6 +36,15 @@ function isActiveCompletedTask(task: GoogleTaskItem): boolean {
   return task.status === 'completed' && !task.deleted && !task.hidden;
 }
 
+function getTasksErrorMessage(err: unknown, fallback: string): string {
+  if (err instanceof Error && err.message) return err.message;
+  if (typeof err === 'object' && err !== null && 'message' in err) {
+    const msg = (err as { message?: unknown }).message;
+    if (typeof msg === 'string' && msg) return msg;
+  }
+  return fallback;
+}
+
 export interface PendingTaskCompletion {
   scheduleItemUuid: string;
   date: string;
@@ -450,14 +459,14 @@ export async function syncGoogleTasksTwoWay(params: {
       pushedCount,
       deletedStaleCount,
     };
-  } catch (err: any) {
+  } catch (err: unknown) {
     return {
       ok: false,
       pulledCompleted: [],
       pulledReschedules: [],
       pushedCount: 0,
       deletedStaleCount: 0,
-      error: err?.message || 'Google Tasks sync failed',
+      error: getTasksErrorMessage(err, 'Google Tasks sync failed'),
     };
   } finally {
     isSyncingTasks = false;
@@ -523,8 +532,8 @@ export async function completeGoogleTaskForSchedule(
     return res.ok
       ? { status: 'synced' }
       : { status: 'error', detail: `HTTP ${res.status}` };
-  } catch (err: any) {
-    return { status: 'error', detail: err?.message || 'Network error' };
+  } catch (err: unknown) {
+    return { status: 'error', detail: getTasksErrorMessage(err, 'Network error') };
   }
 }
 
@@ -556,9 +565,7 @@ export async function deleteGoogleTaskForSchedule(
     return res.ok
       ? { status: 'synced' }
       : { status: 'error', detail: `HTTP ${res.status}` };
-  } catch (err: any) {
-    return { status: 'error', detail: err?.message || 'Network error' };
+  } catch (err: unknown) {
+    return { status: 'error', detail: getTasksErrorMessage(err, 'Network error') };
   }
 }
-
-export const markGoogleTaskCompletedSilently = completeGoogleTaskForSchedule;

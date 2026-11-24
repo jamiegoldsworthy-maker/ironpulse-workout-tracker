@@ -550,22 +550,22 @@ export function groupConsecutiveExercises<T extends { groupId?: string }>(
   return chunks;
 }
 
-export function getTodayIsoDate(): string {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
+export function formatLocalIsoDate(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
+}
+
+export function getTodayIsoDate(): string {
+  return formatLocalIsoDate(new Date());
 }
 
 export function shiftIsoDate(isoDate: string, deltaDays: number): string {
   const [y, m, d] = isoDate.split('-').map(Number);
   const dt = new Date(y, m - 1, d);
   dt.setDate(dt.getDate() + deltaDays);
-  const year = dt.getFullYear();
-  const month = String(dt.getMonth() + 1).padStart(2, '0');
-  const day = String(dt.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  return formatLocalIsoDate(dt);
 }
 
 export function formatReadableDate(isoDate: string): string {

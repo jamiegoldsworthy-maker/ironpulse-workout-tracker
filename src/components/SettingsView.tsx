@@ -172,21 +172,22 @@ export const SettingsView: React.FC = () => {
   // =========================================================================
   const [aiJsonText, setAiJsonText] = useState<string>('');
   const [aiConflictMode, setAiConflictMode] = useState<'add' | 'update' | 'replace'>('update');
-  const [aiParseError, setAiParseError] = useState<string | null>(null);
 
-  const parsedAiPreview = useMemo((): AIImportPayload | null => {
-    if (!aiJsonText.trim()) return null;
+  const { preview: parsedAiPreview, error: aiParseError } = useMemo((): {
+    preview: AIImportPayload | null;
+    error: string | null;
+  } => {
+    if (!aiJsonText.trim()) return { preview: null, error: null };
     try {
       const cleaned = aiJsonText
         .replace(/^```(?:json)?\s*/i, '')
         .replace(/```\s*$/i, '')
         .trim();
       const obj = JSON.parse(cleaned);
-      setAiParseError(null);
-      return obj as AIImportPayload;
-    } catch (e: any) {
-      setAiParseError(e?.message || 'Invalid JSON syntax');
-      return null;
+      return { preview: obj as AIImportPayload, error: null };
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'Invalid JSON syntax';
+      return { preview: null, error: message };
     }
   }, [aiJsonText]);
 
@@ -329,26 +330,33 @@ export const SettingsView: React.FC = () => {
       {/* Sub-navigation Pills */}
       <div className="bg-white dark:bg-slate-900 rounded-3xl p-3 border border-slate-200/80 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap gap-1.5">
-          {[
-            {
-              id: 'sheet_import',
-              label: 'Google Sheet Importer',
-              tooltip: 'Import Preset Workouts or Past Logs from Google Sheets',
-              icon: FileSpreadsheet,
-            },
-            {
-              id: 'ai_drawer',
-              label: 'AI Assistant Import',
-              tooltip: 'Paste JSON from Gemini to add workouts & schedule dates',
-              icon: Code2,
-            },
-            {
-              id: 'cloud_prefs',
-              label: 'Cloud Sync & Preferences',
-              tooltip: 'Google Sign-In, theme & app preferences',
-              icon: Cloud,
-            },
-          ].map((tab) => {
+          {(
+            [
+              {
+                id: 'sheet_import',
+                label: 'Google Sheet Importer',
+                tooltip: 'Import Preset Workouts or Past Logs from Google Sheets',
+                icon: FileSpreadsheet,
+              },
+              {
+                id: 'ai_drawer',
+                label: 'AI Assistant Import',
+                tooltip: 'Paste JSON from Gemini to add workouts & schedule dates',
+                icon: Code2,
+              },
+              {
+                id: 'cloud_prefs',
+                label: 'Cloud Sync & Preferences',
+                tooltip: 'Google Sign-In, theme & app preferences',
+                icon: Cloud,
+              },
+            ] as Array<{
+              id: 'sheet_import' | 'ai_drawer' | 'cloud_prefs';
+              label: string;
+              tooltip: string;
+              icon: React.ComponentType<{ className?: string }>;
+            }>
+          ).map((tab) => {
             const Icon = tab.icon;
             const active = activeSection === tab.id;
             return (
@@ -357,8 +365,8 @@ export const SettingsView: React.FC = () => {
                 type="button"
                 data-tooltip={tab.tooltip}
                 title={tab.tooltip}
-                onClick={() => setActiveSection(tab.id as any)}
-                className={`px-3.5 py-2 rounded-2xl text-xs font-bold inline-flex items-center gap-1.5 transition-all ${
+                onClick={() => setActiveSection(tab.id)}
+                className={`tactile-pill px-3.5 py-2 rounded-2xl text-xs font-bold inline-flex items-center gap-1.5 transition-all ${
                   active
                     ? 'bg-orange-500 text-white shadow-sm'
                     : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
@@ -923,8 +931,10 @@ export const SettingsView: React.FC = () => {
                     try {
                       await signInWithGoogle();
                       showNotice('Signed in with Google!');
-                    } catch (e: any) {
-                      showNotice(e?.message || 'Configure Firebase project below first');
+                    } catch (e: unknown) {
+                      showNotice(
+                        e instanceof Error ? e.message : 'Configure Firebase project below first'
+                      );
                     }
                   }}
                   className="w-full py-2.5 px-4 rounded-2xl bg-orange-500 hover:bg-orange-600 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-sm"
@@ -1005,7 +1015,11 @@ export const SettingsView: React.FC = () => {
                     { id: 'light', label: 'Light Sand', icon: Sun },
                     { id: 'dark', label: 'Dark Charcoal', icon: Moon },
                     { id: 'system', label: 'System', icon: Monitor },
-                  ] as Array<{ id: ThemeMode; label: string; icon: any }>
+                  ] as Array<{
+                    id: ThemeMode;
+                    label: string;
+                    icon: React.ComponentType<{ className?: string }>;
+                  }>
                 ).map((t) => {
                   const Icon = t.icon;
                   return (

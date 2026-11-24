@@ -10,13 +10,20 @@ import {
   Volume2,
   VolumeX,
   Flame,
+  Minimize2,
+  Maximize2,
 } from 'lucide-react';
 import { useWorkoutStore } from '../store/useWorkoutStore';
 import { formatSecondsAsMmSs } from '../utils/calculations';
 
+interface WindowWithWebkitAudio extends Window {
+  webkitAudioContext?: typeof AudioContext;
+}
+
 function playTimerBeep(type: 'countdown' | 'work' | 'rest' | 'finish') {
   try {
-    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    const AudioCtx =
+      window.AudioContext || (window as WindowWithWebkitAudio).webkitAudioContext;
     if (!AudioCtx) return;
     const ctx = new AudioCtx();
     const compressor = ctx.createDynamicsCompressor();
@@ -96,7 +103,10 @@ export const LiveTimerBar: React.FC = () => {
   const [circuitRoundsInput, setCircuitRoundsInput] = useState(String(timer.totalRounds ?? 15));
   const [circuitWorkInput, setCircuitWorkInput] = useState(String(timer.workSec ?? 60));
   const [circuitRestInput, setCircuitRestInput] = useState(String(timer.restSec ?? 0));
-  const wakeLockRef = useRef<any>(null);
+  const [isFocusMinimized, setIsFocusMinimized] = useState(false);
+  const wakeLockRef = useRef<WakeLockSentinel | null>(null);
+  const timerCardRef = useRef<HTMLDivElement>(null);
+  const prevRunningRef = useRef<boolean>(timer.isRunning);
 
   const parseOrZero = (raw: string): number => {
     const parsed = parseInt(raw, 10);
@@ -104,10 +114,31 @@ export const LiveTimerBar: React.FC = () => {
   };
 
   useEffect(() => {
-    if (drawerTab !== 'stopwatch') {
-      setDrawerTab(timer.mode);
-    }
+    setDrawerTab((prev) => (prev === 'stopwatch' ? prev : timer.mode));
   }, [timer.mode]);
+
+  // Auto-expand into Focus Mode and smoothly scroll into view whenever timer starts
+  useEffect(() => {
+    const wasRunning = prevRunningRef.current;
+    prevRunningRef.current = timer.isRunning;
+    if (timer.isRunning && !wasRunning) {
+      setIsFocusMinimized(false);
+      if (useWorkoutStore.getState().timer.isExpanded) {
+        setTimerExpanded(false);
+      }
+      requestAnimationFrame(() => {
+        const prefersReduced =
+          typeof window !== 'undefined' &&
+          window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        timerCardRef.current?.scrollIntoView({
+          behavior: prefersReduced ? 'auto' : 'smooth',
+          block: 'nearest',
+        });
+      });
+    } else if (!timer.isRunning && wasRunning) {
+      setIsFocusMinimized(false);
+    }
+  }, [timer.isRunning, setTimerExpanded]);
 
   useEffect(() => {
     if (sessionStopwatchStartMs === null) return;
@@ -140,9 +171,9 @@ export const LiveTimerBar: React.FC = () => {
 
   useEffect(() => {
     const requestWakeLock = async () => {
-      if (timer.isRunning && 'wakeLock' in navigator) {
+      if (timer.isRunning && 'wakeLock' in navigator && navigator.wakeLock) {
         try {
-          wakeLockRef.current = await (navigator as any).wakeLock.request('screen');
+          wakeLockRef.current = await navigator.wakeLock.request('screen');
         } catch {
           // ignore
         }
@@ -190,6 +221,33 @@ export const LiveTimerBar: React.FC = () => {
       : 0;
 
   const isWorkPhase = timer.mode === 'circuit' && timer.phase === 'work';
+  const isCircuitRestPhase = timer.mode === 'circuit' && timer.phase === 'rest';
+  const isRepBasedWork = timer.mode === 'circuit' && timer.workSec === 0 && timer.phase === 'work';
+  const isFocusedActive = timer.isRunning && !isFocusMinimized;
+
+  const phaseBadgeLabel =
+    timer.mode === 'circuit'
+      ? timer.phase === 'work'
+        ? 'WORK'
+        : 'REST'
+      : 'COUNTDOWN';
+  const phaseAccentVar = isCircuitRestPhase ? 'var(--accent-sage)' : 'var(--accent-orange)';
+  const focusGlowClass = isCircuitRestPhase
+    ? 'timer-focus-glow-sage'
+    : 'timer-focus-glow-orange';
+
+  const ringSize = 156;
+  const ringStrokeWidth = 10;
+  const ringRadius = (ringSize - ringStrokeWidth) / 2;
+  const ringCircumference = 2 * Math.PI * ringRadius;
+  const remainingFraction = isRepBasedWork
+    ? 1
+    : timer.totalPhaseSec > 0
+    ? Math.max(0, Math.min(1, timer.remainingSec / timer.totalPhaseSec))
+    : 0;
+  // Negative strokeDashoffset shifts the start of the arc clockwise from 12 o'clock as time elapses
+  const ringDashOffset = -ringCircumference * (1 - remainingFraction);
+
   const isForcedMobile = viewportMode === 'mobile';
   const isForcedDesktop = viewportMode === 'desktop';
 
@@ -200,190 +258,394 @@ export const LiveTimerBar: React.FC = () => {
     : 'fixed bottom-16 md:bottom-4 left-0 right-0 md:left-60 z-30 px-3 pointer-events-none';
 
   return (
-    <div className={`${containerPositionClass} max-w-full overflow-x-hidden`}>
+    <div data-no-swipe="true" className={`${containerPositionClass} max-w-full overflow-x-hidden`}>
       <div className="max-w-3xl w-full mx-auto pointer-events-auto">
         <div
+          ref={timerCardRef}
           style={{
-            backgroundColor: timer.isRunning
+            backgroundColor: isFocusedActive
+              ? 'var(--bg-card)'
+              : timer.isRunning
               ? isWorkPhase
                 ? 'var(--accent-rust)'
                 : 'var(--bg-card)'
               : 'var(--bg-card)',
-            borderColor: timer.isRunning
+            borderColor: isFocusedActive
+              ? phaseAccentVar
+              : timer.isRunning
               ? 'var(--accent-orange)'
               : 'var(--border-card)',
-            color: timer.isRunning && isWorkPhase ? '#F7F3EE' : 'var(--text-primary)',
+            color:
+              !isFocusedActive && timer.isRunning && isWorkPhase
+                ? '#F7F3EE'
+                : 'var(--text-primary)',
           }}
-          className="rounded-2xl shadow-lg border transition-all duration-200 overflow-hidden backdrop-blur-md"
+          className={`rounded-2xl shadow-lg border transition-all duration-200 overflow-hidden backdrop-blur-md ${
+            isFocusedActive ? focusGlowClass : ''
+          }`}
         >
-          {/* Progress Strip */}
-          <div className="h-1 w-full bg-black/10 dark:bg-white/10">
-            <div
-              className={`h-full transition-all duration-300 ${
-                timer.isRunning
-                  ? isWorkPhase
-                    ? 'bg-white'
-                    : 'bg-orange-500'
-                  : 'bg-orange-500'
-              }`}
-              style={{ width: `${progressPct}%` }}
-            />
-          </div>
-
-          {/* Compact Bar Header */}
-          <div className="flex items-center justify-between px-2.5 sm:px-3.5 py-2 gap-1.5 sm:gap-2">
-            <div
-              onClick={() => setTimerExpanded(!timer.isExpanded)}
-              title="Click to expand or collapse timer controls"
-              className="flex items-center gap-2 sm:gap-3 cursor-pointer select-none flex-1 min-w-0"
-            >
-              <div
-                className={`w-8 h-8 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center shrink-0 ${
-                  timer.isRunning
-                    ? isWorkPhase
-                      ? 'bg-white/20 text-white'
-                      : 'bg-orange-500 text-white'
-                    : 'bg-orange-500/10 text-orange-600 dark:text-orange-400'
-                }`}
-              >
-                {timer.mode === 'circuit' ? <Flame className="w-4 h-4 sm:w-5 sm:h-5" /> : <Timer className="w-4 h-4 sm:w-5 sm:h-5" />}
-              </div>
-
-              <div className="flex items-baseline gap-2 min-w-0">
-                <span className="font-mono text-xl sm:text-2xl font-bold tracking-tight tabular-nums shrink-0">
-                  {timer.mode === 'circuit' && timer.workSec === 0 && timer.phase === 'work'
-                    ? 'REPS'
-                    : formatSecondsAsMmSs(timer.remainingSec)}
-                </span>
-
-                {timer.mode === 'circuit' ? (
-                  <div className="flex items-center gap-1.5 truncate">
-                    <span
-                      className={`text-[10px] sm:text-[11px] font-bold uppercase tracking-wider px-1.5 sm:px-2 py-0.5 rounded-full shrink-0 ${
-                        timer.phase === 'work'
-                          ? timer.isRunning
-                            ? 'bg-white text-orange-600'
-                            : 'bg-orange-500/15 text-orange-600 dark:text-orange-400'
-                          : 'bg-[var(--bg-inset)] text-[var(--text-secondary)]'
-                      }`}
-                    >
-                      {timer.phase === 'work' ? 'WORK' : 'REST'}
-                    </span>
-                    <span className="text-[11px] sm:text-xs font-semibold opacity-90 tabular-nums truncate">
-                      {timer.currentRound}/{timer.totalRounds}
-                    </span>
-                  </div>
-                ) : (
-                  <span className="text-[11px] sm:text-xs font-medium opacity-75 truncate">
-                    Rest
-                    {meta.defaultAutoStartRestTimer && (
-                      <span className="hidden sm:inline"> • Auto</span>
-                    )}
-                  </span>
-                )}
-
-                {stopwatchActive && (
+          {isFocusedActive ? (
+            /* Active Timer Focus Mode with Large Circular Countdown */
+            <div className="px-4 py-4 sm:px-5 sm:py-5 space-y-3.5">
+              {/* Focus Top Bar */}
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
                   <span
-                    title="Workout session stopwatch"
-                    className="ml-1 px-1.5 py-0.5 rounded-md bg-[var(--bg-inset)] border border-[var(--border-subtle)] text-[10px] font-mono font-bold text-[var(--accent-orange)] tabular-nums shrink-0"
-                  >
-                    ⏱ {totalStopwatchSec >= 60 ? `${Math.floor(totalStopwatchSec / 60)}m` : `${totalStopwatchSec}s`}
+                    className="w-2.5 h-2.5 rounded-full shrink-0"
+                    style={{ backgroundColor: phaseAccentVar }}
+                  />
+                  <span className="text-xs font-display font-extrabold tracking-tight text-[var(--text-primary)] truncate">
+                    {timer.mode === 'circuit' ? 'Interval / Circuit Timer' : 'Rest Countdown'}
                   </span>
-                )}
-              </div>
-            </div>
-
-            {/* Quick Bar Controls */}
-            <div className="flex items-center gap-0.5 sm:gap-1 shrink-0">
-              {!timer.isRunning && timer.mode === 'rest' && !isForcedMobile && (
-                <div className="hidden sm:flex items-center gap-1 mr-1">
-                  {[60, 90, 120].map((sec) => (
-                    <button
-                      key={sec}
-                      type="button"
-                      data-tooltip={`Start ${sec}s rest countdown`}
-                      title={`Start ${sec}s rest countdown`}
-                      onClick={() => startRestTimer(sec)}
-                      className="px-2 py-1 text-xs font-semibold tabular-nums rounded-lg bg-slate-100 hover:bg-orange-500 hover:text-white dark:bg-slate-800 dark:hover:bg-orange-500 transition-colors"
+                  {stopwatchActive && (
+                    <span
+                      title="Workout session stopwatch"
+                      className="px-1.5 py-0.5 rounded-md bg-[var(--bg-inset)] border border-[var(--border-subtle)] text-[10px] font-mono font-bold text-[var(--accent-orange)] tabular-nums shrink-0"
                     >
-                      {sec === 120 ? '2m' : `${sec}s`}
-                    </button>
-                  ))}
+                      ⏱{' '}
+                      {totalStopwatchSec >= 60
+                        ? `${Math.floor(totalStopwatchSec / 60)}m`
+                        : `${totalStopwatchSec}s`}
+                    </span>
+                  )}
                 </div>
-              )}
 
-              {timer.mode === 'circuit' && timer.workSec === 0 && timer.phase === 'work' ? (
-                <button
-                  type="button"
-                  data-tooltip={
-                    timer.restSec > 0
-                      ? `Finish round & start ${timer.restSec}s rest`
-                      : 'Advance to next round'
-                  }
-                  title={
-                    timer.restSec > 0
-                      ? `Finish round & start ${timer.restSec}s rest`
-                      : 'Advance to next round'
-                  }
-                  onClick={finishCircuitWorkRound}
-                  className="px-2.5 sm:px-3 py-1.5 rounded-xl font-semibold text-xs flex items-center gap-1 transition-all bg-orange-500 hover:bg-orange-600 text-white"
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setTimerSoundEnabled(!soundEnabled)}
+                    aria-label={soundEnabled ? 'Mute timer beeps' : 'Unmute timer beeps'}
+                    title={soundEnabled ? 'Mute timer beeps' : 'Unmute timer beeps'}
+                    className="tactile-btn p-1.5 rounded-xl bg-[var(--bg-inset)] border border-[var(--border-subtle)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                  >
+                    {soundEnabled ? (
+                      <Volume2 className="w-3.5 h-3.5 text-orange-500" />
+                    ) : (
+                      <VolumeX className="w-3.5 h-3.5" />
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsFocusMinimized(true)}
+                    title="Minimize to compact bar while timer keeps running"
+                    className="tactile-btn px-2.5 py-1.5 rounded-xl bg-[var(--bg-inset)] border border-[var(--border-card)] text-[11px] font-bold text-[var(--text-secondary)] hover:text-[var(--text-primary)] inline-flex items-center gap-1"
+                  >
+                    <Minimize2 className="w-3.5 h-3.5" />
+                    Minimize
+                  </button>
+                </div>
+              </div>
+
+              {/* Center Circular Progress Ring */}
+              <div className="flex flex-col items-center justify-center py-1">
+                <div
+                  className="relative flex items-center justify-center"
+                  style={{ width: ringSize, height: ringSize }}
                 >
-                  <Zap className="w-3.5 h-3.5" />
-                  <span>
+                  <svg
+                    width={ringSize}
+                    height={ringSize}
+                    viewBox={`0 0 ${ringSize} ${ringSize}`}
+                    className="block"
+                    aria-hidden="true"
+                  >
+                    {/* Track Ring */}
+                    <circle
+                      cx={ringSize / 2}
+                      cy={ringSize / 2}
+                      r={ringRadius}
+                      fill="none"
+                      stroke="var(--border-subtle)"
+                      strokeWidth={ringStrokeWidth}
+                    />
+                    {/* Clockwise Depleting Progress Arc */}
+                    <circle
+                      cx={ringSize / 2}
+                      cy={ringSize / 2}
+                      r={ringRadius}
+                      fill="none"
+                      stroke={phaseAccentVar}
+                      strokeWidth={ringStrokeWidth}
+                      strokeLinecap="round"
+                      strokeDasharray={ringCircumference}
+                      strokeDashoffset={ringDashOffset}
+                      transform={`rotate(-90 ${ringSize / 2} ${ringSize / 2})`}
+                      style={{
+                        transition: 'stroke-dashoffset 0.85s linear, stroke 0.25s ease',
+                      }}
+                    />
+                  </svg>
+
+                  {/* Center Readout */}
+                  <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-3 select-none">
+                    <span
+                      className="text-[12px] font-extrabold uppercase tracking-[0.14em]"
+                      style={{ color: phaseAccentVar }}
+                    >
+                      {phaseBadgeLabel}
+                    </span>
+                    <span
+                      className="font-mono font-extrabold tracking-tight tabular-nums leading-none mt-1 text-[var(--text-primary)]"
+                      style={{ fontSize: '38px', fontVariantNumeric: 'tabular-nums' }}
+                    >
+                      {isRepBasedWork ? 'REPS' : formatSecondsAsMmSs(timer.remainingSec)}
+                    </span>
+                    {timer.mode === 'circuit' && (
+                      <span className="mt-1.5 text-[11px] font-bold tabular-nums text-[var(--text-secondary)]">
+                        Round {timer.currentRound} / {timer.totalRounds}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Focus Action Controls */}
+              <div className="flex items-center justify-center gap-2">
+                {isRepBasedWork ? (
+                  <button
+                    type="button"
+                    onClick={finishCircuitWorkRound}
+                    className="tactile-btn px-4 py-2 rounded-2xl bg-orange-500 hover:bg-orange-600 text-white font-bold text-xs inline-flex items-center gap-1.5 shadow-sm"
+                  >
+                    <Zap className="w-4 h-4" />
                     {timer.restSec > 0
-                      ? `Finish Round / Start ${timer.restSec}s Rest`
+                      ? `Finish Round (${timer.restSec}s Rest)`
                       : 'Finish Round'}
-                  </span>
-                </button>
-              ) : (
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={toggleTimerRunning}
+                    className="tactile-btn px-5 py-2 rounded-2xl font-bold text-xs inline-flex items-center gap-1.5 shadow-sm text-white"
+                    style={{ backgroundColor: phaseAccentVar }}
+                  >
+                    <Pause className="w-4 h-4" />
+                    Pause
+                  </button>
+                )}
+
                 <button
                   type="button"
-                  data-tooltip={timer.isRunning ? 'Pause timer' : 'Start timer'}
-                  title={timer.isRunning ? 'Pause timer' : 'Start timer'}
-                  onClick={toggleTimerRunning}
-                  className={`px-2.5 sm:px-3 py-1.5 rounded-xl font-semibold text-xs flex items-center gap-1 transition-all ${
-                    timer.isRunning
-                      ? 'bg-white/20 hover:bg-white/30 text-white'
-                      : 'bg-orange-500 hover:bg-orange-600 text-white'
-                  }`}
+                  onClick={resetTimer}
+                  title="Reset timer"
+                  className="tactile-btn px-3.5 py-2 rounded-2xl bg-[var(--bg-inset)] border border-[var(--border-card)] text-[var(--text-primary)] font-bold text-xs inline-flex items-center gap-1.5"
                 >
-                  {timer.isRunning ? (
-                    <>
-                      <Pause className="w-3.5 h-3.5" /> Pause
-                    </>
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  Reset
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setTimerExpanded(!timer.isExpanded)}
+                  title={timer.isExpanded ? 'Hide timer settings' : 'Timer presets & settings'}
+                  className="tactile-btn p-2 rounded-2xl bg-[var(--bg-inset)] border border-[var(--border-card)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                >
+                  {timer.isExpanded ? (
+                    <ChevronDown className="w-4 h-4" />
                   ) : (
-                    <>
-                      <Play className="w-3.5 h-3.5 fill-current" /> Start
-                    </>
+                    <ChevronUp className="w-4 h-4" />
                   )}
                 </button>
-              )}
-
-              <button
-                type="button"
-                onClick={resetTimer}
-                data-tooltip="Reset timer"
-                title="Reset timer"
-                className="p-1.5 sm:p-2 rounded-xl hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
-              >
-                <RotateCcw className="w-4 h-4" />
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setTimerExpanded(!timer.isExpanded)}
-                data-tooltip={timer.isExpanded ? 'Collapse timer drawer' : 'Timer presets & EMOM'}
-                title={timer.isExpanded ? 'Collapse timer drawer' : 'Expand timer settings'}
-                className="p-1.5 sm:p-2 rounded-xl hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
-              >
-                {timer.isExpanded ? (
-                  <ChevronDown className="w-4 h-4" />
-                ) : (
-                  <ChevronUp className="w-4 h-4" />
-                )}
-              </button>
+              </div>
             </div>
-          </div>
+          ) : (
+            <>
+              {/* Progress Strip */}
+              <div className="h-1 w-full bg-black/10 dark:bg-white/10">
+                <div
+                  className={`h-full transition-all duration-300 ${
+                    timer.isRunning
+                      ? isWorkPhase
+                        ? 'bg-white'
+                        : 'bg-orange-500'
+                      : 'bg-orange-500'
+                  }`}
+                  style={{ width: `${progressPct}%` }}
+                />
+              </div>
+
+              {/* Compact Bar Header */}
+              <div className="flex items-center justify-between px-2.5 sm:px-3.5 py-2 gap-1.5 sm:gap-2">
+                <div
+                  onClick={() => setTimerExpanded(!timer.isExpanded)}
+                  title="Click to expand or collapse timer controls"
+                  className="flex items-center gap-2 sm:gap-3 cursor-pointer select-none flex-1 min-w-0"
+                >
+                  <div
+                    className={`w-8 h-8 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                      timer.isRunning
+                        ? isWorkPhase
+                          ? 'bg-white/20 text-white'
+                          : 'bg-orange-500 text-white'
+                        : 'bg-orange-500/10 text-orange-600 dark:text-orange-400'
+                    }`}
+                  >
+                    {timer.mode === 'circuit' ? (
+                      <Flame className="w-4 h-4 sm:w-5 sm:h-5" />
+                    ) : (
+                      <Timer className="w-4 h-4 sm:w-5 sm:h-5" />
+                    )}
+                  </div>
+
+                  <div className="flex items-baseline gap-2 min-w-0">
+                    <span className="font-mono text-xl sm:text-2xl font-bold tracking-tight tabular-nums shrink-0">
+                      {isRepBasedWork ? 'REPS' : formatSecondsAsMmSs(timer.remainingSec)}
+                    </span>
+
+                    {timer.mode === 'circuit' ? (
+                      <div className="flex items-center gap-1.5 truncate">
+                        <span
+                          className={`text-[10px] sm:text-[11px] font-bold uppercase tracking-wider px-1.5 sm:px-2 py-0.5 rounded-full shrink-0 ${
+                            timer.phase === 'work'
+                              ? timer.isRunning
+                                ? 'bg-white text-orange-600'
+                                : 'bg-orange-500/15 text-orange-600 dark:text-orange-400'
+                              : 'bg-[var(--bg-inset)] text-[var(--text-secondary)]'
+                          }`}
+                        >
+                          {timer.phase === 'work' ? 'WORK' : 'REST'}
+                        </span>
+                        <span className="text-[11px] sm:text-xs font-semibold opacity-90 tabular-nums truncate">
+                          {timer.currentRound}/{timer.totalRounds}
+                        </span>
+                      </div>
+                    ) : (
+                      <span className="text-[11px] sm:text-xs font-medium opacity-75 truncate">
+                        Rest
+                        {meta.defaultAutoStartRestTimer && (
+                          <span className="hidden sm:inline"> • Auto</span>
+                        )}
+                      </span>
+                    )}
+
+                    {stopwatchActive && (
+                      <span
+                        title="Workout session stopwatch"
+                        className="ml-1 px-1.5 py-0.5 rounded-md bg-[var(--bg-inset)] border border-[var(--border-subtle)] text-[10px] font-mono font-bold text-[var(--accent-orange)] tabular-nums shrink-0"
+                      >
+                        ⏱{' '}
+                        {totalStopwatchSec >= 60
+                          ? `${Math.floor(totalStopwatchSec / 60)}m`
+                          : `${totalStopwatchSec}s`}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Quick Bar Controls */}
+                <div className="flex items-center gap-0.5 sm:gap-1 shrink-0">
+                  {!timer.isRunning && timer.mode === 'rest' && !isForcedMobile && (
+                    <div className="hidden sm:flex items-center gap-1 mr-1">
+                      {[60, 90, 120].map((sec) => (
+                        <button
+                          key={sec}
+                          type="button"
+                          data-tooltip={`Start ${sec}s rest countdown`}
+                          title={`Start ${sec}s rest countdown`}
+                          onClick={() => startRestTimer(sec)}
+                          className="tactile-pill px-2 py-1 text-xs font-semibold tabular-nums rounded-lg bg-slate-100 hover:bg-orange-500 hover:text-white dark:bg-slate-800 dark:hover:bg-orange-500 transition-colors"
+                        >
+                          {sec === 120 ? '2m' : `${sec}s`}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {timer.isRunning && (
+                    <button
+                      type="button"
+                      onClick={() => setIsFocusMinimized(false)}
+                      data-tooltip="Expand Focus Timer"
+                      title="Expand Focus Timer"
+                      className={`tactile-btn px-2 py-1.5 rounded-xl font-semibold text-xs flex items-center gap-1 transition-all ${
+                        isWorkPhase
+                          ? 'bg-white/20 hover:bg-white/30 text-white'
+                          : 'bg-[var(--bg-inset)] border border-[var(--border-card)] text-[var(--text-primary)]'
+                      }`}
+                    >
+                      <Maximize2 className="w-3.5 h-3.5" />
+                      <span className="hidden sm:inline">Expand</span>
+                    </button>
+                  )}
+
+                  {isRepBasedWork ? (
+                    <button
+                      type="button"
+                      data-tooltip={
+                        timer.restSec > 0
+                          ? `Finish round & start ${timer.restSec}s rest`
+                          : 'Advance to next round'
+                      }
+                      title={
+                        timer.restSec > 0
+                          ? `Finish round & start ${timer.restSec}s rest`
+                          : 'Advance to next round'
+                      }
+                      onClick={finishCircuitWorkRound}
+                      className="px-2.5 sm:px-3 py-1.5 rounded-xl font-semibold text-xs flex items-center gap-1 transition-all bg-orange-500 hover:bg-orange-600 text-white"
+                    >
+                      <Zap className="w-3.5 h-3.5" />
+                      <span>
+                        {timer.restSec > 0
+                          ? `Finish Round / Start ${timer.restSec}s Rest`
+                          : 'Finish Round'}
+                      </span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      data-tooltip={timer.isRunning ? 'Pause timer' : 'Start timer'}
+                      title={timer.isRunning ? 'Pause timer' : 'Start timer'}
+                      onClick={toggleTimerRunning}
+                      className={`tactile-btn px-2.5 sm:px-3 py-1.5 rounded-xl font-semibold text-xs flex items-center gap-1 transition-all ${
+                        timer.isRunning
+                          ? isWorkPhase
+                            ? 'bg-white/20 hover:bg-white/30 text-white'
+                            : 'bg-orange-500 hover:bg-orange-600 text-white'
+                          : 'bg-orange-500 hover:bg-orange-600 text-white'
+                      }`}
+                    >
+                      {timer.isRunning ? (
+                        <>
+                          <Pause className="w-3.5 h-3.5" /> Pause
+                        </>
+                      ) : (
+                        <>
+                          <Play className="w-3.5 h-3.5 fill-current" /> Start
+                        </>
+                      )}
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={resetTimer}
+                    data-tooltip="Reset timer"
+                    title="Reset timer"
+                    className="p-1.5 sm:p-2 rounded-xl hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
+                  >
+                    <RotateCcw className="w-4 h-4" />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setTimerExpanded(!timer.isExpanded)}
+                    data-tooltip={
+                      timer.isExpanded ? 'Collapse timer drawer' : 'Timer presets & EMOM'
+                    }
+                    title={timer.isExpanded ? 'Collapse timer drawer' : 'Expand timer settings'}
+                    className="p-1.5 sm:p-2 rounded-xl hover:bg-black/10 dark:hover:bg-white/10 transition-colors"
+                  >
+                    {timer.isExpanded ? (
+                      <ChevronDown className="w-4 h-4" />
+                    ) : (
+                      <ChevronUp className="w-4 h-4" />
+                    )}
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
 
           {/* Expanded Drawer Content */}
           {timer.isExpanded && (
