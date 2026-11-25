@@ -6,6 +6,7 @@ import {
 import { initFirebaseServices } from '../services/firebase';
 import { DailySchedule, ScheduledItem, WorkoutPreset } from '../types/workout';
 import { shiftIsoDate } from '../utils/calculations';
+import { normalizeScheduleStatus } from '../utils/scheduleStatus';
 
 export const GOOGLE_TASKS_SCOPE = 'https://www.googleapis.com/auth/tasks';
 export const GOOGLE_TASKS_TARGET_LIST_ID = 'MDUzMDg2ODk5MjYwNjQzOTk5MzY6MDow';
@@ -255,10 +256,12 @@ export async function checkCompletedTasksInbound(params: {
         (localEntry.date >= params.todayIso && localEntry.date <= endDate) ||
         (taskDueDate !== null && taskDueDate >= params.todayIso && taskDueDate <= endDate);
 
+      const localStatus = normalizeScheduleStatus(localEntry.item.status);
       if (
         isInWindow &&
         isActiveCompletedTask(task) &&
-        localEntry.item.status !== 'completed' &&
+        localStatus !== 'completed' &&
+        localStatus !== 'skipped' &&
         !params.hasCompletedLogFor(taskDueDate || localEntry.date, localEntry.item)
       ) {
         const matchedPreset = params.presets.find(
@@ -350,15 +353,20 @@ export async function syncGoogleTasksTwoWay(params: {
       if (!entryId) continue;
 
       const localEntry = scheduleByEntryId.get(entryId);
+      const localStatus = localEntry ? normalizeScheduleStatus(localEntry.item.status) : null;
       const taskDueDate = task.due ? task.due.slice(0, 10) : null;
 
-      if (localEntry && !excludedSet.has(entryId)) {
+      if (localEntry && !excludedSet.has(entryId) && localStatus !== 'skipped') {
         const isInWindow =
           (localEntry.date >= params.todayIso && localEntry.date <= endDate) ||
           (taskDueDate !== null && taskDueDate >= params.todayIso && taskDueDate <= endDate);
 
         if (isInWindow) {
-          if (taskDueDate && taskDueDate !== localEntry.date) {
+          if (
+            taskDueDate &&
+            taskDueDate !== localEntry.date &&
+            localStatus !== 'completed'
+          ) {
             pulledReschedules.push({
               scheduleItemUuid: entryId,
               fromDate: localEntry.date,
@@ -369,7 +377,7 @@ export async function syncGoogleTasksTwoWay(params: {
           if (
             isActiveCompletedTask(task) &&
             !dismissedSet.has(entryId) &&
-            localEntry.item.status !== 'completed' &&
+            localStatus !== 'completed' &&
             !params.hasCompletedLogFor(taskDueDate || localEntry.date, localEntry.item)
           ) {
             const matchedPreset = params.presets.find(
@@ -386,11 +394,18 @@ export async function syncGoogleTasksTwoWay(params: {
         }
       }
 
-      // 2. Sweep ONLY past-due tasks (due < today) or explicitly excluded tasks (never delete unhydrated/unknown tasks)
+      // 2. Deterministic status alignment on Master Sync:
+      // - Skipped / excluded / past-due tasks -> DELETE
+      // - Completed locally while still needsAction in Google Tasks -> PATCH to 'completed'
       const isExcluded = excludedSet.has(entryId);
+      const isSkippedLocally = localStatus === 'skipped';
       const isPastDue = taskDueDate !== null && taskDueDate < params.todayIso;
+      const isCompletedLocally =
+        localEntry !== undefined &&
+        (localStatus === 'completed' ||
+          params.hasCompletedLogFor(localEntry.date, localEntry.item));
 
-      if (hasHydratedSchedules && (isExcluded || isPastDue)) {
+      if (hasHydratedSchedules && (isExcluded || isSkippedLocally || isPastDue)) {
         const delRes = await tasksFetch(
           `https://tasks.googleapis.com/tasks/v1/lists/${encodeURIComponent(
             listId
@@ -404,13 +419,27 @@ export async function syncGoogleTasksTwoWay(params: {
         continue;
       }
 
+      if (isCompletedLocally && task.status !== 'completed') {
+        await tasksFetch(
+          `https://tasks.googleapis.com/tasks/v1/lists/${encodeURIComponent(
+            listId
+          )}/tasks/${encodeURIComponent(task.id)}`,
+          token,
+          {
+            method: 'PATCH',
+            body: JSON.stringify({ status: 'completed' }),
+          }
+        );
+        continue;
+      }
+
       // Only index active needsAction tasks so completed/archived tasks don't block pushing fresh tasks
       if (task.status !== 'completed') {
         taskByEntryId.set(entryId, task);
       }
     }
 
-    // 3. Outbound: Push/update all incomplete schedule entries from today through today + 6 days
+    // 3. Outbound: Push/update all Pending & In Progress schedule entries from today through today + 6 days
     let pushedCount = 0;
 
     const targetDates = Object.keys(params.schedules)
@@ -420,7 +449,8 @@ export async function syncGoogleTasksTwoWay(params: {
     for (const date of targetDates) {
       const daySch = params.schedules[date];
       for (const item of daySch?.items || []) {
-        if (item.status !== 'pending') continue;
+        const itemStatus = normalizeScheduleStatus(item.status);
+        if (itemStatus !== 'pending' && itemStatus !== 'in_progress') continue;
         if (excludedSet.has(item.scheduleItemUuid)) continue;
         const existingTask = taskByEntryId.get(item.scheduleItemUuid);
 
@@ -562,6 +592,53 @@ export async function deleteGoogleTaskForSchedule(
       token,
       { method: 'DELETE' }
     );
+    return res.ok
+      ? { status: 'synced' }
+      : { status: 'error', detail: `HTTP ${res.status}` };
+  } catch (err: unknown) {
+    return { status: 'error', detail: getTasksErrorMessage(err, 'Network error') };
+  }
+}
+
+export async function upsertGoogleTaskForSchedule(params: {
+  date: string;
+  item: ScheduledItem;
+  preset?: WorkoutPreset;
+}): Promise<TasksActionResult> {
+  try {
+    const token = getCachedGoogleTasksToken();
+    if (!token) return { status: 'no-token' };
+    const listId = await resolveTasksListId(token);
+    const tasks = await fetchAllTasksInList(listId, token);
+    const existingActive = tasks.find(
+      (t) =>
+        !t.deleted &&
+        !t.hidden &&
+        t.status !== 'completed' &&
+        extractIronPulseEntryId(t.notes) === params.item.scheduleItemUuid
+    );
+
+    const payload = {
+      title: buildTaskTitle(params.item, params.preset),
+      due: `${params.date}T00:00:00.000Z`,
+      notes: buildTaskNotes(params.item, params.preset),
+      status: 'needsAction' as const,
+    };
+
+    const res = existingActive
+      ? await tasksFetch(
+          `https://tasks.googleapis.com/tasks/v1/lists/${encodeURIComponent(
+            listId
+          )}/tasks/${encodeURIComponent(existingActive.id)}`,
+          token,
+          { method: 'PATCH', body: JSON.stringify(payload) }
+        )
+      : await tasksFetch(
+          `https://tasks.googleapis.com/tasks/v1/lists/${encodeURIComponent(listId)}/tasks`,
+          token,
+          { method: 'POST', body: JSON.stringify(payload) }
+        );
+
     return res.ok
       ? { status: 'synced' }
       : { status: 'error', detail: `HTTP ${res.status}` };

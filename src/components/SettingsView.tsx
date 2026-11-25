@@ -55,6 +55,7 @@ export const SettingsView: React.FC = () => {
     schedules,
     exercises: globalExercises,
     logs,
+    contextBlocks,
     meta,
     logDensityMode,
     setLogDensityMode,
@@ -69,6 +70,7 @@ export const SettingsView: React.FC = () => {
     upsertPreset,
     applyAiImportPayload,
     commitReconciledLegacyImport,
+    importContextBlocks,
     syncWithFirestore,
     pushLocalToCloud,
     resetToDemoSeed,
@@ -1135,12 +1137,12 @@ export const SettingsView: React.FC = () => {
               />
             </label>
 
-            {/* Full JSON Backup Export & Demo Reset */}
+            {/* Full JSON Backup Export, Import & Demo Reset */}
             <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex flex-wrap gap-2">
               <button
                 type="button"
-                data-tooltip="Download all workouts, schedules, and logs as a JSON backup file"
-                title="Download all workouts, schedules, and logs as a JSON backup file"
+                data-tooltip="Download all workouts, schedules, context flags, and logs as a JSON backup file"
+                title="Download all workouts, schedules, context flags, and logs as a JSON backup file"
                 onClick={() => {
                   const backup = {
                     exportedAt: new Date().toISOString(),
@@ -1148,7 +1150,9 @@ export const SettingsView: React.FC = () => {
                     exercises: globalExercises,
                     presets,
                     programs,
+                    schedules,
                     logs,
+                    contextBlocks,
                   };
                   const blob = new Blob([JSON.stringify(backup, null, 2)], {
                     type: 'application/json',
@@ -1165,6 +1169,50 @@ export const SettingsView: React.FC = () => {
                 <Download className="w-4 h-4 text-orange-500" />
                 Export Backup
               </button>
+
+              <label
+                data-tooltip="Restore schedule context flags & backup data from JSON"
+                title="Restore schedule context flags & backup data from JSON"
+                className="px-3.5 py-2 rounded-2xl bg-slate-100 dark:bg-slate-800 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer hover:text-orange-500 transition-colors"
+              >
+                <Upload className="w-4 h-4 text-orange-500" />
+                Import Backup
+                <input
+                  type="file"
+                  accept="application/json,.json"
+                  className="sr-only"
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    e.target.value = '';
+                    if (!file) return;
+                    try {
+                      const raw = await file.text();
+                      const parsed = JSON.parse(raw) as {
+                        contextBlocks?: typeof contextBlocks;
+                        presets?: typeof presets;
+                      };
+                      let importedParts: string[] = [];
+                      if (Array.isArray(parsed.contextBlocks) && parsed.contextBlocks.length > 0) {
+                        importContextBlocks(parsed.contextBlocks);
+                        importedParts.push(`${parsed.contextBlocks.length} context flag(s)`);
+                      }
+                      if (Array.isArray(parsed.presets) && parsed.presets.length > 0) {
+                        for (const p of parsed.presets) {
+                          if (p?.presetUuid && p?.title) upsertPreset(p);
+                        }
+                        importedParts.push(`${parsed.presets.length} preset(s)`);
+                      }
+                      showNotice(
+                        importedParts.length > 0
+                          ? `Imported ${importedParts.join(' & ')} from backup`
+                          : 'Backup file contained no importable records'
+                      );
+                    } catch {
+                      showNotice('Failed to parse backup JSON file');
+                    }
+                  }}
+                />
+              </label>
 
               <button
                 type="button"

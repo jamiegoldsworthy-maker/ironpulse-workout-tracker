@@ -136,7 +136,7 @@ export interface WorkoutProgram {
   updatedAt: string;
 }
 
-export type ScheduleStatus = 'pending' | 'completed' | 'did_not_complete' | 'skipped';
+export type ScheduleStatus = 'pending' | 'in_progress' | 'completed' | 'skipped';
 
 export interface ScheduledItem {
   scheduleItemUuid: string;
@@ -148,7 +148,24 @@ export interface ScheduledItem {
   exerciseNotesByUid?: Record<string, string>;
   exerciseNotesByIndex?: Record<string, string>;
   status: ScheduleStatus;
+  /** Derived strictly from `status === 'completed'` for backward compatibility */
+  completed?: boolean;
+  updatedAt?: string;
   linkedLogUuid?: string | null;
+}
+
+export type ContextCategory = 'injury' | 'holiday' | 'work_trip' | 'illness' | 'life';
+
+export interface ContextBlock {
+  id: string;
+  uid?: string;
+  startDate: string; // YYYY-MM-DD
+  endDate: string; // YYYY-MM-DD (equals startDate for single-day flags)
+  category: ContextCategory;
+  title: string;
+  notes?: string;
+  createdAt: string;
+  updatedAt?: string;
 }
 
 export interface DailySchedule {
@@ -207,7 +224,7 @@ export interface LoggedExercise {
   exerciseNotes?: string;
 }
 
-export type LogStatus = 'in_progress' | 'completed' | 'did_not_complete';
+export type LogStatus = 'pending' | 'in_progress' | 'completed' | 'skipped';
 
 export interface WorkoutLog {
   logUuid: string;

@@ -39,7 +39,8 @@ export type WtCollectionName =
   | 'wt_presets'
   | 'wt_programs'
   | 'wt_schedule'
-  | 'wt_logs';
+  | 'wt_logs'
+  | 'wt_context';
 
 const RUNTIME_CONFIG_KEY = 'wt_firebase_config_override';
 
@@ -270,12 +271,13 @@ export async function pullAllUserCollections(uid: string) {
     }
   };
 
-  const [exercises, presets, programs, schedules, logs, metas] = await Promise.all([
+  const [exercises, presets, programs, schedules, logs, contextBlocks, metas] = await Promise.all([
     fetchCol<any>('wt_exercises'),
     fetchCol<any>('wt_presets'),
     fetchCol<any>('wt_programs'),
     fetchCol<any>('wt_schedule'),
     fetchCol<any>('wt_logs'),
+    fetchCol<any>('wt_context'),
     fetchCol<any>('wt_meta'),
   ]);
 
@@ -285,6 +287,7 @@ export async function pullAllUserCollections(uid: string) {
     programs,
     schedules,
     logs,
+    contextBlocks,
     meta: metas[0] || null,
   };
 }
@@ -295,6 +298,7 @@ export interface RealtimeSyncCallbacks {
   onPrograms: (items: any[]) => void;
   onSchedules: (items: any[]) => void;
   onLogs: (items: any[]) => void;
+  onContextBlocks?: (items: any[]) => void;
   onMeta: (meta: any | null) => void;
   onError: (collectionName: WtCollectionName, error: Error) => void;
 }
@@ -336,6 +340,9 @@ export function subscribeToUserCollections(
   watchCollection('wt_programs', callbacks.onPrograms);
   watchCollection('wt_schedule', callbacks.onSchedules);
   watchCollection('wt_logs', callbacks.onLogs);
+  if (callbacks.onContextBlocks) {
+    watchCollection('wt_context', callbacks.onContextBlocks);
+  }
 
   const metaUnsub = onSnapshot(
     doc(db, 'wt_meta', uid),
@@ -362,6 +369,7 @@ export async function pushAllLocalDataToFirestore(
     programs: any[];
     schedules: Record<string, any>;
     logs: any[];
+    contextBlocks?: any[];
     meta: any;
   }
 ): Promise<void> {
@@ -441,6 +449,17 @@ export async function pushAllLocalDataToFirestore(
           ...log,
           uid,
           updatedAt: log.updatedAt || nowIso,
+        }),
+      });
+    }
+    for (const block of payload.contextBlocks || []) {
+      operations.push({
+        col: 'wt_context',
+        id: block.id,
+        data: sanitizeForFirestore({
+          ...block,
+          uid,
+          updatedAt: block.updatedAt || block.createdAt || nowIso,
         }),
       });
     }

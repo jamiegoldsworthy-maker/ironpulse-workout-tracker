@@ -28,14 +28,19 @@ import {
   AlertTriangle,
   Pencil,
   Lightbulb,
+  Clock,
+  Edit3,
 } from 'lucide-react';
 import { DraftWorkoutCard, useWorkoutStore } from '../store/useWorkoutStore';
 import {
   CardioMode,
+  ContextBlock,
+  ContextCategory,
   DistanceUnit,
   LoadType,
   LoggedExercise,
   PresetExercise,
+  ScheduleStatus,
   TrackingType,
 } from '../types/workout';
 import {
@@ -57,7 +62,17 @@ import {
 } from '../utils/calculations';
 import { ExerciseHistoryModal } from './ExerciseHistoryModal';
 import { ModalPortal } from './ModalPortal';
+import { StatusSelectorModal } from './StatusSelectorModal';
+import { ContextBlockModal } from './ContextBlockModal';
 import { filterNoteForWeek } from '../utils/aiCoachPatch';
+import {
+  CONTEXT_CATEGORY_LIST,
+  CONTEXT_CATEGORY_MAP,
+  SCHEDULE_STATUS_META,
+  formatScheduleStatusLabel,
+  getContextBlocksForDate,
+  normalizeLogStatus,
+} from '../utils/scheduleStatus';
 
 const LOAD_TYPE_OPTIONS: Array<{ value: LoadType; label: string }> = [
   { value: 'single_kg', label: '1x Single (kg)' },
@@ -81,6 +96,7 @@ export const LogView: React.FC = () => {
     programs,
     exercises: globalExercises,
     schedules,
+    contextBlocks,
     meta,
     setActiveDate,
     loadProgrammedForDate,
@@ -88,7 +104,7 @@ export const LogView: React.FC = () => {
     updateDraftWorkout,
     removeDraftWorkout,
     saveDraftWorkout,
-    resetDraftWorkoutToNotStarted,
+    setDraftWorkoutStatus,
     getGhostExerciseData,
     startRestTimer,
     startCircuitTimer,
@@ -110,7 +126,17 @@ export const LogView: React.FC = () => {
   const [activeCardIdx, setActiveCardIdx] = useState<number>(0);
   const [editMenuOpen, setEditMenuOpen] = useState<boolean>(false);
   const [openExerciseMenuKey, setOpenExerciseMenuKey] = useState<string | null>(null);
-  const [openStatusMenuLogUuid, setOpenStatusMenuLogUuid] = useState<string | null>(null);
+  const [statusPickerDraft, setStatusPickerDraft] = useState<{
+    logUuid: string;
+    title: string;
+    currentStatus: ScheduleStatus;
+  } | null>(null);
+  const [contextModalState, setContextModalState] = useState<{
+    open: boolean;
+    editingBlock?: ContextBlock | null;
+    initialDate?: string;
+    initialCategory?: ContextCategory;
+  }>({ open: false });
   const [openCueKey, setOpenCueKey] = useState<string | null>(null);
   const [visibleRirKeys, setVisibleRirKeys] = useState<Record<string, boolean>>({});
   const [editingCueKey, setEditingCueKey] = useState<string | null>(null);
@@ -197,7 +223,7 @@ export const LogView: React.FC = () => {
   };
 
   useEffect(() => {
-    if (!openExerciseMenuKey && !openCueKey && !openStatusMenuLogUuid) return;
+    if (!openExerciseMenuKey && !openCueKey) return;
     const handleOutside = (e: MouseEvent) => {
       const target = e.target as HTMLElement | null;
       if (openExerciseMenuKey && !target?.closest('[data-exercise-menu]')) {
@@ -206,15 +232,11 @@ export const LogView: React.FC = () => {
       if (openCueKey && !target?.closest('[data-cue-popover]')) {
         setOpenCueKey(null);
       }
-      if (openStatusMenuLogUuid && !target?.closest('[data-status-menu]')) {
-        setOpenStatusMenuLogUuid(null);
-      }
     };
     const handleEsc = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setOpenExerciseMenuKey(null);
         setOpenCueKey(null);
-        setOpenStatusMenuLogUuid(null);
       }
     };
     document.addEventListener('mousedown', handleOutside);
@@ -223,7 +245,7 @@ export const LogView: React.FC = () => {
       document.removeEventListener('mousedown', handleOutside);
       document.removeEventListener('keydown', handleEsc);
     };
-  }, [openExerciseMenuKey, openCueKey, openStatusMenuLogUuid]);
+  }, [openExerciseMenuKey, openCueKey]);
 
   // Keep activeCardIdx in bounds when draftWorkouts length changes
   useEffect(() => {
@@ -919,6 +941,34 @@ export const LogView: React.FC = () => {
                     <Link2 className="w-4 h-4 shrink-0" />
                     + Add Workout
                   </button>
+
+                  {/* Quick Add Day Flag Section */}
+                  <div className="pt-2 mt-1 border-t border-slate-100 dark:border-slate-800 space-y-1.5 px-1">
+                    <div className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">
+                      Add Day Flag (e.g. Work Trip)
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {CONTEXT_CATEGORY_LIST.map((cat) => (
+                        <button
+                          key={cat.id}
+                          type="button"
+                          onClick={() => {
+                            setEditMenuOpen(false);
+                            setContextModalState({
+                              open: true,
+                              editingBlock: null,
+                              initialDate: activeDate,
+                              initialCategory: cat.id,
+                            });
+                          }}
+                          className="tactile-pill px-2.5 py-1 rounded-xl text-[11px] font-bold bg-[var(--bg-inset)] border border-[var(--border-card)] text-[var(--text-secondary)] hover:border-orange-500/50 hover:text-[var(--text-primary)] inline-flex items-center gap-1 transition-colors"
+                        >
+                          <span>{cat.emoji}</span>
+                          <span>{cat.shortLabel}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               </ModalPortal>
             </div>
@@ -937,6 +987,48 @@ export const LogView: React.FC = () => {
           )}
         </div>
       </div>
+
+      {/* Active Date Mitigating Factors / Schedule Context Banners */}
+      {(() => {
+        const activeDateFlags = getContextBlocksForDate(contextBlocks, activeDate);
+        if (activeDateFlags.length === 0) return null;
+        return (
+          <div className="space-y-2">
+            {activeDateFlags.map((flag) => {
+              const cat = CONTEXT_CATEGORY_MAP[flag.category];
+              return (
+                <button
+                  key={flag.id}
+                  type="button"
+                  onClick={() =>
+                    setContextModalState({
+                      open: true,
+                      editingBlock: flag,
+                      initialDate: activeDate,
+                    })
+                  }
+                  title="Tap to edit or delete schedule flag"
+                  className={`w-full text-left px-3.5 py-2.5 rounded-2xl border flex items-start justify-between gap-2 transition-opacity hover:opacity-90 ${cat.bgClass} ${cat.borderClass} ${cat.textClass}`}
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-bold flex items-center gap-1.5">
+                      <span>{cat.emoji}</span>
+                      <span className="truncate">{flag.title}</span>
+                      <span className="text-[10px] font-semibold opacity-75 shrink-0">
+                        · {cat.label}
+                      </span>
+                    </div>
+                    {flag.notes && (
+                      <p className="text-[11px] opacity-85 mt-0.5">{flag.notes}</p>
+                    )}
+                  </div>
+                  <Edit3 className="w-3.5 h-3.5 opacity-65 shrink-0 mt-0.5" />
+                </button>
+              );
+            })}
+          </div>
+        );
+      })()}
 
       {/* Empty State */}
       {draftWorkouts.length === 0 ? (
@@ -1037,15 +1129,19 @@ export const LogView: React.FC = () => {
                 draft.exercises.length > 0 &&
                 (draft.exercises.every((e) => e.trackingType === 'mobility') ||
                   /^(mobility|yoga)$/i.test((draft.workoutType || '').trim()));
-              const hasEnteredAnySet = draft.exercises.some(
-                (ex) =>
-                  ex.sets?.some((s) => s.reps > 0) ||
-                  ex.isCompleted ||
-                  (ex.distance ?? 0) > 0 ||
-                  (ex.durationSec ?? 0) > 0
-              );
-              const isDidNotComplete =
-                draft.isSaved && draft.status === 'did_not_complete';
+              const hasEnteredAnySet =
+                draft.exercises.some(
+                  (ex) =>
+                    ex.sets?.some((s) => s.reps > 0) ||
+                    ex.isCompleted ||
+                    (ex.distance ?? 0) > 0 ||
+                    (ex.durationSec ?? 0) > 0
+                ) || (draft.completedRounds ?? 0) > 0;
+              const rawDraftStatus = normalizeLogStatus(draft.status);
+              const draftStatus: ScheduleStatus =
+                rawDraftStatus === 'pending' && hasEnteredAnySet ? 'in_progress' : rawDraftStatus;
+              const draftStatusMeta = SCHEDULE_STATUS_META[draftStatus];
+              const isSkipped = draftStatus === 'skipped';
 
               const activeWeekNumber: number | null = (() => {
                 const coachMatch = draft.coachNotes?.match(/\[?W(?:eek\s*)?(\d+)\]?/i);
@@ -1100,7 +1196,9 @@ export const LogView: React.FC = () => {
                     }}
                     title="Tap to expand workout details & sets"
                     className={`scroll-target touch-pan-y rounded-3xl bg-white dark:bg-slate-900 border transition-all overflow-hidden cursor-pointer ${
-                      draft.isSaved && draft.status === 'completed'
+                      isSkipped
+                        ? 'opacity-60 border-[var(--border-subtle)]'
+                        : draftStatus === 'completed'
                         ? 'border-emerald-500/35 dark:border-emerald-500/25 hover:border-emerald-500/60'
                         : 'border-slate-200/70 dark:border-slate-800/80 hover:border-orange-500/50'
                     }`}
@@ -1117,23 +1215,30 @@ export const LogView: React.FC = () => {
                           <span className="font-mono text-[10px] font-medium px-1.5 py-0.5 rounded-md text-slate-400 dark:text-slate-500 tabular-nums">
                             #{draft.displayId.replace(/^ID-/i, '')}
                           </span>
-                          {draft.isSaved ? (
-                            <span
-                              className={`inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-lg ${
-                                draft.status === 'completed'
-                                  ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
-                                  : 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
-                              }`}
-                            >
+                          <button
+                            type="button"
+                            title="Tap to change workout status"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setStatusPickerDraft({
+                                logUuid: draft.logUuid,
+                                title: draft.workoutTitleSnapshot,
+                                currentStatus: draftStatus,
+                              });
+                            }}
+                            className={`tactile-pill inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-lg transition-colors ${draftStatusMeta.badgeClass}`}
+                          >
+                            {draftStatus === 'completed' ? (
                               <CheckCircle2 className="w-3 h-3" />
-                              {draft.status === 'completed' ? 'Saved' : 'Incomplete'}
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400">
-                              <span className="w-1.5 h-1.5 rounded-full bg-orange-500" />
-                              In Progress
-                            </span>
-                          )}
+                            ) : draftStatus === 'in_progress' ? (
+                              <Flame className="w-3 h-3" />
+                            ) : draftStatus === 'skipped' ? (
+                              <XCircle className="w-3 h-3" />
+                            ) : (
+                              <Clock className="w-3 h-3" />
+                            )}
+                            {formatScheduleStatusLabel(draftStatus)}
+                          </button>
                         </div>
 
                         <div className="flex items-center gap-1 shrink-0">
@@ -1187,12 +1292,10 @@ export const LogView: React.FC = () => {
                   onTouchMove={handleWorkoutCardTouchMove}
                   onTouchEnd={(e) => handleWorkoutCardTouchEnd(e, cardIdx)}
                   className={`scroll-target touch-pan-y rounded-3xl bg-white dark:bg-slate-900 border transition-all overflow-hidden ${
-                    isDidNotComplete
+                    isSkipped
                       ? 'opacity-60 border-[var(--border-subtle)]'
-                      : draft.isSaved
-                      ? draft.status === 'completed'
-                        ? 'border-emerald-500/35 dark:border-emerald-500/25'
-                        : 'border-amber-500/35'
+                      : draftStatus === 'completed'
+                      ? 'border-emerald-500/35 dark:border-emerald-500/25'
                       : 'border-slate-200/70 dark:border-slate-800/80'
                   }`}
                 >
@@ -1209,87 +1312,29 @@ export const LogView: React.FC = () => {
                         <span className="font-mono text-[10px] font-medium px-1.5 py-0.5 rounded-md text-slate-400 dark:text-slate-500 tabular-nums">
                           #{draft.displayId.replace(/^ID-/i, '')}
                         </span>
-                        <div className="relative" data-status-menu>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setOpenStatusMenuLogUuid(
-                                openStatusMenuLogUuid === draft.logUuid ? null : draft.logUuid
-                              )
-                            }
-                            title="Change workout status or reset to Not Started"
-                            className={`inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-lg transition-colors ${
-                              draft.isSaved
-                                ? draft.status === 'completed'
-                                  ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
-                                  : 'bg-[var(--bg-input)] text-[var(--text-muted)] border border-[var(--border-subtle)]'
-                                : hasEnteredAnySet
-                                ? 'bg-[var(--bg-input)] text-[var(--text-secondary)] border border-[var(--border-subtle)]'
-                                : 'bg-[var(--bg-input)] text-[var(--text-muted)] border border-[var(--border-subtle)]'
-                            }`}
-                          >
-                            {draft.isSaved ? (
-                              <>
-                                <CheckCircle2 className="w-3 h-3" />
-                                {draft.status === 'completed' ? 'Saved' : 'Did Not Complete'}
-                              </>
-                            ) : hasEnteredAnySet ? (
-                              <>
-                                <span className="w-1.5 h-1.5 rounded-full bg-orange-500" />
-                                In Progress
-                              </>
-                            ) : (
-                              <>
-                                <span className="w-1.5 h-1.5 rounded-full bg-[var(--text-muted)]" />
-                                Not Started
-                              </>
-                            )}
-                          </button>
-
-                          {openStatusMenuLogUuid === draft.logUuid && (
-                            <div className="absolute left-0 top-full mt-1.5 w-44 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-card)] shadow-xl p-1.5 z-40 space-y-0.5">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setOpenStatusMenuLogUuid(null);
-                                  void resetDraftWorkoutToNotStarted(draft.logUuid);
-                                  triggerToast('Reset workout to Not Started');
-                                }}
-                                className="w-full px-2.5 py-1.5 rounded-xl text-left text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-inset)]"
-                              >
-                                Not Started (Reset)
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setOpenStatusMenuLogUuid(null);
-                                  updateDraftWorkout(draft.logUuid, (curr) => ({
-                                    ...curr,
-                                    isSaved: false,
-                                    status: 'in_progress',
-                                  }));
-                                }}
-                                className="w-full px-2.5 py-1.5 rounded-xl text-left text-xs font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-inset)]"
-                              >
-                                In Progress
-                              </button>
-                              <button
-                                type="button"
-                                onClick={async () => {
-                                  setOpenStatusMenuLogUuid(null);
-                                  await saveDraftWorkout(
-                                    draft.logUuid,
-                                    'did_not_complete',
-                                    draft.updatePresetOnSave
-                                  );
-                                }}
-                                className="w-full px-2.5 py-1.5 rounded-xl text-left text-xs font-semibold text-[var(--text-muted)] hover:bg-[var(--bg-inset)]"
-                              >
-                                Did Not Complete
-                              </button>
-                            </div>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setStatusPickerDraft({
+                              logUuid: draft.logUuid,
+                              title: draft.workoutTitleSnapshot,
+                              currentStatus: draftStatus,
+                            })
+                          }
+                          title="Tap to change workout status"
+                          className={`tactile-pill inline-flex items-center gap-1 text-[11px] font-bold px-2 py-0.5 rounded-lg transition-colors cursor-pointer ${draftStatusMeta.badgeClass}`}
+                        >
+                          {draftStatus === 'completed' ? (
+                            <CheckCircle2 className="w-3 h-3" />
+                          ) : draftStatus === 'in_progress' ? (
+                            <Flame className="w-3 h-3" />
+                          ) : draftStatus === 'skipped' ? (
+                            <XCircle className="w-3 h-3" />
+                          ) : (
+                            <Clock className="w-3 h-3" />
                           )}
-                        </div>
+                          {formatScheduleStatusLabel(draftStatus)}
+                        </button>
                       </div>
 
                       {/* Header Right Actions */}
@@ -3344,16 +3389,16 @@ export const LogView: React.FC = () => {
                           <div className="flex flex-wrap items-center justify-end gap-2 ml-auto">
                             <button
                               type="button"
-                              data-tooltip="Log workout as incomplete"
-                              title="Log workout as incomplete"
+                              data-tooltip="Mark workout as Skipped"
+                              title="Mark workout as Skipped"
                               onClick={async () => {
                                 const res = await saveDraftWorkout(
                                   draft.logUuid,
-                                  'did_not_complete',
+                                  'skipped',
                                   draft.updatePresetOnSave
                                 );
                                 if (res.ok) {
-                                  triggerToast('Saved as Incomplete');
+                                  triggerToast('Marked as Skipped');
                                 } else {
                                   triggerToast(
                                     `Cloud sync error: ${res.error || 'Saved locally only'}`,
@@ -3361,10 +3406,10 @@ export const LogView: React.FC = () => {
                                   );
                                 }
                               }}
-                              className="px-3.5 py-2 rounded-2xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300 font-semibold text-xs inline-flex items-center gap-1.5 transition-colors"
+                              className="px-3.5 py-2 rounded-2xl bg-[var(--bg-inset)] border border-[var(--border-card)] hover:border-amber-500/40 text-[var(--text-secondary)] font-semibold text-xs inline-flex items-center gap-1.5 transition-colors"
                             >
                               <XCircle className="w-4 h-4" />
-                              Incomplete
+                              Skipped
                             </button>
 
                             <button
@@ -3769,6 +3814,32 @@ export const LogView: React.FC = () => {
         exerciseName={historyModalState.exerciseName}
         currentPresetUuid={historyModalState.presetUuid}
         onClose={() => setHistoryModalState({ exerciseUuid: null, exerciseName: '' })}
+      />
+
+      {/* MODAL 4: Portaled Interactive 4-Status Selector (z-1100) */}
+      <StatusSelectorModal
+        open={Boolean(statusPickerDraft)}
+        title={statusPickerDraft?.title || 'Workout'}
+        subtitle={formatReadableDate(activeDate)}
+        currentStatus={statusPickerDraft?.currentStatus || 'pending'}
+        onSelect={(nextStatus) => {
+          if (!statusPickerDraft) return;
+          void setDraftWorkoutStatus(statusPickerDraft.logUuid, nextStatus);
+          triggerToast(
+            `Marked "${statusPickerDraft.title}" as ${formatScheduleStatusLabel(nextStatus)}`
+          );
+        }}
+        onClose={() => setStatusPickerDraft(null)}
+      />
+
+      {/* MODAL 5: Portaled Schedule Context / Day Flag Modal (z-1000) */}
+      <ContextBlockModal
+        open={contextModalState.open}
+        editingBlock={contextModalState.editingBlock}
+        initialDate={contextModalState.initialDate || activeDate}
+        initialCategory={contextModalState.initialCategory}
+        onClose={() => setContextModalState({ open: false })}
+        onSaved={(msg) => triggerToast(msg)}
       />
     </div>
   );

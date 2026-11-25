@@ -25,7 +25,7 @@ import {
   TrendingUp,
 } from 'lucide-react';
 import { useWorkoutStore } from '../store/useWorkoutStore';
-import { WorkoutType } from '../types/workout';
+import { ContextBlock, WorkoutType } from '../types/workout';
 import {
   formatExerciseMetricSummary,
   formatLoadBadge,
@@ -34,13 +34,18 @@ import {
   formatSecondsAsMmSs,
   getEffectiveImplementWeightKg,
 } from '../utils/calculations';
+import {
+  CONTEXT_CATEGORY_MAP,
+  formatContextDateRange,
+  normalizeLogStatus,
+} from '../utils/scheduleStatus';
 import { useIsMobileView } from '../utils/useIsMobileView';
 
 export const HistoryView: React.FC = () => {
   const {
     logs,
     presets,
-    programs,
+    contextBlocks,
     categories,
     exercises: globalExercises,
     deleteWorkoutLog,
@@ -53,7 +58,7 @@ export const HistoryView: React.FC = () => {
   const isMobile = useIsMobileView();
   const [explorerMode, setExplorerMode] = useState<'workouts' | 'exercises'>('workouts');
   const [groupSessions, setGroupSessions] = useState<boolean>(true);
-  const [selectedProgramUuid, setSelectedProgramUuid] = useState<string>('ALL');
+  const [selectedProgramUuid] = useState<string>('ALL');
   const [selectedWorkoutType, setSelectedWorkoutType] = useState<'ALL' | WorkoutType>('ALL');
   const [selectedPresetUuid, setSelectedPresetUuid] = useState<string>('ALL');
   const [selectedExerciseUuid, setSelectedExerciseUuid] = useState<string>(
@@ -63,11 +68,12 @@ export const HistoryView: React.FC = () => {
   const [dateTo, setDateTo] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
-  // Filtered Workout Logs (exclude in-progress live drafts until completed/marked incomplete)
+  // Filtered Workout Logs (exclude pending/in-progress live drafts until completed or skipped)
   const filteredLogs = useMemo(() => {
     return logs
       .filter((log) => {
-        if (log.status === 'in_progress') {
+        const st = normalizeLogStatus(log.status);
+        if (st === 'in_progress' || st === 'pending') {
           return false;
         }
         if (selectedProgramUuid !== 'ALL' && log.programUuid !== selectedProgramUuid) {
@@ -228,28 +234,63 @@ export const HistoryView: React.FC = () => {
     [globalExercises, selectedExerciseUuid]
   );
 
-  // Grouped Sessions for Full Workouts Explorer
-  const groupedWorkoutSessions = useMemo(() => {
-    if (!groupSessions) {
-      return filteredLogs.map((l) => ({
-        groupKey: l.logUuid,
-        date: l.date,
-        items: [l],
+  // Grouped Sessions for Full Workouts Explorer + Interleaved Mitigating Factors
+  const chronologicalFeed = useMemo(() => {
+    const workoutEntries = (
+      !groupSessions
+        ? filteredLogs.map((l) => ({
+            groupKey: l.logUuid,
+            date: l.date,
+            items: [l],
+          }))
+        : (() => {
+            const groups: Array<{ groupKey: string; date: string; items: typeof filteredLogs }> =
+              [];
+            const map = new Map<string, typeof filteredLogs>();
+            for (const l of filteredLogs) {
+              const key = `${l.date}_${l.sessionGroupUuid || l.logUuid}`;
+              if (!map.has(key)) {
+                const arr: typeof filteredLogs = [];
+                map.set(key, arr);
+                groups.push({ groupKey: key, date: l.date, items: arr });
+              }
+              map.get(key)!.push(l);
+            }
+            return groups;
+          })()
+    ).map((group) => ({
+      kind: 'session' as const,
+      sortDate: group.date,
+      key: `ses_${group.groupKey}`,
+      group,
+    }));
+
+    const matchingContext = contextBlocks
+      .filter((b) => {
+        if (dateFrom && b.endDate < dateFrom) return false;
+        if (dateTo && b.startDate > dateTo) return false;
+        if (searchQuery.trim()) {
+          const q = searchQuery.toLowerCase();
+          const catLabel = CONTEXT_CATEGORY_MAP[b.category]?.label.toLowerCase() || '';
+          return (
+            b.title.toLowerCase().includes(q) ||
+            (b.notes || '').toLowerCase().includes(q) ||
+            catLabel.includes(q)
+          );
+        }
+        return true;
+      })
+      .map((block: ContextBlock) => ({
+        kind: 'context' as const,
+        sortDate: block.endDate || block.startDate,
+        key: `ctx_${block.id}`,
+        block,
       }));
-    }
-    const groups: Array<{ groupKey: string; date: string; items: typeof filteredLogs }> = [];
-    const map = new Map<string, typeof filteredLogs>();
-    for (const l of filteredLogs) {
-      const key = `${l.date}_${l.sessionGroupUuid || l.logUuid}`;
-      if (!map.has(key)) {
-        const arr: typeof filteredLogs = [];
-        map.set(key, arr);
-        groups.push({ groupKey: key, date: l.date, items: arr });
-      }
-      map.get(key)!.push(l);
-    }
-    return groups;
-  }, [filteredLogs, groupSessions]);
+
+    return [...workoutEntries, ...matchingContext].sort((a, b) =>
+      b.sortDate.localeCompare(a.sortDate)
+    );
+  }, [filteredLogs, groupSessions, contextBlocks, dateFrom, dateTo, searchQuery]);
 
   return (
     <div className="space-y-4 pb-24">
@@ -464,11 +505,40 @@ export const HistoryView: React.FC = () => {
             </div>
           )}
 
-          {/* Logged Workouts List */}
+          {/* Chronological Workouts & Schedule Context Feed */}
           <div className="space-y-3">
-            {groupedWorkoutSessions.map((group) => (
+            {chronologicalFeed.map((entry) => {
+              if (entry.kind === 'context') {
+                const { block } = entry;
+                const cat = CONTEXT_CATEGORY_MAP[block.category];
+                return (
+                  <div
+                    key={entry.key}
+                    className={`rounded-2xl px-4 py-3 border flex items-start gap-2.5 opacity-90 ${cat.bgClass} ${cat.borderClass} ${cat.textClass}`}
+                  >
+                    <span className="text-base leading-none mt-0.5 shrink-0">{cat.emoji}</span>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-xs font-bold leading-snug">
+                        <span>{cat.label}</span>
+                        <span className="opacity-75 font-semibold">
+                          {' '}
+                          · {formatContextDateRange(block.startDate, block.endDate)}
+                        </span>
+                        <span>: {block.title}</span>
+                      </div>
+                      {block.notes && (
+                        <p className="text-[11px] opacity-85 mt-0.5 leading-relaxed">
+                          {block.notes}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                );
+              }
+              const { group } = entry;
+              return (
               <div
-                key={group.groupKey}
+                key={entry.key}
                 className="bg-white dark:bg-slate-900 rounded-3xl p-4 sm:p-5 border border-slate-200/80 dark:border-slate-800 space-y-3"
               >
                 <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-slate-100 dark:border-slate-800">
@@ -597,7 +667,8 @@ export const HistoryView: React.FC = () => {
                   ))}
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       ) : (

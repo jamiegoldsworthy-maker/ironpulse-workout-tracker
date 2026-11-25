@@ -25,12 +25,31 @@ import {
   Search,
   AlertTriangle,
   X,
+  Flag,
+  Flame,
+  XCircle,
 } from 'lucide-react';
 import { ImportAiNotesPatchModal } from './ImportAiNotesPatchModal';
 import { ModalPortal } from './ModalPortal';
+import { StatusSelectorModal } from './StatusSelectorModal';
+import { ContextBlockModal } from './ContextBlockModal';
 import { buildAiCoachExportPayload } from '../utils/aiCoachPatch';
 import { useWorkoutStore } from '../store/useWorkoutStore';
-import { ProgramDayTemplate, WorkoutProgram } from '../types/workout';
+import {
+  ContextBlock,
+  ContextCategory,
+  ProgramDayTemplate,
+  ScheduleStatus,
+  WorkoutProgram,
+} from '../types/workout';
+import {
+  CONTEXT_CATEGORY_LIST,
+  CONTEXT_CATEGORY_MAP,
+  SCHEDULE_STATUS_META,
+  formatScheduleStatusLabel,
+  getContextBlocksForDate,
+  normalizeScheduleStatus,
+} from '../utils/scheduleStatus';
 import {
   formatLocalIsoDate,
   formatReadableDate,
@@ -74,11 +93,6 @@ function saveProgramAutofillDates(programUuid: string, start: string, end: strin
   } catch {
     // Ignore storage errors
   }
-}
-
-function formatScheduleStatusLabel(status: string): string {
-  if (status === 'did_not_complete') return 'Did Not Complete';
-  return status.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function formatProgramActiveDateRange(sortedIsoDates: string[]): string {
@@ -141,12 +155,14 @@ export const PlanView: React.FC = () => {
     logs,
     presets,
     programs,
+    contextBlocks,
     meta,
     setActiveDate,
     loadProgrammedForDate,
     setActiveTab,
     setActiveProgram,
     updateDailySchedule,
+    setScheduledItemStatus,
     addScheduledItemToDate,
     removeScheduledItemFromDate,
     upsertProgram,
@@ -270,6 +286,18 @@ export const PlanView: React.FC = () => {
 
   const [changeProgramModalOpen, setChangeProgramModalOpen] = useState(false);
   const [deleteProgramConfirm, setDeleteProgramConfirm] = useState<WorkoutProgram | null>(null);
+  const [statusPickerTarget, setStatusPickerTarget] = useState<{
+    date: string;
+    scheduleItemUuid: string;
+    title: string;
+    currentStatus: ScheduleStatus;
+  } | null>(null);
+  const [contextModalState, setContextModalState] = useState<{
+    open: boolean;
+    editingBlock?: ContextBlock | null;
+    initialDate?: string;
+    initialCategory?: ContextCategory;
+  }>({ open: false });
 
   const filteredModalPresets = useMemo(() => {
     const q = newProgWorkoutSearch.trim().toLowerCase();
@@ -497,42 +525,61 @@ export const PlanView: React.FC = () => {
           </button>
         </div>
 
-        {/* Upcoming & Calendar: compact icon-only Sync button color-coded by sync status */}
+        {/* Upcoming & Calendar: compact + Flag / Note button & icon-only status-colored Sync button */}
         {subTab !== 'programming' && (
-          <button
-            type="button"
-            disabled={isSyncingTasks}
-            onClick={handleRunTasksSync}
-            aria-label="Sync Google Tasks"
-            title={
-              isSyncingTasks
-                ? 'Syncing Google Tasks...'
-                : lastTasksSync?.status === 'success'
-                ? 'Google Tasks synced — tap to sync again'
-                : lastTasksSync?.status === 'failed'
-                ? 'Google Tasks sync failed — tap to retry'
-                : 'Sync upcoming workouts with Google Tasks'
-            }
-            style={{
-              borderColor: isSyncingTasks
-                ? 'var(--accent-orange)'
-                : lastTasksSync?.status === 'success'
-                ? 'var(--accent-sage)'
-                : lastTasksSync?.status === 'failed'
-                ? 'var(--accent-rust)'
-                : 'var(--border-card)',
-              color: isSyncingTasks
-                ? 'var(--accent-orange)'
-                : lastTasksSync?.status === 'success'
-                ? 'var(--accent-sage)'
-                : lastTasksSync?.status === 'failed'
-                ? 'var(--accent-rust)'
-                : 'var(--text-muted)',
-            }}
-            className="tactile-btn p-2.5 rounded-xl bg-[var(--bg-inset)] border transition-colors shrink-0 disabled:opacity-60"
-          >
-            <RefreshCw className={`w-4 h-4 ${isSyncingTasks ? 'animate-spin' : ''}`} />
-          </button>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              type="button"
+              onClick={() =>
+                setContextModalState({
+                  open: true,
+                  editingBlock: null,
+                  initialDate: subTab === 'calendar' ? selectedDate : todayIso,
+                })
+              }
+              title="Add mitigating factor, trip, holiday, or rehab note"
+              className="tactile-btn px-2.5 py-2 rounded-xl bg-[var(--bg-inset)] border border-[var(--border-card)] text-[var(--text-primary)] hover:border-[var(--accent-orange)] text-[11px] font-bold inline-flex items-center gap-1 transition-colors shrink-0"
+            >
+              <Flag className="w-3.5 h-3.5 text-orange-500 shrink-0" />
+              <span className="hidden xs:inline sm:inline">Flag / Note</span>
+              <span className="xs:hidden sm:hidden">Flag</span>
+            </button>
+
+            <button
+              type="button"
+              disabled={isSyncingTasks}
+              onClick={handleRunTasksSync}
+              aria-label="Sync Google Tasks"
+              title={
+                isSyncingTasks
+                  ? 'Syncing Google Tasks...'
+                  : lastTasksSync?.status === 'success'
+                  ? 'Google Tasks synced — tap to sync again'
+                  : lastTasksSync?.status === 'failed'
+                  ? 'Google Tasks sync failed — tap to retry'
+                  : 'Sync upcoming workouts with Google Tasks'
+              }
+              style={{
+                borderColor: isSyncingTasks
+                  ? 'var(--accent-orange)'
+                  : lastTasksSync?.status === 'success'
+                  ? 'var(--accent-sage)'
+                  : lastTasksSync?.status === 'failed'
+                  ? 'var(--accent-rust)'
+                  : 'var(--border-card)',
+                color: isSyncingTasks
+                  ? 'var(--accent-orange)'
+                  : lastTasksSync?.status === 'success'
+                  ? 'var(--accent-sage)'
+                  : lastTasksSync?.status === 'failed'
+                  ? 'var(--accent-rust)'
+                  : 'var(--text-muted)',
+              }}
+              className="tactile-btn p-2.5 rounded-xl bg-[var(--bg-inset)] border transition-colors shrink-0 disabled:opacity-60"
+            >
+              <RefreshCw className={`w-4 h-4 ${isSyncingTasks ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
         )}
       </div>
 
@@ -766,6 +813,47 @@ export const PlanView: React.FC = () => {
                     </div>
                   </div>
 
+                  {/* Mitigating Factors / Schedule Context Banners for This Day */}
+                  {(() => {
+                    const dayFlags = getContextBlocksForDate(contextBlocks, date);
+                    if (dayFlags.length === 0) return null;
+                    return (
+                      <div className="space-y-1.5">
+                        {dayFlags.map((flag) => {
+                          const cat = CONTEXT_CATEGORY_MAP[flag.category];
+                          return (
+                            <button
+                              key={flag.id}
+                              type="button"
+                              onClick={() =>
+                                setContextModalState({
+                                  open: true,
+                                  editingBlock: flag,
+                                  initialDate: date,
+                                })
+                              }
+                              title="Tap to edit or delete schedule flag"
+                              className={`w-full text-left px-3 py-2 rounded-2xl border flex items-start justify-between gap-2 transition-opacity hover:opacity-90 ${cat.bgClass} ${cat.borderClass} ${cat.textClass}`}
+                            >
+                              <div className="min-w-0 flex-1">
+                                <div className="text-xs font-bold flex items-center gap-1.5">
+                                  <span>{cat.emoji}</span>
+                                  <span className="truncate">{flag.title}</span>
+                                </div>
+                                {flag.notes && (
+                                  <p className="text-[11px] opacity-85 mt-0.5 line-clamp-2">
+                                    {flag.notes}
+                                  </p>
+                                )}
+                              </div>
+                              <Edit3 className="w-3.5 h-3.5 opacity-60 shrink-0 mt-0.5" />
+                            </button>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
+
                   {/* Scheduled Workouts or Empty Rest Indicator */}
                   {items.length === 0 ? (
                     <div className="py-3 px-4 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800 flex items-center justify-between text-xs text-slate-400">
@@ -787,11 +875,13 @@ export const PlanView: React.FC = () => {
                     <div className="space-y-2">
                       {items.map((item, idx) => {
                         const preset = presets.find((p) => p.presetUuid === item.presetUuid);
+                        const itemStatus = normalizeScheduleStatus(item.status);
+                        const statusMeta = SCHEDULE_STATUS_META[itemStatus];
                         return (
                           <div
                             key={item.scheduleItemUuid}
                             className={`p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/70 dark:border-slate-800 space-y-2 transition-opacity ${
-                              item.status === 'did_not_complete' ? 'opacity-55' : ''
+                              itemStatus === 'skipped' ? 'opacity-55' : ''
                             }`}
                           >
                             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -807,37 +897,27 @@ export const PlanView: React.FC = () => {
                               <div className="flex items-center gap-1 shrink-0">
                                 <button
                                   type="button"
-                                  disabled={item.status !== 'did_not_complete'}
-                                  title={
-                                    item.status === 'did_not_complete'
-                                      ? 'Tap to mark Pending again'
-                                      : undefined
-                                  }
-                                  onClick={() => {
-                                    if (item.status !== 'did_not_complete') return;
-                                    updateDailySchedule(
+                                  title="Tap to change workout status"
+                                  onClick={() =>
+                                    setStatusPickerTarget({
                                       date,
-                                      items.map((it) =>
-                                        it.scheduleItemUuid === item.scheduleItemUuid
-                                          ? { ...it, status: 'pending' }
-                                          : it
-                                      )
-                                    );
-                                  }}
-                                  className={`text-[10px] font-bold px-2 py-0.5 rounded-full inline-flex items-center gap-1 ${
-                                    item.status === 'completed'
-                                      ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
-                                      : item.status === 'skipped' || item.status === 'did_not_complete'
-                                      ? 'bg-[var(--bg-input)] text-[var(--text-muted)] border border-[var(--border-subtle)] cursor-pointer hover:text-[var(--text-primary)]'
-                                      : 'bg-amber-500/10 text-amber-700 dark:text-amber-300'
-                                  }`}
+                                      scheduleItemUuid: item.scheduleItemUuid,
+                                      title: preset?.title || 'Workout',
+                                      currentStatus: itemStatus,
+                                    })
+                                  }
+                                  className={`tactile-pill text-[10px] font-bold px-2 py-0.5 rounded-full inline-flex items-center gap-1 cursor-pointer hover:brightness-105 transition-all ${statusMeta.badgeClass}`}
                                 >
-                                  {item.status === 'completed' ? (
+                                  {itemStatus === 'completed' ? (
                                     <CheckCircle2 className="w-3 h-3" />
+                                  ) : itemStatus === 'in_progress' ? (
+                                    <Flame className="w-3 h-3" />
+                                  ) : itemStatus === 'skipped' ? (
+                                    <XCircle className="w-3 h-3" />
                                   ) : (
                                     <Clock className="w-3 h-3" />
                                   )}
-                                  {formatScheduleStatusLabel(item.status)}
+                                  {formatScheduleStatusLabel(itemStatus)}
                                 </button>
 
                                 {isEditingThisDay && (
@@ -970,6 +1050,32 @@ export const PlanView: React.FC = () => {
                             ))}
                         </div>
                       )}
+                      {/* Quick Add Day Flag Section inside Edit Day */}
+                      <div className="pt-2 border-t border-slate-100 dark:border-slate-800/80 space-y-1.5">
+                        <div className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">
+                          Add Day Flag (e.g. Work Trip)
+                        </div>
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {CONTEXT_CATEGORY_LIST.map((cat) => (
+                            <button
+                              key={cat.id}
+                              type="button"
+                              onClick={() =>
+                                setContextModalState({
+                                  open: true,
+                                  editingBlock: null,
+                                  initialDate: date,
+                                  initialCategory: cat.id,
+                                })
+                              }
+                              className="tactile-pill px-2.5 py-1 rounded-xl text-[11px] font-bold bg-[var(--bg-inset)] border border-[var(--border-card)] text-[var(--text-secondary)] hover:border-orange-500/50 hover:text-[var(--text-primary)] inline-flex items-center gap-1 transition-colors"
+                            >
+                              <span>{cat.emoji}</span>
+                              <span>{cat.shortLabel}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -1099,17 +1205,44 @@ export const PlanView: React.FC = () => {
                       )}
                     </div>
 
+                    {/* Subtle Context Block Bar on Calendar Date */}
+                    {(() => {
+                      const cellFlags = getContextBlocksForDate(contextBlocks, cell.isoDate);
+                      if (cellFlags.length === 0) return null;
+                      return (
+                        <div className="flex items-center justify-center gap-0.5 w-full px-0.5 mb-0.5">
+                          {cellFlags.slice(0, 3).map((flag) => {
+                            const cat = CONTEXT_CATEGORY_MAP[flag.category];
+                            return (
+                              <span
+                                key={flag.id}
+                                title={`${cat.emoji} ${flag.title}`}
+                                className={`h-1 flex-1 rounded-full ${cat.dotClass}`}
+                              />
+                            );
+                          })}
+                        </div>
+                      );
+                    })()}
+
                     {/* Mobile: Crisp Indicator Dots | Desktop: Workout Title Chips */}
                     {isMobile ? (
                       <div className="flex items-center justify-center gap-1 pb-0.5">
-                        {daySchedItems.map((it) => (
-                          <span
-                            key={it.scheduleItemUuid}
-                            className={`w-1.5 h-1.5 rounded-full ${
-                              it.status === 'completed' ? 'bg-emerald-500' : 'bg-orange-500'
-                            }`}
-                          />
-                        ))}
+                        {daySchedItems.map((it) => {
+                          const st = normalizeScheduleStatus(it.status);
+                          return (
+                            <span
+                              key={it.scheduleItemUuid}
+                              className={`w-1.5 h-1.5 rounded-full ${
+                                st === 'completed'
+                                  ? 'bg-emerald-500'
+                                  : st === 'skipped'
+                                  ? 'bg-slate-400 opacity-60'
+                                  : 'bg-orange-500'
+                              }`}
+                            />
+                          );
+                        })}
                         {daySchedItems.length === 0 && dayLogs.length > 0 && (
                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
                         )}
@@ -1118,13 +1251,16 @@ export const PlanView: React.FC = () => {
                       <div className="space-y-1 mt-1 overflow-hidden w-full">
                         {daySchedItems.slice(0, 2).map((it) => {
                           const preset = presets.find((p) => p.presetUuid === it.presetUuid);
-                          const isDone = it.status === 'completed';
+                          const st = normalizeScheduleStatus(it.status);
+                          const isDone = st === 'completed';
                           return (
                             <div
                               key={it.scheduleItemUuid}
                               className={`px-1.5 py-0.5 rounded-md text-[10px] font-semibold truncate flex items-center gap-1 ${
                                 isDone
                                   ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                                  : st === 'skipped'
+                                  ? 'bg-slate-200/70 dark:bg-slate-800 text-slate-400 line-through'
                                   : 'bg-orange-500/15 text-orange-700 dark:text-orange-300'
                               }`}
                             >
@@ -1201,6 +1337,44 @@ export const PlanView: React.FC = () => {
               </div>
             </div>
 
+            {/* Selected Day Context Banners + Quick Add Flag */}
+            {(() => {
+              const selectedDayFlags = getContextBlocksForDate(contextBlocks, selectedDate);
+              if (selectedDayFlags.length === 0) return null;
+              return (
+                <div className="space-y-1.5">
+                  {selectedDayFlags.map((flag) => {
+                    const cat = CONTEXT_CATEGORY_MAP[flag.category];
+                    return (
+                      <button
+                        key={flag.id}
+                        type="button"
+                        onClick={() =>
+                          setContextModalState({
+                            open: true,
+                            editingBlock: flag,
+                            initialDate: selectedDate,
+                          })
+                        }
+                        className={`w-full text-left px-3 py-2 rounded-2xl border flex items-start justify-between gap-2 ${cat.bgClass} ${cat.borderClass} ${cat.textClass}`}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="text-xs font-bold flex items-center gap-1.5">
+                            <span>{cat.emoji}</span>
+                            <span className="truncate">{flag.title}</span>
+                          </div>
+                          {flag.notes && (
+                            <p className="text-[11px] opacity-85 mt-0.5">{flag.notes}</p>
+                          )}
+                        </div>
+                        <Edit3 className="w-3.5 h-3.5 opacity-60 shrink-0 mt-0.5" />
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+
             {/* Scheduled Workouts List for Selected Day */}
             {selectedDayItems.length === 0 ? (
               <div className="py-8 px-4 rounded-2xl border border-dashed border-slate-200 dark:border-slate-800 text-center space-y-2">
@@ -1227,11 +1401,13 @@ export const PlanView: React.FC = () => {
               <div className="space-y-2.5">
                 {selectedDayItems.map((item, idx) => {
                   const preset = presets.find((p) => p.presetUuid === item.presetUuid);
+                  const itemStatus = normalizeScheduleStatus(item.status);
+                  const statusMeta = SCHEDULE_STATUS_META[itemStatus];
                   return (
                     <div
                       key={item.scheduleItemUuid}
                       className={`p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/70 dark:border-slate-800 space-y-2 transition-opacity ${
-                        item.status === 'did_not_complete' ? 'opacity-55' : ''
+                        itemStatus === 'skipped' ? 'opacity-55' : ''
                       }`}
                     >
                       {/* Top Badge Row: Slot Role + Status + Actions (Never Overlaps!) */}
@@ -1242,37 +1418,27 @@ export const PlanView: React.FC = () => {
                           </span>
                           <button
                             type="button"
-                            disabled={item.status !== 'did_not_complete'}
-                            title={
-                              item.status === 'did_not_complete'
-                                ? 'Tap to mark Pending again'
-                                : undefined
+                            title="Tap to change workout status"
+                            onClick={() =>
+                              setStatusPickerTarget({
+                                date: selectedDate,
+                                scheduleItemUuid: item.scheduleItemUuid,
+                                title: preset?.title || 'Workout',
+                                currentStatus: itemStatus,
+                              })
                             }
-                            onClick={() => {
-                              if (item.status !== 'did_not_complete') return;
-                              updateDailySchedule(
-                                selectedDate,
-                                selectedDayItems.map((it) =>
-                                  it.scheduleItemUuid === item.scheduleItemUuid
-                                    ? { ...it, status: 'pending' }
-                                    : it
-                                )
-                              );
-                            }}
-                            className={`text-[10px] font-bold px-2 py-0.5 rounded-full inline-flex items-center gap-1 ${
-                              item.status === 'completed'
-                                ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
-                                : item.status === 'did_not_complete' || item.status === 'skipped'
-                                ? 'bg-[var(--bg-input)] text-[var(--text-muted)] border border-[var(--border-subtle)] cursor-pointer hover:text-[var(--text-primary)]'
-                                : 'bg-amber-500/10 text-amber-700 dark:text-amber-300'
-                            }`}
+                            className={`tactile-pill text-[10px] font-bold px-2 py-0.5 rounded-full inline-flex items-center gap-1 cursor-pointer hover:brightness-105 transition-all ${statusMeta.badgeClass}`}
                           >
-                            {item.status === 'completed' ? (
+                            {itemStatus === 'completed' ? (
                               <CheckCircle2 className="w-3 h-3" />
+                            ) : itemStatus === 'in_progress' ? (
+                              <Flame className="w-3 h-3" />
+                            ) : itemStatus === 'skipped' ? (
+                              <XCircle className="w-3 h-3" />
                             ) : (
                               <Clock className="w-3 h-3" />
                             )}
-                            {formatScheduleStatusLabel(item.status)}
+                            {formatScheduleStatusLabel(itemStatus)}
                           </button>
                         </div>
 
@@ -2393,6 +2559,38 @@ export const PlanView: React.FC = () => {
         open={aiNotesModalOpen}
         onClose={() => setAiNotesModalOpen(false)}
         onApplied={(summary) => triggerNotice(summary)}
+      />
+
+      {/* Portaled Interactive 4-Status Selector (z-1100) */}
+      <StatusSelectorModal
+        open={Boolean(statusPickerTarget)}
+        title={statusPickerTarget?.title || 'Workout'}
+        subtitle={
+          statusPickerTarget ? formatReadableDate(statusPickerTarget.date) : undefined
+        }
+        currentStatus={statusPickerTarget?.currentStatus || 'pending'}
+        onSelect={(nextStatus) => {
+          if (!statusPickerTarget) return;
+          void setScheduledItemStatus(
+            statusPickerTarget.date,
+            statusPickerTarget.scheduleItemUuid,
+            nextStatus
+          );
+          triggerNotice(
+            `Marked "${statusPickerTarget.title}" as ${formatScheduleStatusLabel(nextStatus)}`
+          );
+        }}
+        onClose={() => setStatusPickerTarget(null)}
+      />
+
+      {/* Portaled Mitigating Factors / Schedule Context Modal (z-1000) */}
+      <ContextBlockModal
+        open={contextModalState.open}
+        editingBlock={contextModalState.editingBlock}
+        initialDate={contextModalState.initialDate}
+        initialCategory={contextModalState.initialCategory}
+        onClose={() => setContextModalState({ open: false })}
+        onSaved={(msg) => triggerNotice(msg)}
       />
     </div>
   );
