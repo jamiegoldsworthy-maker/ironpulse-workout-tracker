@@ -290,6 +290,7 @@ export const LiveTimerBar: React.FC = () => {
         <div
           ref={timerCardRef}
           style={{
+            scrollMarginTop: '68px',
             backgroundColor: isFocusedActive
               ? 'var(--bg-card)'
               : timer.isRunning

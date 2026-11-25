@@ -56,6 +56,7 @@ import {
   uuidv4,
 } from '../utils/calculations';
 import { ExerciseHistoryModal } from './ExerciseHistoryModal';
+import { ModalPortal } from './ModalPortal';
 import { filterNoteForWeek } from '../utils/aiCoachPatch';
 
 const LOAD_TYPE_OPTIONS: Array<{ value: LoadType; label: string }> = [
@@ -116,7 +117,6 @@ export const LogView: React.FC = () => {
   const [modifiedStructureLogUuids, setModifiedStructureLogUuids] = useState<
     Record<string, boolean>
   >({});
-  const editMenuRef = useRef<HTMLDivElement>(null);
   const dateTouchStartRef = useRef<{ x: number; y: number } | null>(null);
   const cardTouchStartRef = useRef<{ x: number; y: number } | null>(null);
   const cardRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -224,26 +224,6 @@ export const LogView: React.FC = () => {
       document.removeEventListener('keydown', handleEsc);
     };
   }, [openExerciseMenuKey, openCueKey, openStatusMenuLogUuid]);
-
-  useEffect(() => {
-    if (!editMenuOpen) return;
-    const handleOutsideClick = (e: MouseEvent) => {
-      if (editMenuRef.current && !editMenuRef.current.contains(e.target as Node)) {
-        setEditMenuOpen(false);
-      }
-    };
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setEditMenuOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleOutsideClick);
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', handleOutsideClick);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [editMenuOpen]);
 
   // Keep activeCardIdx in bounds when draftWorkouts length changes
   useEffect(() => {
@@ -849,7 +829,7 @@ export const LogView: React.FC = () => {
             )}
 
             {/* Compact Edit Session Popover matching Today pill height */}
-            <div ref={editMenuRef} className="relative shrink-0">
+            <div className="relative shrink-0">
               <button
                 type="button"
                 onClick={() => setEditMenuOpen((prev) => !prev)}
@@ -867,13 +847,25 @@ export const LogView: React.FC = () => {
                 <span>Edit</span>
               </button>
 
-              {editMenuOpen && (
-                <>
-                  <div
-                    className="fixed inset-0 bg-black/30 z-40 sm:hidden"
-                    onClick={() => setEditMenuOpen(false)}
-                  />
-                  <div className="fixed inset-x-3 bottom-4 z-50 sm:absolute sm:inset-x-auto sm:bottom-auto sm:right-0 sm:top-full sm:mt-2 sm:w-56 max-w-[calc(100vw-1.5rem)] rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xl p-1.5 space-y-1">
+              <ModalPortal
+                open={editMenuOpen}
+                onClose={() => setEditMenuOpen(false)}
+                sheetOnMobile
+                backdropClassName="items-end sm:items-center p-3 sm:p-4 bg-black/50 backdrop-blur-xs"
+              >
+                <div className="w-full max-w-sm rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-2xl p-3 space-y-1.5 text-[var(--text-primary)]">
+                  <div className="px-2 pb-1.5 mb-1 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
+                    <span className="font-display font-bold text-xs uppercase tracking-wider text-[var(--text-muted)]">
+                      Edit Day — {formatReadableDate(activeDate)}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setEditMenuOpen(false)}
+                      className="px-2 py-0.5 rounded-lg text-[11px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-500"
+                    >
+                      Close
+                    </button>
+                  </div>
                   <button
                     type="button"
                     onClick={() => {
@@ -888,10 +880,10 @@ export const LogView: React.FC = () => {
                         setPresetPickerModal({ open: true, mode: 'add' });
                       }
                     }}
-                    className="w-full px-3 py-2 rounded-xl text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:bg-orange-500/10 hover:text-orange-600 dark:hover:text-orange-400 flex items-center justify-between gap-2 transition-colors"
+                    className="w-full px-3 py-2.5 rounded-xl text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:bg-orange-500/10 hover:text-orange-600 dark:hover:text-orange-400 flex items-center justify-between gap-2 transition-colors"
                   >
                     <span className="inline-flex items-center gap-2">
-                      <Sparkles className="w-3.5 h-3.5 text-orange-500 shrink-0" />
+                      <Sparkles className="w-4 h-4 text-orange-500 shrink-0" />
                       Load Today&apos;s Plan
                     </span>
                     {scheduledForActiveDate.length > 0 && (
@@ -907,9 +899,9 @@ export const LogView: React.FC = () => {
                       setEditMenuOpen(false);
                       openSwitchWorkoutPicker();
                     }}
-                    className="w-full px-3 py-2 rounded-xl text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-2 transition-colors"
+                    className="w-full px-3 py-2.5 rounded-xl text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-2 transition-colors"
                   >
-                    <RefreshCw className="w-3.5 h-3.5 text-orange-500 shrink-0" />
+                    <RefreshCw className="w-4 h-4 text-orange-500 shrink-0" />
                     Switch Workout
                   </button>
 
@@ -922,14 +914,13 @@ export const LogView: React.FC = () => {
                         mode: draftWorkouts.length > 0 ? 'chain' : 'add',
                       });
                     }}
-                    className="w-full px-3 py-2 rounded-xl text-left text-xs font-semibold text-orange-600 dark:text-orange-400 hover:bg-orange-500/10 flex items-center gap-2 transition-colors"
+                    className="w-full px-3 py-2.5 rounded-xl text-left text-xs font-semibold text-orange-600 dark:text-orange-400 hover:bg-orange-500/10 flex items-center gap-2 transition-colors"
                   >
-                    <Link2 className="w-3.5 h-3.5 shrink-0" />
+                    <Link2 className="w-4 h-4 shrink-0" />
                     + Add Workout
                   </button>
                 </div>
-                </>
-              )}
+              </ModalPortal>
             </div>
           </div>
 
@@ -1108,7 +1099,7 @@ export const LogView: React.FC = () => {
                       }
                     }}
                     title="Tap to expand workout details & sets"
-                    className={`touch-pan-y rounded-3xl bg-white dark:bg-slate-900 border transition-all overflow-hidden cursor-pointer ${
+                    className={`scroll-target touch-pan-y rounded-3xl bg-white dark:bg-slate-900 border transition-all overflow-hidden cursor-pointer ${
                       draft.isSaved && draft.status === 'completed'
                         ? 'border-emerald-500/35 dark:border-emerald-500/25 hover:border-emerald-500/60'
                         : 'border-slate-200/70 dark:border-slate-800/80 hover:border-orange-500/50'
@@ -1195,7 +1186,7 @@ export const LogView: React.FC = () => {
                   onTouchStart={handleWorkoutCardTouchStart}
                   onTouchMove={handleWorkoutCardTouchMove}
                   onTouchEnd={(e) => handleWorkoutCardTouchEnd(e, cardIdx)}
-                  className={`touch-pan-y rounded-3xl bg-white dark:bg-slate-900 border transition-all overflow-hidden ${
+                  className={`scroll-target touch-pan-y rounded-3xl bg-white dark:bg-slate-900 border transition-all overflow-hidden ${
                     isDidNotComplete
                       ? 'opacity-60 border-[var(--border-subtle)]'
                       : draft.isSaved
@@ -3435,10 +3426,13 @@ export const LogView: React.FC = () => {
         </div>
       )}
 
-      {/* MODAL 1: Searchable Preset Picker */}
-      {presetPickerModal.open && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-xs p-0 sm:p-4">
-          <div className="w-full max-w-xl bg-white dark:bg-slate-900 rounded-t-3xl sm:rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden max-h-[85vh] flex flex-col">
+      {/* MODAL 1: Searchable Preset Picker (Portaled) */}
+      <ModalPortal
+        open={presetPickerModal.open}
+        onClose={() => setPresetPickerModal({ open: false, mode: 'add' })}
+        sheetOnMobile
+      >
+        <div className="w-full max-w-xl bg-white dark:bg-slate-900 rounded-t-3xl sm:rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden max-h-[85vh] flex flex-col">
             <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
               <div>
                 <h3 className="font-display font-bold text-base text-slate-900 dark:text-slate-100">
@@ -3571,13 +3565,15 @@ export const LogView: React.FC = () => {
               )}
             </div>
           </div>
-        </div>
-      )}
+      </ModalPortal>
 
-      {/* MODAL 2: On-the-Fly Exercise Picker */}
-      {exercisePickerModal.open && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-xs p-0 sm:p-4">
-          <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-t-3xl sm:rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden max-h-[85vh] flex flex-col">
+      {/* MODAL 2: On-the-Fly Exercise Picker (Portaled) */}
+      <ModalPortal
+        open={exercisePickerModal.open}
+        onClose={() => setExercisePickerModal({ open: false, logUuid: '' })}
+        sheetOnMobile
+      >
+        <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-t-3xl sm:rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden max-h-[85vh] flex flex-col">
             <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
               <h3 className="font-display font-bold text-base text-slate-900 dark:text-slate-100">
                 {exercisePickerModal.swapExerciseIndex !== undefined
@@ -3765,8 +3761,7 @@ export const LogView: React.FC = () => {
                 ))}
             </div>
           </div>
-        </div>
-      )}
+      </ModalPortal>
 
       {/* MODAL 3: Exercise Previous History Drawer */}
       <ExerciseHistoryModal

@@ -99,8 +99,10 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
   } = useWorkoutStore();
 
   const [cogOpen, setCogOpen] = useState(false);
+  const [isHeaderCompact, setIsHeaderCompact] = useState(false);
   const cogRef = useRef<HTMLDivElement>(null);
   const mainRef = useRef<HTMLElement>(null);
+  const mobileFrameRef = useRef<HTMLDivElement>(null);
   const swipeStartRef = useRef<{ x: number; y: number } | null>(null);
   const tabTransitionRef = useRef<{ prevTab: AppTab; direction: 'forward' | 'backward' | null }>({
     prevTab: activeTab,
@@ -131,6 +133,13 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
   }, [activeTab, setActiveTab]);
 
   const handleMainTouchStart = (e: React.TouchEvent<HTMLElement>) => {
+    if (
+      typeof document !== 'undefined' &&
+      document.querySelector('[data-modal-open="true"]')
+    ) {
+      swipeStartRef.current = null;
+      return;
+    }
     if (e.touches.length !== 1 || isSwipeBlockedTarget(e.target, mainRef.current)) {
       swipeStartRef.current = null;
       return;
@@ -144,6 +153,12 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
   const handleMainTouchEnd = (e: React.TouchEvent<HTMLElement>) => {
     const start = swipeStartRef.current;
     swipeStartRef.current = null;
+    if (
+      typeof document !== 'undefined' &&
+      document.querySelector('[data-modal-open="true"]')
+    ) {
+      return;
+    }
     if (!start || e.changedTouches.length !== 1) return;
     const deltaX = e.changedTouches[0].clientX - start.x;
     const deltaY = e.changedTouches[0].clientY - start.y;
@@ -156,6 +171,26 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
       }
     }
   };
+
+  const isForcedMobile = viewportMode === 'mobile';
+  const isForcedDesktop = viewportMode === 'desktop';
+
+  // Compact sticky page header slightly once scrolled past 24px
+  useEffect(() => {
+    const scrollTarget = isForcedMobile ? mobileFrameRef.current : window;
+    if (!scrollTarget) return;
+    const updateCompact = () => {
+      const scrollTop = isForcedMobile
+        ? mobileFrameRef.current?.scrollTop ?? 0
+        : window.scrollY;
+      setIsHeaderCompact(scrollTop > 24);
+    };
+    updateCompact();
+    scrollTarget.addEventListener('scroll', updateCompact, { passive: true });
+    return () => {
+      scrollTarget.removeEventListener('scroll', updateCompact);
+    };
+  }, [isForcedMobile, activeTab]);
 
   useEffect(() => {
     if (!cogOpen) return;
@@ -177,9 +212,6 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
     };
   }, [cogOpen]);
 
-  const isForcedMobile = viewportMode === 'mobile';
-  const isForcedDesktop = viewportMode === 'desktop';
-
   const showSidebarClass = isForcedMobile
     ? 'hidden'
     : isForcedDesktop
@@ -200,7 +232,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
 
   return (
     <div
-      className={`min-h-screen w-full max-w-full overflow-x-hidden transition-all ${
+      className={`min-h-screen w-full max-w-full overflow-x-clip transition-all ${
         isForcedMobile
           ? 'bg-slate-900/95 py-3 px-2 flex flex-col items-center justify-start'
           : 'bg-slate-50 dark:bg-slate-950'
@@ -228,9 +260,10 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
       )}
 
       <div
+        ref={mobileFrameRef}
         className={
           isForcedMobile
-            ? 'force-mobile-view w-full max-w-[430px] min-h-[844px] max-h-[88vh] bg-slate-50 dark:bg-slate-950 rounded-[36px] border-[6px] border-slate-800 shadow-2xl overflow-y-auto overflow-x-hidden relative flex flex-col'
+            ? 'force-mobile-view w-full max-w-[430px] min-h-[844px] max-h-[88vh] bg-slate-50 dark:bg-slate-950 rounded-[36px] border-[6px] border-slate-800 shadow-2xl overflow-y-auto overflow-x-clip relative flex flex-col'
             : 'w-full min-h-screen flex flex-col md:flex-row'
         }
       >
@@ -282,17 +315,34 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
 
         {/* Main Content Column */}
         <div className={`flex-1 ${mainOffsetClass} flex flex-col min-w-0`}>
-          {/* Top App Header Bar */}
-          <header className="sticky top-0 z-30 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border-b border-slate-200/70 dark:border-slate-800 px-3.5 py-2.5 flex items-center justify-between gap-2">
+          {/* Sticky Compact Top App Header Bar */}
+          <header
+            style={{
+              position: 'sticky',
+              top: 0,
+              zIndex: 40,
+              backdropFilter: 'blur(10px)',
+              WebkitBackdropFilter: 'blur(10px)',
+            }}
+            className={`bg-white/90 dark:bg-slate-900/90 border-b border-slate-200/70 dark:border-slate-800 px-3.5 flex items-center justify-between gap-2 transition-all duration-200 ${
+              isHeaderCompact ? 'py-1.5 shadow-sm' : 'py-2.5'
+            }`}
+          >
             <div className="flex items-center gap-2 min-w-0">
               <div
-                className={`w-8 h-8 rounded-xl bg-orange-500 text-white flex items-center justify-center shadow-xs shrink-0 ${
+                className={`rounded-xl bg-orange-500 text-white flex items-center justify-center shadow-xs shrink-0 transition-all duration-200 ${
+                  isHeaderCompact ? 'w-7 h-7' : 'w-8 h-8'
+                } ${
                   isForcedMobile ? 'flex' : isForcedDesktop ? 'hidden' : 'flex md:hidden'
                 }`}
               >
-                <Dumbbell className="w-4 h-4" />
+                <Dumbbell className={isHeaderCompact ? 'w-3.5 h-3.5' : 'w-4 h-4'} />
               </div>
-              <h1 className="font-display font-extrabold text-sm sm:text-base truncate">
+              <h1
+                className={`font-display font-extrabold truncate transition-all duration-200 ${
+                  isHeaderCompact ? 'text-[13px] sm:text-sm' : 'text-sm sm:text-base'
+                }`}
+              >
                 {activeTab === 'log'
                   ? 'Workout Log'
                   : activeTab === 'plan'
@@ -300,8 +350,8 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
                   : activeTab === 'library'
                   ? 'Workout Library'
                   : activeTab === 'history'
-                  ? 'Progress & History'
-                  : 'Settings & Sync'}
+                  ? 'Training History'
+                  : 'Settings'}
               </h1>
             </div>
 
@@ -575,7 +625,7 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
             ref={mainRef}
             onTouchStart={handleMainTouchStart}
             onTouchEnd={handleMainTouchEnd}
-            className={`flex-1 w-full min-w-0 overflow-x-hidden mx-auto px-3 sm:px-5 pt-3.5 ${
+            className={`flex-1 w-full min-w-0 overflow-x-clip mx-auto px-3 sm:px-5 pt-3.5 ${
               isForcedMobile ? 'max-w-full' : 'max-w-5xl'
             }`}
           >

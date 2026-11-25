@@ -1,6 +1,7 @@
 import React from 'react';
 import { X, History, Award, Dumbbell, Timer, Flame } from 'lucide-react';
 import { useWorkoutStore } from '../store/useWorkoutStore';
+import { ModalPortal } from './ModalPortal';
 import {
   formatLoadBadge,
   formatPace,
@@ -28,7 +29,7 @@ export const ExerciseHistoryModal: React.FC<ExerciseHistoryModalProps> = ({
   const entries = getExerciseHistory(exerciseUuid, 10);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-xs p-0 sm:p-4 animate-in fade-in duration-150">
+    <ModalPortal open={Boolean(exerciseUuid)} onClose={onClose} sheetOnMobile>
       <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-t-3xl sm:rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden max-h-[85vh] flex flex-col">
         {/* Header */}
         <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
@@ -209,6 +210,6 @@ export const ExerciseHistoryModal: React.FC<ExerciseHistoryModalProps> = ({
           )}
         </div>
       </div>
-    </div>
+    </ModalPortal>
   );
 };

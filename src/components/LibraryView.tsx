@@ -43,6 +43,7 @@ import {
   uuidv4,
 } from '../utils/calculations';
 import { useIsMobileView } from '../utils/useIsMobileView';
+import { ModalPortal } from './ModalPortal';
 
 const CARDIO_MODES: CardioMode[] = ['Ruck', 'Cycle', 'Run', 'Row', 'Swim', 'Other'];
 
@@ -514,9 +515,14 @@ export const LibraryView: React.FC = () => {
         </div>
       )}
 
-      {/* PRESET EDITOR MODAL */}
-      {editingPreset && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/65 backdrop-blur-xs p-0 sm:p-4">
+      {/* PRESET EDITOR MODAL (Portaled) */}
+      <ModalPortal
+        open={Boolean(editingPreset)}
+        onClose={closePresetEditorModal}
+        sheetOnMobile
+        backdropClassName="items-end sm:items-center p-0 sm:p-4 bg-black/65 backdrop-blur-xs"
+      >
+        {editingPreset && (
           <div className="w-full max-w-2xl bg-white dark:bg-slate-900 rounded-t-3xl sm:rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
             <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
               <div>
@@ -2263,8 +2269,8 @@ export const LibraryView: React.FC = () => {
               </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </ModalPortal>
     </div>
   );
 };

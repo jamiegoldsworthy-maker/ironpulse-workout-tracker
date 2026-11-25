@@ -1,5 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Calendar,
   Sparkles,
@@ -7,6 +6,7 @@ import {
   Trash2,
   ArrowUp,
   ArrowDown,
+  ArrowRightLeft,
   Play,
   Check,
   CheckCircle2,
@@ -23,8 +23,11 @@ import {
   ClipboardPaste,
   RefreshCw,
   Search,
+  AlertTriangle,
+  X,
 } from 'lucide-react';
 import { ImportAiNotesPatchModal } from './ImportAiNotesPatchModal';
+import { ModalPortal } from './ModalPortal';
 import { buildAiCoachExportPayload } from '../utils/aiCoachPatch';
 import { useWorkoutStore } from '../store/useWorkoutStore';
 import { ProgramDayTemplate, WorkoutProgram } from '../types/workout';
@@ -41,6 +44,37 @@ import { useIsMobileView } from '../utils/useIsMobileView';
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const SHORT_DAYS_MON_FIRST = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const SLOT_ROLES = ['Primary', 'Secondary', 'Core', 'Mobility', 'Finisher', 'Conditioning'];
+const AUTOFILL_DATES_STORAGE_KEY = 'ironpulse_program_autofill_dates';
+
+function readSavedProgramAutofillDates(
+  programUuid: string
+): { start: string; end: string } | null {
+  if (typeof window === 'undefined' || !programUuid) return null;
+  try {
+    const raw = window.localStorage.getItem(AUTOFILL_DATES_STORAGE_KEY);
+    if (!raw) return null;
+    const map = JSON.parse(raw) as Record<string, { start?: string; end?: string }>;
+    const entry = map[programUuid];
+    if (entry?.start && entry?.end) {
+      return { start: entry.start, end: entry.end };
+    }
+  } catch {
+    // Ignore storage errors
+  }
+  return null;
+}
+
+function saveProgramAutofillDates(programUuid: string, start: string, end: string): void {
+  if (typeof window === 'undefined' || !programUuid || !start || !end) return;
+  try {
+    const raw = window.localStorage.getItem(AUTOFILL_DATES_STORAGE_KEY);
+    const map: Record<string, { start: string; end: string }> = raw ? JSON.parse(raw) : {};
+    map[programUuid] = { start, end };
+    window.localStorage.setItem(AUTOFILL_DATES_STORAGE_KEY, JSON.stringify(map));
+  } catch {
+    // Ignore storage errors
+  }
+}
 
 function formatScheduleStatusLabel(status: string): string {
   if (status === 'did_not_complete') return 'Did Not Complete';
@@ -162,35 +196,70 @@ export const PlanView: React.FC = () => {
     [programs, meta.activeProgramUuid]
   );
 
-  const activeProgramDateRange = useMemo(() => {
-    if (!selectedProgram) return 'No dates scheduled yet';
+  const activeProgramDates = useMemo(() => {
+    if (!selectedProgram) return [];
     const explicitDates = Object.keys(schedules)
       .filter((d) =>
         schedules[d]?.items?.some((it) => it.programUuid === selectedProgram.programUuid)
       )
       .sort();
-    if (explicitDates.length > 0) {
-      return formatProgramActiveDateRange(explicitDates);
-    }
+    if (explicitDates.length > 0) return explicitDates;
     const programPresetIds = new Set(
       presets
         .filter((p) => p.programIds?.includes(selectedProgram.programUuid))
         .map((p) => p.presetUuid)
     );
-    if (programPresetIds.size === 0) return 'No dates scheduled yet';
-    const fallbackDates = Object.keys(schedules)
+    if (programPresetIds.size === 0) return [];
+    return Object.keys(schedules)
       .filter((d) => schedules[d]?.items?.some((it) => programPresetIds.has(it.presetUuid)))
       .sort();
-    return formatProgramActiveDateRange(fallbackDates);
   }, [selectedProgram, schedules, presets]);
 
+  const activeProgramDateRange = useMemo(
+    () => formatProgramActiveDateRange(activeProgramDates),
+    [activeProgramDates]
+  );
+
   const [activeTemplateWeek, setActiveTemplateWeek] = useState<number>(1);
-  const [autoFillStart, setAutoFillStart] = useState<string>(todayIso);
-  const [autoFillEnd, setAutoFillEnd] = useState<string>(shiftIsoDate(todayIso, 27));
+  const [autoFillStart, setAutoFillStart] = useState<string>(() => {
+    if (activeProgramDates.length > 0) return activeProgramDates[0];
+    const saved = selectedProgram
+      ? readSavedProgramAutofillDates(selectedProgram.programUuid)
+      : null;
+    return saved?.start || todayIso;
+  });
+  const [autoFillEnd, setAutoFillEnd] = useState<string>(() => {
+    if (activeProgramDates.length > 0) {
+      return activeProgramDates[activeProgramDates.length - 1];
+    }
+    const saved = selectedProgram
+      ? readSavedProgramAutofillDates(selectedProgram.programUuid)
+      : null;
+    return saved?.end || shiftIsoDate(todayIso, 27);
+  });
   const [conflictMode, setConflictMode] = useState<'replace' | 'update_matching' | 'skip'>(
     'update_matching'
   );
   const [bannerNotice, setBannerNotice] = useState<string | null>(null);
+
+  // Sync autofill start/end dates to the selected program's existing scheduled range (or saved dates)
+  const activeProgramStartIso = activeProgramDates[0] || '';
+  const activeProgramEndIso = activeProgramDates[activeProgramDates.length - 1] || '';
+  useEffect(() => {
+    if (!selectedProgram) return;
+    const saved = readSavedProgramAutofillDates(selectedProgram.programUuid);
+    if (activeProgramStartIso && activeProgramEndIso) {
+      setAutoFillStart(activeProgramStartIso);
+      setAutoFillEnd(activeProgramEndIso);
+    } else if (saved) {
+      setAutoFillStart(saved.start);
+      setAutoFillEnd(saved.end);
+    } else {
+      const spanDays = Math.max(6, (selectedProgram.cycleLengthWeeks || 2) * 7 - 1);
+      setAutoFillStart(todayIso);
+      setAutoFillEnd(shiftIsoDate(todayIso, spanDays));
+    }
+  }, [selectedProgram?.programUuid, activeProgramStartIso, activeProgramEndIso, todayIso]);
 
   const [newProgramModal, setNewProgramModal] = useState(false);
   const [newProgTitle, setNewProgTitle] = useState('');
@@ -198,6 +267,9 @@ export const PlanView: React.FC = () => {
   const [newProgSelectedPresetUuids, setNewProgSelectedPresetUuids] = useState<string[]>([]);
   const [newProgWorkoutPickerOpen, setNewProgWorkoutPickerOpen] = useState(false);
   const [newProgWorkoutSearch, setNewProgWorkoutSearch] = useState('');
+
+  const [changeProgramModalOpen, setChangeProgramModalOpen] = useState(false);
+  const [deleteProgramConfirm, setDeleteProgramConfirm] = useState<WorkoutProgram | null>(null);
 
   const filteredModalPresets = useMemo(() => {
     const q = newProgWorkoutSearch.trim().toLowerCase();
@@ -220,35 +292,24 @@ export const PlanView: React.FC = () => {
   };
 
   const [programEditMenuOpen, setProgramEditMenuOpen] = useState(false);
-  const programEditMenuRef = useRef<HTMLDivElement>(null);
   const [renameModal, setRenameModal] = useState<{ open: boolean; title: string }>({
     open: false,
     title: '',
   });
   const [aiNotesModalOpen, setAiNotesModalOpen] = useState(false);
 
-  useEffect(() => {
-    if (!programEditMenuOpen) return;
-    const handleOutsideClick = (e: MouseEvent) => {
-      if (
-        programEditMenuRef.current &&
-        !programEditMenuRef.current.contains(e.target as Node)
-      ) {
-        setProgramEditMenuOpen(false);
-      }
-    };
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setProgramEditMenuOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleOutsideClick);
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', handleOutsideClick);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [programEditMenuOpen]);
+  const handleRunTasksSync = async () => {
+    setIsSyncingTasks(true);
+    const res = await runGoogleTasksSync(true);
+    setIsSyncingTasks(false);
+    if (res.ok) {
+      triggerNotice(
+        `Google Tasks synced: ${res.pushed} pushed, ${res.pulled} completed, ${res.rescheduled} moved`
+      );
+    } else if (res.error) {
+      triggerNotice(`Tasks sync failed: ${res.error}`);
+    }
+  };
 
   const triggerNotice = (msg: string) => {
     setBannerNotice(msg);
@@ -389,162 +450,181 @@ export const PlanView: React.FC = () => {
         </div>
       )}
 
-      {/* Sub-Tab Switcher & Program Controls Header */}
-      <div className="bg-white dark:bg-slate-900 rounded-3xl p-4 border border-slate-200/80 dark:border-slate-800 space-y-3">
-        {/* Row 1: View Switcher + Google Tasks Sync */}
-        <div className="flex flex-wrap items-center justify-between gap-2.5">
-          <div className="inline-flex rounded-2xl bg-slate-100 dark:bg-slate-800 p-1 overflow-x-auto max-w-full">
-            <button
-              type="button"
-              onClick={() => setSubTab('upcoming')}
-              data-tooltip="Chronological upcoming workout agenda"
-              title="Chronological upcoming workout agenda"
-              className={`tactile-pill px-3.5 py-2 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 transition-all whitespace-nowrap ${
-                subTab === 'upcoming'
-                  ? 'bg-orange-500 text-white shadow-sm'
-                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-              }`}
-            >
-              <ListChecks className="w-4 h-4" />
-              Upcoming
-            </button>
-            <button
-              type="button"
-              onClick={() => setSubTab('calendar')}
-              data-tooltip="Monthly training calendar view"
-              title="Monthly training calendar view"
-              className={`tactile-pill px-3.5 py-2 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 transition-all whitespace-nowrap ${
-                subTab === 'calendar'
-                  ? 'bg-orange-500 text-white shadow-sm'
-                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-              }`}
-            >
-              <Calendar className="w-4 h-4" />
-              Calendar
-            </button>
-            <button
-              type="button"
-              onClick={() => setSubTab('programming')}
-              data-tooltip="Configure rotating weekly templates & auto-fill schedule"
-              title="Configure rotating weekly templates & auto-fill schedule"
-              className={`tactile-pill px-3.5 py-2 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 transition-all whitespace-nowrap ${
-                subTab === 'programming'
-                  ? 'bg-orange-500 text-white shadow-sm'
-                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
-              }`}
-            >
-              <Wand2 className="w-4 h-4" />
-              Programming
-            </button>
-          </div>
-
-          <div className="flex flex-col items-end shrink-0 ml-auto">
-            <button
-              type="button"
-              disabled={isSyncingTasks}
-              onClick={async () => {
-                setIsSyncingTasks(true);
-                const res = await runGoogleTasksSync(true);
-                setIsSyncingTasks(false);
-                if (res.ok) {
-                  triggerNotice(
-                    `Google Tasks synced: ${res.pushed} pushed, ${res.pulled} completed, ${res.rescheduled} moved`
-                  );
-                } else if (res.error) {
-                  triggerNotice(`Tasks sync failed: ${res.error}`);
-                }
-              }}
-              title="Two-way sync upcoming 7 days with Google Tasks"
-              className="tactile-btn px-2.5 py-1.5 rounded-xl bg-[var(--bg-inset)] border border-[var(--border-card)] text-[var(--text-primary)] hover:border-[var(--accent-orange)] text-xs font-bold inline-flex items-center gap-1.5 transition-colors disabled:opacity-50"
-            >
-              <RefreshCw
-                className={`w-3.5 h-3.5 text-[var(--accent-sage)] ${
-                  isSyncingTasks ? 'animate-spin' : ''
-                }`}
-              />
-              <span>{isSyncingTasks ? 'Syncing...' : 'Sync Tasks'}</span>
-            </button>
-            {lastTasksSync && (
-              <span
-                className="text-[10px] font-medium mt-0.5 tabular-nums"
-                style={{
-                  color:
-                    lastTasksSync.status === 'success'
-                      ? 'var(--accent-sage)'
-                      : 'var(--accent-rust)',
-                }}
-              >
-                Last sync:{' '}
-                {new Date(lastTasksSync.timestamp).toLocaleTimeString([], {
-                  hour: '2-digit',
-                  minute: '2-digit',
-                })}{' '}
-                · {lastTasksSync.status === 'success' ? 'Success' : 'Failed'}
-              </span>
-            )}
-          </div>
-        </div>
-
-        {/* Row 2: Full-Width Program Selector + New Program */}
-        <div className="flex items-center gap-2 w-full min-w-0 pt-2.5 border-t border-slate-100 dark:border-slate-800/80">
-          <label
-            htmlFor="plan-program-select"
-            className="text-xs font-semibold text-[var(--text-muted)] shrink-0"
-          >
-            Program:
-          </label>
-          <select
-            id="plan-program-select"
-            value={selectedProgram?.programUuid || ''}
-            onChange={(e) => setActiveProgram(e.target.value)}
-            title="Select active training program"
-            className="flex-1 min-w-0 px-3 py-2 rounded-xl text-xs font-bold bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-100"
-          >
-            {programs.length === 0 ? (
-              <option value="" disabled>
-                No Programs
-              </option>
-            ) : (
-              programs.map((prog) => (
-                <option key={prog.programUuid} value={prog.programUuid}>
-                  {prog.title} ({prog.cycleLengthWeeks}w cycle)
-                </option>
-              ))
-            )}
-          </select>
+      {/* Sub-Tab Switcher Header */}
+      <div className="bg-white dark:bg-slate-900 rounded-3xl p-3 sm:p-4 border border-slate-200/80 dark:border-slate-800 flex items-center justify-between gap-2">
+        <div className="inline-flex rounded-2xl bg-slate-100 dark:bg-slate-800 p-1 overflow-x-auto max-w-full min-w-0">
           <button
             type="button"
-            onClick={() => setNewProgramModal(true)}
-            data-tooltip="Create a new multi-week program"
-            title="Create a new multi-week program"
-            className="tactile-btn px-3 py-2 rounded-xl bg-orange-500/10 hover:bg-orange-500 text-orange-600 dark:text-orange-400 hover:text-white text-xs font-bold inline-flex items-center gap-1 transition-colors shrink-0"
+            onClick={() => setSubTab('upcoming')}
+            data-tooltip="Chronological upcoming workout agenda"
+            title="Chronological upcoming workout agenda"
+            className={`tactile-pill px-3 py-2 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 transition-all whitespace-nowrap ${
+              subTab === 'upcoming'
+                ? 'bg-orange-500 text-white shadow-sm'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+            }`}
           >
-            <Plus className="w-3.5 h-3.5" />
-            New
+            <ListChecks className="w-4 h-4" />
+            Upcoming
+          </button>
+          <button
+            type="button"
+            onClick={() => setSubTab('calendar')}
+            data-tooltip="Monthly training calendar view"
+            title="Monthly training calendar view"
+            className={`tactile-pill px-3 py-2 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 transition-all whitespace-nowrap ${
+              subTab === 'calendar'
+                ? 'bg-orange-500 text-white shadow-sm'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+            }`}
+          >
+            <Calendar className="w-4 h-4" />
+            Calendar
+          </button>
+          <button
+            type="button"
+            onClick={() => setSubTab('programming')}
+            data-tooltip="Configure rotating weekly templates & auto-fill schedule"
+            title="Configure rotating weekly templates & auto-fill schedule"
+            className={`tactile-pill px-3 py-2 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 transition-all whitespace-nowrap ${
+              subTab === 'programming'
+                ? 'bg-orange-500 text-white shadow-sm'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+            }`}
+          >
+            <Wand2 className="w-4 h-4" />
+            Programming
           </button>
         </div>
+
+        {/* Upcoming & Calendar: compact icon-only Sync button color-coded by sync status */}
+        {subTab !== 'programming' && (
+          <button
+            type="button"
+            disabled={isSyncingTasks}
+            onClick={handleRunTasksSync}
+            aria-label="Sync Google Tasks"
+            title={
+              isSyncingTasks
+                ? 'Syncing Google Tasks...'
+                : lastTasksSync?.status === 'success'
+                ? 'Google Tasks synced — tap to sync again'
+                : lastTasksSync?.status === 'failed'
+                ? 'Google Tasks sync failed — tap to retry'
+                : 'Sync upcoming workouts with Google Tasks'
+            }
+            style={{
+              borderColor: isSyncingTasks
+                ? 'var(--accent-orange)'
+                : lastTasksSync?.status === 'success'
+                ? 'var(--accent-sage)'
+                : lastTasksSync?.status === 'failed'
+                ? 'var(--accent-rust)'
+                : 'var(--border-card)',
+              color: isSyncingTasks
+                ? 'var(--accent-orange)'
+                : lastTasksSync?.status === 'success'
+                ? 'var(--accent-sage)'
+                : lastTasksSync?.status === 'failed'
+                ? 'var(--accent-rust)'
+                : 'var(--text-muted)',
+            }}
+            className="tactile-btn p-2.5 rounded-xl bg-[var(--bg-inset)] border transition-colors shrink-0 disabled:opacity-60"
+          >
+            <RefreshCw className={`w-4 h-4 ${isSyncingTasks ? 'animate-spin' : ''}`} />
+          </button>
+        )}
       </div>
 
-      {/* Active Program Header Banner */}
-      {selectedProgram && (
-        <div className="bg-white dark:bg-slate-900 rounded-3xl px-4 py-3.5 sm:px-5 border border-slate-200/80 dark:border-slate-800 flex flex-col gap-0.5">
-          <div className="flex flex-wrap items-baseline justify-between gap-2">
-            <h2
-              className="font-display font-extrabold leading-tight tracking-tight text-[var(--text-primary)] break-words"
-              style={{ fontSize: '21px' }}
-            >
-              {selectedProgram.title}
-            </h2>
-            <span className="text-[11px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-orange-500/12 text-orange-600 dark:text-orange-400 shrink-0">
-              {selectedProgram.cycleLengthWeeks}-Week Cycle
-            </span>
-          </div>
-          <p
-            className="font-medium leading-snug"
-            style={{ fontSize: '13px', color: 'var(--text-muted)' }}
-          >
-            {activeProgramDateRange}
-          </p>
+      {/* Active Program Header Banner (+ Programming-Only Controls) */}
+      {(selectedProgram || subTab === 'programming') && (
+        <div className="bg-white dark:bg-slate-900 rounded-3xl px-4 py-3.5 sm:px-5 border border-slate-200/80 dark:border-slate-800 space-y-3">
+          {selectedProgram ? (
+            <div className="flex flex-col gap-0.5">
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <h2
+                  className="font-display font-extrabold leading-tight tracking-tight text-[var(--text-primary)] break-words"
+                  style={{ fontSize: '21px' }}
+                >
+                  {selectedProgram.title}
+                </h2>
+                <span className="text-[11px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-orange-500/12 text-orange-600 dark:text-orange-400 shrink-0">
+                  {selectedProgram.cycleLengthWeeks}-Week Cycle
+                </span>
+              </div>
+              <p
+                className="font-medium leading-snug"
+                style={{ fontSize: '13px', color: 'var(--text-muted)' }}
+              >
+                {activeProgramDateRange}
+              </p>
+            </div>
+          ) : (
+            <div className="text-xs font-semibold text-[var(--text-muted)]">
+              No active training program yet.
+            </div>
+          )}
+
+          {/* Programming Sub-Tab Controls: Change Program, + New, Full Sync Tasks + Last sync */}
+          {subTab === 'programming' && (
+            <div className="pt-2.5 border-t border-slate-100 dark:border-slate-800/80 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setChangeProgramModalOpen(true)}
+                  className="tactile-btn px-3 py-2 rounded-xl bg-[var(--bg-inset)] border border-[var(--border-card)] text-[var(--text-primary)] hover:border-[var(--accent-orange)] text-xs font-bold inline-flex items-center gap-1.5 transition-colors"
+                >
+                  <ArrowRightLeft className="w-3.5 h-3.5 text-orange-500" />
+                  Change Program
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setNewProgramModal(true)}
+                  data-tooltip="Create a new multi-week program"
+                  title="Create a new multi-week program"
+                  className="tactile-btn px-3 py-2 rounded-xl bg-orange-500/12 hover:bg-orange-500 text-orange-600 dark:text-orange-400 hover:text-white text-xs font-bold inline-flex items-center gap-1 transition-colors"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  New
+                </button>
+              </div>
+
+              <div className="flex flex-col items-end shrink-0 ml-auto">
+                <button
+                  type="button"
+                  disabled={isSyncingTasks}
+                  onClick={handleRunTasksSync}
+                  title="Two-way sync upcoming 7 days with Google Tasks"
+                  className="tactile-btn px-3 py-2 rounded-xl bg-[var(--bg-inset)] border border-[var(--border-card)] text-[var(--text-primary)] hover:border-[var(--accent-orange)] text-xs font-bold inline-flex items-center gap-1.5 transition-colors disabled:opacity-50"
+                >
+                  <RefreshCw
+                    className={`w-3.5 h-3.5 text-[var(--accent-sage)] ${
+                      isSyncingTasks ? 'animate-spin' : ''
+                    }`}
+                  />
+                  <span>{isSyncingTasks ? 'Syncing...' : 'Sync Tasks'}</span>
+                </button>
+                {lastTasksSync && (
+                  <span
+                    className="text-[10px] font-medium mt-0.5 tabular-nums"
+                    style={{
+                      color:
+                        lastTasksSync.status === 'success'
+                          ? 'var(--accent-sage)'
+                          : 'var(--accent-rust)',
+                    }}
+                  >
+                    Last sync:{' '}
+                    {new Date(lastTasksSync.timestamp).toLocaleTimeString([], {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}{' '}
+                    · {lastTasksSync.status === 'success' ? 'Success' : 'Failed'}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1295,8 +1375,8 @@ export const PlanView: React.FC = () => {
                     </p>
                   </div>
 
-                  {/* Active Program Edit Popover */}
-                  <div ref={programEditMenuRef} className="relative shrink-0">
+                  {/* Active Program Edit Trigger (Portaled Sheet/Modal) */}
+                  <div className="relative shrink-0">
                     <button
                       type="button"
                       onClick={() => setProgramEditMenuOpen((prev) => !prev)}
@@ -1314,20 +1394,33 @@ export const PlanView: React.FC = () => {
                       <span>Edit</span>
                     </button>
 
-                    {programEditMenuOpen && (
-                      <>
-                        <div
-                          className="fixed inset-0 bg-black/30 z-40 sm:hidden"
-                          onClick={() => setProgramEditMenuOpen(false)}
-                        />
-                        <div className="fixed inset-x-3 bottom-4 z-50 sm:absolute sm:inset-x-auto sm:bottom-auto sm:right-0 sm:top-full sm:mt-2 sm:w-60 max-w-[calc(100vw-1.5rem)] rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-xl p-1.5 space-y-1">
+                    <ModalPortal
+                      open={programEditMenuOpen}
+                      onClose={() => setProgramEditMenuOpen(false)}
+                      sheetOnMobile
+                      backdropClassName="items-end sm:items-center p-3 sm:p-4 bg-black/50 backdrop-blur-xs"
+                    >
+                      <div className="w-full max-w-sm rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 shadow-2xl p-3 space-y-1 text-[var(--text-primary)]">
+                        <div className="px-2 pb-1.5 mb-1 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between gap-2">
+                          <span className="font-display font-bold text-xs uppercase tracking-wider text-[var(--text-muted)] truncate">
+                            Program Actions
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setProgramEditMenuOpen(false)}
+                            className="px-2 py-0.5 rounded-lg text-[11px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-500"
+                          >
+                            Close
+                          </button>
+                        </div>
+
                         <button
                           type="button"
                           onClick={() => {
                             setProgramEditMenuOpen(false);
                             setRenameModal({ open: true, title: selectedProgram.title });
                           }}
-                          className="w-full px-3 py-2 rounded-xl text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-2 transition-colors"
+                          className="w-full px-3 py-2.5 rounded-xl text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-2 transition-colors"
                         >
                           <Edit3 className="w-3.5 h-3.5 text-orange-500 shrink-0" />
                           Rename Program
@@ -1351,7 +1444,7 @@ export const PlanView: React.FC = () => {
                             setActiveProgram(cloned.programUuid);
                             triggerNotice(`Duplicated as "${clonedTitle}"`);
                           }}
-                          className="w-full px-3 py-2 rounded-xl text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-2 transition-colors"
+                          className="w-full px-3 py-2.5 rounded-xl text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-2 transition-colors"
                         >
                           <Copy className="w-3.5 h-3.5 text-orange-500 shrink-0" />
                           Duplicate Program
@@ -1373,7 +1466,7 @@ export const PlanView: React.FC = () => {
                               triggerNotice('Clipboard blocked — export via Settings > AI Sync');
                             }
                           }}
-                          className="w-full px-3 py-2 rounded-xl text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-2 transition-colors"
+                          className="w-full px-3 py-2.5 rounded-xl text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-2 transition-colors"
                         >
                           <Sparkles className="w-3.5 h-3.5 text-orange-500 shrink-0" />
                           Export for AI Coach
@@ -1385,7 +1478,7 @@ export const PlanView: React.FC = () => {
                             setProgramEditMenuOpen(false);
                             setAiNotesModalOpen(true);
                           }}
-                          className="w-full px-3 py-2 rounded-xl text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-2 transition-colors"
+                          className="w-full px-3 py-2.5 rounded-xl text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center gap-2 transition-colors"
                         >
                           <ClipboardPaste className="w-3.5 h-3.5 text-orange-500 shrink-0" />
                           Import AI Notes Patch
@@ -1411,7 +1504,7 @@ export const PlanView: React.FC = () => {
                               triggerNotice('No upcoming scheduled workouts found for this program');
                             }
                           }}
-                          className="w-full px-3 py-2 rounded-xl text-left text-xs font-semibold text-amber-700 dark:text-amber-300 hover:bg-amber-500/10 flex items-center gap-2 transition-colors"
+                          className="w-full px-3 py-2.5 rounded-xl text-left text-xs font-semibold text-amber-700 dark:text-amber-300 hover:bg-amber-500/10 flex items-center gap-2 transition-colors"
                         >
                           <CalendarX className="w-3.5 h-3.5 shrink-0" />
                           Clear Future Scheduled Workouts
@@ -1422,91 +1515,123 @@ export const PlanView: React.FC = () => {
                             type="button"
                             onClick={() => {
                               setProgramEditMenuOpen(false);
-                              const confirmed = window.confirm(
-                                `Delete program "${selectedProgram.title}"? This cannot be undone.`
-                              );
-                              if (!confirmed) return;
-                              deleteProgram(selectedProgram.programUuid);
-                              triggerNotice(`Deleted "${selectedProgram.title}"`);
+                              setDeleteProgramConfirm(selectedProgram);
                             }}
-                            className="w-full px-3 py-2 rounded-xl text-left text-xs font-semibold text-rose-600 dark:text-rose-400 hover:bg-rose-500/10 flex items-center gap-2 transition-colors"
+                            className="w-full px-3 py-2.5 rounded-xl text-left text-xs font-semibold text-rose-600 dark:text-rose-400 hover:bg-rose-500/10 flex items-center gap-2 transition-colors"
                           >
                             <Trash2 className="w-3.5 h-3.5 shrink-0" />
                             Delete Program
                           </button>
                         </div>
                       </div>
-                      </>
-                    )}
+                    </ModalPortal>
                   </div>
                 </div>
 
-                <div
-                  className={`grid gap-3 items-end ${
-                    isMobile ? 'grid-cols-1' : 'grid-cols-1 sm:grid-cols-4'
-                  }`}
-                >
-                  <div className="min-w-0">
-                    <label className="block text-[11px] font-semibold text-slate-500 mb-1">
-                      Start Date
-                    </label>
-                    <input
-                      type="date"
-                      value={autoFillStart}
-                      onChange={(e) => setAutoFillStart(e.target.value)}
-                      className="w-full min-w-0 px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
-                    />
-                  </div>
-                  <div className="min-w-0">
-                    <label className="block text-[11px] font-semibold text-slate-500 mb-1">
-                      End Date
-                    </label>
-                    <input
-                      type="date"
-                      value={autoFillEnd}
-                      onChange={(e) => setAutoFillEnd(e.target.value)}
-                      className="w-full min-w-0 px-3 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
-                    />
-                  </div>
-                  <div className="min-w-0">
-                    <label className="block text-[11px] font-semibold text-slate-500 mb-1">
-                      If Dates Already Have Workouts
-                    </label>
-                    <select
-                      value={conflictMode}
-                      onChange={(e) =>
-                        setConflictMode(
-                          e.target.value as 'replace' | 'update_matching' | 'skip'
-                        )
-                      }
-                      className="w-full min-w-0 truncate px-3 py-2 text-xs font-semibold rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
-                    >
-                      <option value="update_matching">Update Matching Slots</option>
-                      <option value="replace">Replace All</option>
-                      <option value="skip">Skip Existing Days</option>
-                    </select>
-                  </div>
-                  <button
-                    type="button"
-                    data-tooltip="Generate scheduled workouts on the calendar"
-                    title="Generate scheduled workouts on the calendar"
-                    onClick={() => {
-                      const res = autoFillSchedule(
-                        selectedProgram.programUuid,
-                        autoFillStart,
-                        autoFillEnd,
-                        conflictMode
-                      );
-                      triggerNotice(
-                        `Auto-filled ${res.daysModified} calendar days (${res.itemsCreated} workouts)!`
-                      );
-                      setSubTab('calendar');
+                {/* Autofill Controls: Side-by-Side Start/End Dates + Conflict Mode + Button */}
+                <div className="space-y-3">
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)',
+                      gap: '10px',
+                      minWidth: 0,
                     }}
-                    className="py-2.5 px-4 rounded-xl bg-orange-500 hover:bg-orange-600 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-md shadow-orange-500/20"
                   >
-                    <Wand2 className="w-4 h-4" />
-                    Auto-Fill Calendar
-                  </button>
+                    <div className="min-w-0">
+                      <label className="block text-[11px] font-semibold text-slate-500 mb-1">
+                        Start Date
+                      </label>
+                      <input
+                        type="date"
+                        value={autoFillStart}
+                        onChange={(e) => {
+                          const nextStart = e.target.value;
+                          setAutoFillStart(nextStart);
+                          if (selectedProgram && nextStart && autoFillEnd) {
+                            saveProgramAutofillDates(
+                              selectedProgram.programUuid,
+                              nextStart,
+                              autoFillEnd
+                            );
+                          }
+                        }}
+                        className="w-full min-w-0 px-2.5 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                      />
+                    </div>
+                    <div className="min-w-0">
+                      <label className="block text-[11px] font-semibold text-slate-500 mb-1">
+                        End Date
+                      </label>
+                      <input
+                        type="date"
+                        value={autoFillEnd}
+                        onChange={(e) => {
+                          const nextEnd = e.target.value;
+                          setAutoFillEnd(nextEnd);
+                          if (selectedProgram && autoFillStart && nextEnd) {
+                            saveProgramAutofillDates(
+                              selectedProgram.programUuid,
+                              autoFillStart,
+                              nextEnd
+                            );
+                          }
+                        }}
+                        className="w-full min-w-0 px-2.5 py-2 text-xs font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                      />
+                    </div>
+                  </div>
+
+                  <div
+                    className={`grid gap-2.5 items-end ${
+                      isMobile ? 'grid-cols-1' : 'grid-cols-1 sm:grid-cols-2'
+                    }`}
+                  >
+                    <div className="min-w-0">
+                      <label className="block text-[11px] font-semibold text-slate-500 mb-1">
+                        If Dates Already Have Workouts
+                      </label>
+                      <select
+                        value={conflictMode}
+                        onChange={(e) =>
+                          setConflictMode(
+                            e.target.value as 'replace' | 'update_matching' | 'skip'
+                          )
+                        }
+                        className="w-full min-w-0 truncate px-3 py-2 text-xs font-semibold rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                      >
+                        <option value="update_matching">Update Matching Slots</option>
+                        <option value="replace">Replace All</option>
+                        <option value="skip">Skip Existing Days</option>
+                      </select>
+                    </div>
+                    <button
+                      type="button"
+                      data-tooltip="Generate scheduled workouts on the calendar"
+                      title="Generate scheduled workouts on the calendar"
+                      onClick={() => {
+                        saveProgramAutofillDates(
+                          selectedProgram.programUuid,
+                          autoFillStart,
+                          autoFillEnd
+                        );
+                        const res = autoFillSchedule(
+                          selectedProgram.programUuid,
+                          autoFillStart,
+                          autoFillEnd,
+                          conflictMode
+                        );
+                        triggerNotice(
+                          `Auto-filled ${res.daysModified} calendar days (${res.itemsCreated} workouts)!`
+                        );
+                        setSubTab('calendar');
+                      }}
+                      className="py-2.5 px-4 rounded-xl bg-orange-500 hover:bg-orange-600 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-md shadow-orange-500/20"
+                    >
+                      <Wand2 className="w-4 h-4" />
+                      Auto-Fill Calendar
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -1590,10 +1715,10 @@ export const PlanView: React.FC = () => {
                     return (
                       <div
                         key={dayOfWeek}
-                        className="p-3.5 rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 space-y-2.5"
+                        className="scroll-target min-w-0 overflow-hidden p-3 sm:p-3.5 rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 space-y-2.5"
                       >
-                        <div className="flex items-center justify-between">
-                          <span className="font-display font-bold text-xs sm:text-sm text-slate-900 dark:text-slate-100">
+                        <div className="flex items-center justify-between gap-2 min-w-0">
+                          <span className="font-display font-bold text-xs sm:text-sm text-slate-900 dark:text-slate-100 truncate">
                             {dayLabel}
                           </span>
                           <button
@@ -1608,7 +1733,7 @@ export const PlanView: React.FC = () => {
                                 ''
                               )
                             }
-                            className="text-xs font-bold text-orange-500 hover:underline flex items-center gap-0.5"
+                            className="text-xs font-bold text-orange-500 hover:underline flex items-center gap-0.5 shrink-0"
                           >
                             <Plus className="w-3.5 h-3.5" /> Add Workout
                           </button>
@@ -1619,13 +1744,13 @@ export const PlanView: React.FC = () => {
                             Rest Day
                           </div>
                         ) : (
-                          <div className="space-y-2">
+                          <div className="space-y-2 min-w-0">
                             {dayItems.map((slot, slotIdx) => (
                               <div
                                 key={slotIdx}
-                                className="p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 space-y-2"
+                                className="min-w-0 overflow-hidden p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 space-y-2"
                               >
-                                <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-1.5 min-w-0 w-full">
                                   <select
                                     value={slot.slotRole}
                                     onChange={(e) => {
@@ -1649,7 +1774,7 @@ export const PlanView: React.FC = () => {
                                         scheduleTemplate: updatedTemplate,
                                       });
                                     }}
-                                    className="px-2 py-1 text-[11px] font-bold rounded-lg bg-orange-500/10 text-orange-600 dark:text-orange-400"
+                                    className="shrink-0 max-w-[92px] px-1.5 py-1 text-[11px] font-bold rounded-lg bg-orange-500/10 text-orange-600 dark:text-orange-400 truncate"
                                   >
                                     {SLOT_ROLES.map((r) => (
                                       <option key={r} value={r}>
@@ -1683,7 +1808,13 @@ export const PlanView: React.FC = () => {
                                         scheduleTemplate: updatedTemplate,
                                       });
                                     }}
-                                    className="flex-1 px-2 py-1 text-xs font-semibold rounded-lg bg-slate-100 dark:bg-slate-800 truncate"
+                                    style={{
+                                      minWidth: 0,
+                                      flex: '1 1 0%',
+                                      width: '100%',
+                                      textOverflow: 'ellipsis',
+                                    }}
+                                    className="min-w-0 flex-1 w-full px-2 py-1 text-xs font-semibold rounded-lg bg-slate-100 dark:bg-slate-800 truncate"
                                   >
                                     {presets.map((p) => (
                                       <option key={p.presetUuid} value={p.presetUuid}>
@@ -1703,7 +1834,7 @@ export const PlanView: React.FC = () => {
                                         slotIdx
                                       )
                                     }
-                                    className="p-1 text-slate-400 hover:text-rose-500"
+                                    className="p-1 text-slate-400 hover:text-rose-500 shrink-0"
                                   >
                                     <Trash2 className="w-3.5 h-3.5" />
                                   </button>
@@ -1750,73 +1881,230 @@ export const PlanView: React.FC = () => {
         </div>
       )}
 
-      {/* Modal: Add Scheduled Workout Slot to a Date */}
-      {scheduleModal.open && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
-          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-5 space-y-4 shadow-2xl">
-            <h3 className="font-display font-bold text-base">
-              Schedule Workout for {formatReadableDate(scheduleModal.date)}
-            </h3>
+      {/* Modal: Add Scheduled Workout Slot to a Date (Portaled z-1000) */}
+      <ModalPortal
+        open={scheduleModal.open}
+        onClose={() => setScheduleModal({ ...scheduleModal, open: false })}
+      >
+        <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-5 space-y-4 shadow-2xl text-[var(--text-primary)]">
+          <h3 className="font-display font-bold text-base">
+            Schedule Workout for {formatReadableDate(scheduleModal.date)}
+          </h3>
 
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs font-semibold text-slate-500 mb-1">
-                  Slot Type
-                </label>
-                <select
-                  value={scheduleModal.slotRole}
-                  onChange={(e) =>
-                    setScheduleModal({ ...scheduleModal, slotRole: e.target.value })
-                  }
-                  className="w-full px-3 py-2 text-xs font-semibold rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
-                >
-                  {SLOT_ROLES.map((r) => (
-                    <option key={r} value={r}>
-                      {r}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-500 mb-1">
-                  Workout
-                </label>
-                <select
-                  value={scheduleModal.presetUuid}
-                  onChange={(e) =>
-                    setScheduleModal({ ...scheduleModal, presetUuid: e.target.value })
-                  }
-                  className="w-full px-3 py-2 text-xs font-semibold rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
-                >
-                  {presets.map((p) => (
-                    <option key={p.presetUuid} value={p.presetUuid}>
-                      {p.title} ({p.workoutType})
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-500 mb-1">
-                  Target / Progression Note
-                </label>
-                <input
-                  type="text"
-                  value={scheduleModal.coachNotes}
-                  onChange={(e) =>
-                    setScheduleModal({ ...scheduleModal, coachNotes: e.target.value })
-                  }
-                  placeholder="e.g. Target 15 rounds @ 2x16kg..."
-                  className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
-                />
-              </div>
+          <div className="space-y-3">
+            <div>
+              <label className="block text-xs font-semibold text-slate-500 mb-1">
+                Slot Type
+              </label>
+              <select
+                value={scheduleModal.slotRole}
+                onChange={(e) =>
+                  setScheduleModal({ ...scheduleModal, slotRole: e.target.value })
+                }
+                className="w-full px-3 py-2 text-xs font-semibold rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+              >
+                {SLOT_ROLES.map((r) => (
+                  <option key={r} value={r}>
+                    {r}
+                  </option>
+                ))}
+              </select>
             </div>
 
-            <div className="flex justify-end gap-2 pt-2">
+            <div>
+              <label className="block text-xs font-semibold text-slate-500 mb-1">
+                Workout
+              </label>
+              <select
+                value={scheduleModal.presetUuid}
+                onChange={(e) =>
+                  setScheduleModal({ ...scheduleModal, presetUuid: e.target.value })
+                }
+                className="w-full px-3 py-2 text-xs font-semibold rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+              >
+                {presets.map((p) => (
+                  <option key={p.presetUuid} value={p.presetUuid}>
+                    {p.title} ({p.workoutType})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-500 mb-1">
+                Target / Progression Note
+              </label>
+              <input
+                type="text"
+                value={scheduleModal.coachNotes}
+                onChange={(e) =>
+                  setScheduleModal({ ...scheduleModal, coachNotes: e.target.value })
+                }
+                placeholder="e.g. Target 15 rounds @ 2x16kg..."
+                className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+              />
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2">
+            <button
+              type="button"
+              onClick={() => setScheduleModal({ ...scheduleModal, open: false })}
+              className="px-4 py-2 rounded-xl text-xs font-semibold bg-slate-100 dark:bg-slate-800"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                addScheduledItemToDate(
+                  scheduleModal.date,
+                  scheduleModal.presetUuid,
+                  scheduleModal.slotRole,
+                  scheduleModal.coachNotes
+                );
+                setScheduleModal({ ...scheduleModal, open: false });
+                triggerNotice('Scheduled workout added to calendar');
+              }}
+              className="px-4 py-2 rounded-xl text-xs font-bold bg-orange-500 text-white"
+            >
+              Save to Calendar
+            </button>
+          </div>
+        </div>
+      </ModalPortal>
+
+      {/* Modal: Change Program Overlay with Safe Delete (Portaled z-1000) */}
+      <ModalPortal
+        open={changeProgramModalOpen}
+        onClose={() => setChangeProgramModalOpen(false)}
+      >
+        <div className="w-full max-w-md max-h-[85vh] flex flex-col bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-5 shadow-2xl text-[var(--text-primary)] overflow-hidden space-y-4">
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <h3 className="font-display font-bold text-base">Change Program</h3>
+              <p className="text-[11px] text-[var(--text-muted)]">
+                Switch active training program or delete unused programs.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setChangeProgramModalOpen(false)}
+              aria-label="Close Change Program modal"
+              className="p-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="flex-1 min-h-0 overflow-y-auto space-y-2 pr-0.5 max-h-[55vh]">
+            {programs.length === 0 ? (
+              <div className="py-8 text-center text-xs text-[var(--text-muted)]">
+                No saved training programs yet.
+              </div>
+            ) : (
+              programs.map((prog) => {
+                const isActive = selectedProgram?.programUuid === prog.programUuid;
+                return (
+                  <div
+                    key={prog.programUuid}
+                    className={`rounded-2xl border p-3 flex items-center gap-2.5 transition-colors ${
+                      isActive
+                        ? 'bg-orange-500/10 border-orange-500/50'
+                        : 'bg-slate-50 dark:bg-slate-800/50 border-slate-200/80 dark:border-slate-700/80 hover:border-orange-500/40'
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveProgram(prog.programUuid);
+                        setChangeProgramModalOpen(false);
+                        triggerNotice(`Switched to "${prog.title}"`);
+                      }}
+                      className="flex-1 min-w-0 text-left space-y-0.5"
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="font-display font-bold text-sm text-[var(--text-primary)] truncate">
+                          {prog.title}
+                        </span>
+                        {isActive && (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-orange-500 text-white shrink-0">
+                            Active
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[11px] text-[var(--text-muted)]">
+                        {prog.cycleLengthWeeks}-week cycle
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      aria-label={`Delete ${prog.title}`}
+                      title={`Delete ${prog.title}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setDeleteProgramConfirm(prog);
+                      }}
+                      className="p-2 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-500/10 transition-colors shrink-0"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+            <button
+              type="button"
+              onClick={() => {
+                setChangeProgramModalOpen(false);
+                setNewProgramModal(true);
+              }}
+              className="px-3.5 py-2 rounded-xl text-xs font-bold bg-orange-500/12 text-orange-600 dark:text-orange-400 hover:bg-orange-500 hover:text-white inline-flex items-center gap-1 transition-colors"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              New Program
+            </button>
+            <button
+              type="button"
+              onClick={() => setChangeProgramModalOpen(false)}
+              className="px-4 py-2 rounded-xl text-xs font-semibold bg-slate-100 dark:bg-slate-800"
+            >
+              Done
+            </button>
+          </div>
+        </div>
+      </ModalPortal>
+
+      {/* Nested Modal: Delete Program Confirmation (Portaled z-1100) */}
+      <ModalPortal
+        open={Boolean(deleteProgramConfirm)}
+        onClose={() => setDeleteProgramConfirm(null)}
+        tier="nested"
+        backdropClassName="items-center p-4 bg-black/70 backdrop-blur-xs"
+      >
+        {deleteProgramConfirm && (
+          <div className="w-full max-w-sm bg-white dark:bg-slate-900 rounded-3xl border border-rose-500/30 p-5 space-y-4 shadow-2xl text-[var(--text-primary)]">
+            <div className="flex items-start gap-3">
+              <div className="w-9 h-9 rounded-2xl bg-rose-500/15 text-rose-500 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div className="space-y-1 min-w-0">
+                <h3 className="font-display font-bold text-base">Delete Program?</h3>
+                <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
+                  Permanently delete <strong>&ldquo;{deleteProgramConfirm.title}&rdquo;</strong> and
+                  remove its uncompleted future scheduled workouts. All completed workout history
+                  logs will be preserved.
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2">
               <button
                 type="button"
-                onClick={() => setScheduleModal({ ...scheduleModal, open: false })}
+                onClick={() => setDeleteProgramConfirm(null)}
                 className="px-4 py-2 rounded-xl text-xs font-semibold bg-slate-100 dark:bg-slate-800"
               >
                 Cancel
@@ -1824,260 +2112,240 @@ export const PlanView: React.FC = () => {
               <button
                 type="button"
                 onClick={() => {
-                  addScheduledItemToDate(
-                    scheduleModal.date,
-                    scheduleModal.presetUuid,
-                    scheduleModal.slotRole,
-                    scheduleModal.coachNotes
-                  );
-                  setScheduleModal({ ...scheduleModal, open: false });
-                  triggerNotice('Scheduled workout added to calendar');
+                  const target = deleteProgramConfirm;
+                  deleteProgram(target.programUuid);
+                  setDeleteProgramConfirm(null);
+                  triggerNotice(`Deleted "${target.title}"`);
                 }}
-                className="px-4 py-2 rounded-xl text-xs font-bold bg-orange-500 text-white"
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white"
               >
-                Save to Calendar
+                Delete Permanently
               </button>
             </div>
           </div>
-        </div>
-      )}
-
-      {/* Modal: Create New Program (Portaled & Fixed Viewport Centered) */}
-      {newProgramModal &&
-        typeof document !== 'undefined' &&
-        createPortal(
-          <div
-            data-no-swipe="true"
-            onClick={(e) => {
-              if (e.target === e.currentTarget) closeNewProgramModal();
-            }}
-            style={{
-              position: 'fixed',
-              inset: 0,
-              zIndex: 1000,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-            className="bg-black/60 backdrop-blur-xs p-4"
-          >
-            <div className="w-full max-w-md max-h-[88vh] flex flex-col bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-5 shadow-2xl text-[var(--text-primary)] overflow-hidden">
-              {newProgWorkoutPickerOpen ? (
-                /* Sub-View: Select Workouts Tick-List */
-                <div className="flex flex-col min-h-0 flex-1 space-y-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <div>
-                      <h3 className="font-display font-bold text-base">Select Workouts</h3>
-                      <p className="text-[11px] text-[var(--text-muted)]">
-                        {newProgSelectedPresetUuids.length} of {presets.length} selected
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (newProgSelectedPresetUuids.length === presets.length) {
-                            setNewProgSelectedPresetUuids([]);
-                          } else {
-                            setNewProgSelectedPresetUuids(presets.map((p) => p.presetUuid));
-                          }
-                        }}
-                        className="px-2.5 py-1.5 rounded-xl text-[11px] font-bold bg-[var(--bg-inset)] border border-[var(--border-card)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-                      >
-                        {newProgSelectedPresetUuids.length === presets.length && presets.length > 0
-                          ? 'Clear'
-                          : 'Select All'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setNewProgWorkoutPickerOpen(false)}
-                        className="px-3 py-1.5 rounded-xl text-xs font-bold bg-orange-500 text-white"
-                      >
-                        Done
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Quick Search */}
-                  <div className="relative">
-                    <Search className="w-3.5 h-3.5 text-[var(--text-muted)] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                    <input
-                      type="text"
-                      value={newProgWorkoutSearch}
-                      onChange={(e) => setNewProgWorkoutSearch(e.target.value)}
-                      placeholder="Filter library workouts..."
-                      className="w-full pl-8 pr-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:border-orange-500"
-                    />
-                  </div>
-
-                  {/* Scrollable Checkbox Tick-List */}
-                  <div className="flex-1 min-h-0 overflow-y-auto space-y-1.5 pr-0.5 max-h-[52vh]">
-                    {filteredModalPresets.length === 0 ? (
-                      <div className="py-8 text-center text-xs text-[var(--text-muted)]">
-                        No matching workouts in library.
-                      </div>
-                    ) : (
-                      filteredModalPresets.map((preset) => {
-                        const isChecked = newProgSelectedPresetUuids.includes(preset.presetUuid);
-                        return (
-                          <button
-                            key={preset.presetUuid}
-                            type="button"
-                            onClick={() => {
-                              setNewProgSelectedPresetUuids((prev) =>
-                                prev.includes(preset.presetUuid)
-                                  ? prev.filter((id) => id !== preset.presetUuid)
-                                  : [...prev, preset.presetUuid]
-                              );
-                            }}
-                            className={`w-full text-left px-3 py-2.5 rounded-2xl border flex items-center gap-2.5 transition-colors ${
-                              isChecked
-                                ? 'bg-orange-500/10 border-orange-500/50'
-                                : 'bg-slate-50 dark:bg-slate-800/50 border-slate-200/80 dark:border-slate-700/80 hover:border-orange-500/40'
-                            }`}
-                          >
-                            <span
-                              data-checked={isChecked ? 'true' : 'false'}
-                              className={`tactile-check w-5 h-5 rounded-md border flex items-center justify-center shrink-0 ${
-                                isChecked
-                                  ? 'bg-orange-500 border-orange-500 text-white'
-                                  : 'bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-600 text-transparent'
-                              }`}
-                            >
-                              <Check className="w-3.5 h-3.5" />
-                            </span>
-                            <div className="min-w-0 flex-1">
-                              <div className="text-xs font-bold text-[var(--text-primary)] truncate">
-                                {preset.title}
-                              </div>
-                              <div className="text-[10px] text-[var(--text-muted)] mt-0.5">
-                                {preset.exercises.length} exercise
-                                {preset.exercises.length === 1 ? '' : 's'}
-                              </div>
-                            </div>
-                            <span className="px-2 py-0.5 rounded-md text-[10px] font-bold uppercase bg-[var(--bg-inset)] text-[var(--text-secondary)] border border-[var(--border-subtle)] shrink-0">
-                              {preset.workoutType}
-                            </span>
-                          </button>
-                        );
-                      })
-                    )}
-                  </div>
-                </div>
-              ) : (
-                /* Main Create Training Program Form */
-                <div className="space-y-4">
-                  <h3 className="font-display font-bold text-base">Create Training Program</h3>
-                  <div className="space-y-3">
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-500 mb-1">
-                        Program Name
-                      </label>
-                      <input
-                        type="text"
-                        value={newProgTitle}
-                        onChange={(e) => setNewProgTitle(e.target.value)}
-                        placeholder="e.g. Summer Ruck & Kettlebell Block"
-                        className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:border-orange-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-500 mb-1">
-                        Cycle Length (Weeks)
-                      </label>
-                      <input
-                        type="number"
-                        min={1}
-                        max={12}
-                        value={newProgWeeks}
-                        onChange={(e) =>
-                          setNewProgWeeks(Math.max(1, parseInt(e.target.value, 10) || 1))
-                        }
-                        className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:border-orange-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-500 mb-1">
-                        Program Workouts
-                      </label>
-                      <button
-                        type="button"
-                        onClick={() => setNewProgWorkoutPickerOpen(true)}
-                        className="tactile-btn w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:border-orange-500 flex items-center justify-between gap-2 text-xs font-bold transition-colors"
-                      >
-                        <span className="inline-flex items-center gap-2 min-w-0">
-                          <ListChecks className="w-4 h-4 text-orange-500 shrink-0" />
-                          <span className="truncate">
-                            Select Workouts ({newProgSelectedPresetUuids.length} selected)
-                          </span>
-                        </span>
-                        <ChevronRight className="w-4 h-4 text-[var(--text-muted)] shrink-0" />
-                      </button>
-                    </div>
-                  </div>
-                  <div className="flex justify-end gap-2 pt-1">
-                    <button
-                      type="button"
-                      onClick={closeNewProgramModal}
-                      className="px-4 py-2 rounded-xl text-xs font-semibold bg-slate-100 dark:bg-slate-800"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (!newProgTitle.trim()) return;
-                        const now = new Date().toISOString();
-                        const progUuid = `prog-${uuidv4()}`;
-                        upsertProgram({
-                          programUuid: progUuid,
-                          slug: slugify(newProgTitle, 'prg'),
-                          title: newProgTitle.trim(),
-                          cycleLengthWeeks: newProgWeeks,
-                          scheduleTemplate: [],
-                          weekProgressionNotes: {},
-                          createdAt: now,
-                          updatedAt: now,
-                        });
-                        if (newProgSelectedPresetUuids.length > 0) {
-                          for (const presetUuid of newProgSelectedPresetUuids) {
-                            const preset = presets.find((p) => p.presetUuid === presetUuid);
-                            if (preset) {
-                              const nextProgramIds = Array.from(
-                                new Set([...(preset.programIds || []), progUuid])
-                              );
-                              upsertPreset({ ...preset, programIds: nextProgramIds });
-                            }
-                          }
-                        }
-                        setActiveProgram(progUuid);
-                        const linkedCount = newProgSelectedPresetUuids.length;
-                        const createdTitle = newProgTitle.trim();
-                        closeNewProgramModal();
-                        triggerNotice(
-                          linkedCount > 0
-                            ? `Created "${createdTitle}" with ${linkedCount} workout${
-                                linkedCount === 1 ? '' : 's'
-                              }`
-                            : `Created "${createdTitle}"`
-                        );
-                      }}
-                      className="px-4 py-2 rounded-xl text-xs font-bold bg-orange-500 text-white"
-                    >
-                      Create Program
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>,
-          document.body
         )}
+      </ModalPortal>
 
-      {/* Modal: Rename Active Program */}
-      {renameModal.open && selectedProgram && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
-          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-5 space-y-4 shadow-2xl">
+      {/* Modal: Create New Program (Portaled z-1000) */}
+      <ModalPortal open={newProgramModal} onClose={closeNewProgramModal} tier="primary">
+        <div className="w-full max-w-md max-h-[88vh] flex flex-col bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-5 shadow-2xl text-[var(--text-primary)] overflow-y-auto space-y-4">
+          <h3 className="font-display font-bold text-base">Create Training Program</h3>
+          <div className="space-y-3">
+            <div>
+              <label className="block text-xs font-semibold text-slate-500 mb-1">
+                Program Name
+              </label>
+              <input
+                type="text"
+                value={newProgTitle}
+                onChange={(e) => setNewProgTitle(e.target.value)}
+                placeholder="e.g. Summer Ruck & Kettlebell Block"
+                className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:border-orange-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-500 mb-1">
+                Cycle Length (Weeks)
+              </label>
+              <input
+                type="number"
+                min={1}
+                max={12}
+                value={newProgWeeks}
+                onChange={(e) =>
+                  setNewProgWeeks(Math.max(1, parseInt(e.target.value, 10) || 1))
+                }
+                className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:border-orange-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-500 mb-1">
+                Program Workouts
+              </label>
+              <button
+                type="button"
+                onClick={() => setNewProgWorkoutPickerOpen(true)}
+                className="tactile-btn w-full px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:border-orange-500 flex items-center justify-between gap-2 text-xs font-bold transition-colors"
+              >
+                <span className="inline-flex items-center gap-2 min-w-0">
+                  <ListChecks className="w-4 h-4 text-orange-500 shrink-0" />
+                  <span className="truncate">
+                    Select Workouts ({newProgSelectedPresetUuids.length} selected)
+                  </span>
+                </span>
+                <ChevronRight className="w-4 h-4 text-[var(--text-muted)] shrink-0" />
+              </button>
+            </div>
+          </div>
+          <div className="flex justify-end gap-2 pt-1">
+            <button
+              type="button"
+              onClick={closeNewProgramModal}
+              className="px-4 py-2 rounded-xl text-xs font-semibold bg-slate-100 dark:bg-slate-800"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (!newProgTitle.trim()) return;
+                const now = new Date().toISOString();
+                const progUuid = `prog-${uuidv4()}`;
+                upsertProgram({
+                  programUuid: progUuid,
+                  slug: slugify(newProgTitle, 'prg'),
+                  title: newProgTitle.trim(),
+                  cycleLengthWeeks: newProgWeeks,
+                  scheduleTemplate: [],
+                  weekProgressionNotes: {},
+                  createdAt: now,
+                  updatedAt: now,
+                });
+                if (newProgSelectedPresetUuids.length > 0) {
+                  for (const presetUuid of newProgSelectedPresetUuids) {
+                    const preset = presets.find((p) => p.presetUuid === presetUuid);
+                    if (preset) {
+                      const nextProgramIds = Array.from(
+                        new Set([...(preset.programIds || []), progUuid])
+                      );
+                      upsertPreset({ ...preset, programIds: nextProgramIds });
+                    }
+                  }
+                }
+                setActiveProgram(progUuid);
+                const linkedCount = newProgSelectedPresetUuids.length;
+                const createdTitle = newProgTitle.trim();
+                closeNewProgramModal();
+                triggerNotice(
+                  linkedCount > 0
+                    ? `Created "${createdTitle}" with ${linkedCount} workout${
+                        linkedCount === 1 ? '' : 's'
+                      }`
+                    : `Created "${createdTitle}"`
+                );
+              }}
+              className="px-4 py-2 rounded-xl text-xs font-bold bg-orange-500 text-white"
+            >
+              Create Program
+            </button>
+          </div>
+        </div>
+      </ModalPortal>
+
+      {/* Nested Modal: Select Workouts Tick-List (Portaled z-1100) */}
+      <ModalPortal
+        open={newProgramModal && newProgWorkoutPickerOpen}
+        onClose={() => setNewProgWorkoutPickerOpen(false)}
+        tier="nested"
+        backdropClassName="items-center p-4 bg-black/70 backdrop-blur-xs"
+      >
+        <div className="w-full max-w-md max-h-[86vh] flex flex-col bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-5 shadow-2xl text-[var(--text-primary)] overflow-hidden space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <h3 className="font-display font-bold text-base">Select Workouts</h3>
+              <p className="text-[11px] text-[var(--text-muted)]">
+                {newProgSelectedPresetUuids.length} of {presets.length} selected
+              </p>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => {
+                  if (newProgSelectedPresetUuids.length === presets.length) {
+                    setNewProgSelectedPresetUuids([]);
+                  } else {
+                    setNewProgSelectedPresetUuids(presets.map((p) => p.presetUuid));
+                  }
+                }}
+                className="px-2.5 py-1.5 rounded-xl text-[11px] font-bold bg-[var(--bg-inset)] border border-[var(--border-card)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+              >
+                {newProgSelectedPresetUuids.length === presets.length && presets.length > 0
+                  ? 'Clear'
+                  : 'Select All'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setNewProgWorkoutPickerOpen(false)}
+                className="px-3 py-1.5 rounded-xl text-xs font-bold bg-orange-500 text-white"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+
+          <div className="relative">
+            <Search className="w-3.5 h-3.5 text-[var(--text-muted)] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <input
+              type="text"
+              value={newProgWorkoutSearch}
+              onChange={(e) => setNewProgWorkoutSearch(e.target.value)}
+              placeholder="Filter library workouts..."
+              className="w-full pl-8 pr-3 py-2 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:border-orange-500"
+            />
+          </div>
+
+          <div className="flex-1 min-h-0 overflow-y-auto space-y-1.5 pr-0.5 max-h-[55vh]">
+            {filteredModalPresets.length === 0 ? (
+              <div className="py-8 text-center text-xs text-[var(--text-muted)]">
+                No matching workouts in library.
+              </div>
+            ) : (
+              filteredModalPresets.map((preset) => {
+                const isChecked = newProgSelectedPresetUuids.includes(preset.presetUuid);
+                return (
+                  <button
+                    key={preset.presetUuid}
+                    type="button"
+                    onClick={() => {
+                      setNewProgSelectedPresetUuids((prev) =>
+                        prev.includes(preset.presetUuid)
+                          ? prev.filter((id) => id !== preset.presetUuid)
+                          : [...prev, preset.presetUuid]
+                      );
+                    }}
+                    className={`w-full text-left px-3 py-2.5 rounded-2xl border flex items-center gap-2.5 transition-colors ${
+                      isChecked
+                        ? 'bg-orange-500/10 border-orange-500/50'
+                        : 'bg-slate-50 dark:bg-slate-800/50 border-slate-200/80 dark:border-slate-700/80 hover:border-orange-500/40'
+                    }`}
+                  >
+                    <span
+                      data-checked={isChecked ? 'true' : 'false'}
+                      className={`tactile-check w-5 h-5 rounded-md border flex items-center justify-center shrink-0 ${
+                        isChecked
+                          ? 'bg-orange-500 border-orange-500 text-white'
+                          : 'bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-600 text-transparent'
+                      }`}
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-xs font-bold text-[var(--text-primary)] truncate">
+                        {preset.title}
+                      </div>
+                      <div className="text-[10px] text-[var(--text-muted)] mt-0.5">
+                        {preset.exercises.length} exercise
+                        {preset.exercises.length === 1 ? '' : 's'}
+                      </div>
+                    </div>
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-bold uppercase bg-[var(--bg-inset)] text-[var(--text-secondary)] border border-[var(--border-subtle)] shrink-0">
+                      {preset.workoutType}
+                    </span>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </div>
+      </ModalPortal>
+
+      {/* Modal: Rename Active Program (Portaled z-1000) */}
+      <ModalPortal
+        open={Boolean(renameModal.open && selectedProgram)}
+        onClose={() => setRenameModal({ open: false, title: '' })}
+      >
+        {selectedProgram && (
+          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-5 space-y-4 shadow-2xl text-[var(--text-primary)]">
             <h3 className="font-display font-bold text-base">Rename Training Program</h3>
             <div>
               <label className="block text-xs font-semibold text-slate-500 mb-1">
@@ -2119,8 +2387,8 @@ export const PlanView: React.FC = () => {
               </button>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </ModalPortal>
 
       <ImportAiNotesPatchModal
         open={aiNotesModalOpen}

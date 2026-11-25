@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { ModalPortal } from './ModalPortal';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -102,11 +103,10 @@ export const ImportAiNotesPatchModal: React.FC<ImportAiNotesPatchModalProps> = (
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
+    <ModalPortal
+      open={open}
+      onClose={onClose}
+      backdropClassName="items-center p-4 bg-slate-950/60 backdrop-blur-sm"
     >
       <div className="w-full max-w-2xl max-h-[90vh] flex flex-col rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden">
         {/* Header */}
@@ -329,6 +329,6 @@ export const ImportAiNotesPatchModal: React.FC<ImportAiNotesPatchModalProps> = (
           </button>
         </div>
       </div>
-    </div>
+    </ModalPortal>
   );
 };

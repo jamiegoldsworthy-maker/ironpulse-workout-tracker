@@ -50,7 +50,7 @@
   body,
   #root {
     max-width: 100vw;
-    overflow-x: hidden;
+    overflow-x: clip;
   }
 
   body {
@@ -371,11 +371,15 @@ input[type='checkbox']:checked,
 }
 
 .screen-enter-forward {
-  animation: screen-slide-from-right 280ms var(--ease-spring-twang) both;
+  animation: screen-slide-from-right 280ms var(--ease-spring-twang) backwards;
 }
 
 .screen-enter-backward {
-  animation: screen-slide-from-left 280ms var(--ease-spring-twang) both;
+  animation: screen-slide-from-left 280ms var(--ease-spring-twang) backwards;
+}
+
+.scroll-target {
+  scroll-margin-top: 68px;
 }
 
 /* Active Timer Focus Card Pulsing Border Glow & Entrance */

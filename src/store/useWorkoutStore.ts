@@ -2438,27 +2438,83 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
 
       deleteProgram: (programUuid) => {
         const state = get();
+        const today = getTodayIsoDate();
+        const now = new Date().toISOString();
         const remaining = state.programs.filter((p) => p.programUuid !== programUuid);
         const needNewActive = state.meta.activeProgramUuid === programUuid;
-        const nextActiveUuid = needNewActive ? remaining[0]?.programUuid : state.meta.activeProgramUuid;
+        const nextActiveUuid = needNewActive
+          ? remaining[0]?.programUuid || ''
+          : state.meta.activeProgramUuid;
         const nextMeta: UserMeta = {
           ...state.meta,
-          activeProgramUuid: nextActiveUuid,
-          updatedAt: new Date().toISOString(),
+          activeProgramUuid: nextActiveUuid || undefined,
+          updatedAt: now,
         };
+
+        // Clean up uncompleted future schedule entries belonging to the deleted program
+        // while preserving all completed workout history logs untouched.
+        const nextSchedules = { ...state.schedules };
+        const updatedScheduleDates: string[] = [];
+        const removedScheduleDates: string[] = [];
+        for (const [date, daySched] of Object.entries(state.schedules)) {
+          if (date < today) continue;
+          const hasMatchingUncompleted = daySched.items.some(
+            (it) => it.programUuid === programUuid && it.status !== 'completed'
+          );
+          if (!hasMatchingUncompleted) continue;
+
+          const remainingItems = daySched.items
+            .filter((it) => !(it.programUuid === programUuid && it.status !== 'completed'))
+            .map((it, idx) => ({ ...it, orderIndex: idx }));
+
+          if (remainingItems.length === 0) {
+            delete nextSchedules[date];
+            removedScheduleDates.push(date);
+          } else {
+            nextSchedules[date] = {
+              ...daySched,
+              items: remainingItems,
+              updatedAt: now,
+            };
+            updatedScheduleDates.push(date);
+          }
+        }
+
         set({
           programs: remaining,
+          schedules: nextSchedules,
           ...(needNewActive ? { meta: nextMeta } : {}),
         });
+
         if (state.authUser) {
           const uid = state.authUser.uid;
           removeFirestoreDoc('wt_programs', programUuid).catch((err) => {
             console.error('[Sync] Failed to delete program:', err);
-            set({ syncStatus: 'error', lastSyncError: err?.message || 'Failed to delete program' });
+            set({
+              syncStatus: 'error',
+              lastSyncError: getErrorMessage(err, 'Failed to delete program'),
+            });
           });
           if (needNewActive) {
-            upsertFirestoreDoc('wt_meta', uid, nextMeta, uid).catch((err) => {
+            // Persist empty string when no programs remain so merge:true clears activeProgramUuid
+            upsertFirestoreDoc(
+              'wt_meta',
+              uid,
+              { ...nextMeta, activeProgramUuid: nextActiveUuid || '' },
+              uid
+            ).catch((err) => {
               console.error('[Sync] Failed to update active program in meta:', err);
+            });
+          }
+          if (updatedScheduleDates.length > 0 || removedScheduleDates.length > 0) {
+            const ops: Promise<void>[] = [
+              ...updatedScheduleDates.map((d) =>
+                upsertFirestoreDoc('wt_schedule', `${uid}_${d}`, nextSchedules[d], uid)
+              ),
+              ...removedScheduleDates.map((d) => removeFirestoreDoc('wt_schedule', `${uid}_${d}`)),
+            ];
+            Promise.all(ops).catch((err) => {
+              console.error('[Sync] Failed to clean up schedule for deleted program:', err);
             });
           }
         }
