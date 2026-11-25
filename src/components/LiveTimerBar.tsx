@@ -80,6 +80,7 @@ export const LiveTimerBar: React.FC = () => {
     timer,
     meta,
     viewportMode,
+    selectTimerMode,
     startRestTimer,
     startCircuitTimer,
     finishCircuitWorkRound,
@@ -111,6 +112,32 @@ export const LiveTimerBar: React.FC = () => {
   const parseOrZero = (raw: string): number => {
     const parsed = parseInt(raw, 10);
     return Number.isNaN(parsed) ? 0 : Math.max(0, parsed);
+  };
+
+  const handleSwitchTimerTab = (nextTab: 'rest' | 'circuit' | 'stopwatch') => {
+    setIsFocusMinimized(false);
+    setDrawerTab(nextTab);
+    if (nextTab === 'rest') {
+      if (sessionStopwatchStartMs !== null) {
+        pauseSessionStopwatch();
+      }
+      const idleRestSec =
+        timer.mode === 'rest' && timer.totalPhaseSec > 0 ? timer.totalPhaseSec : 60;
+      selectTimerMode('rest', { restSec: idleRestSec });
+    } else if (nextTab === 'circuit') {
+      if (sessionStopwatchStartMs !== null) {
+        pauseSessionStopwatch();
+      }
+      selectTimerMode('circuit', {
+        rounds: parseOrZero(circuitRoundsInput),
+        workSec: parseOrZero(circuitWorkInput),
+        circuitRestSec: parseOrZero(circuitRestInput),
+      });
+    } else {
+      // Stopwatch: stop any active countdown and reset stopwatch to 00:00 idle
+      resetTimer();
+      resetSessionStopwatch();
+    }
   };
 
   useEffect(() => {
@@ -654,10 +681,7 @@ export const LiveTimerBar: React.FC = () => {
                 <div className="inline-flex rounded-xl bg-[var(--bg-inset)] border border-[var(--border-subtle)] p-1">
                   <button
                     type="button"
-                    onClick={() => {
-                      setDrawerTab('rest');
-                      startRestTimer(60);
-                    }}
+                    onClick={() => handleSwitchTimerTab('rest')}
                     className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
                       drawerTab === 'rest'
                         ? 'bg-[var(--bg-card)] text-[var(--accent-orange)] shadow-sm'
@@ -668,14 +692,7 @@ export const LiveTimerBar: React.FC = () => {
                   </button>
                   <button
                     type="button"
-                    onClick={() => {
-                      setDrawerTab('circuit');
-                      startCircuitTimer(
-                        parseOrZero(circuitRoundsInput),
-                        parseOrZero(circuitWorkInput),
-                        parseOrZero(circuitRestInput)
-                      );
-                    }}
+                    onClick={() => handleSwitchTimerTab('circuit')}
                     className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
                       drawerTab === 'circuit'
                         ? 'bg-[var(--bg-card)] text-[var(--accent-orange)] shadow-sm'
@@ -686,7 +703,7 @@ export const LiveTimerBar: React.FC = () => {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setDrawerTab('stopwatch')}
+                    onClick={() => handleSwitchTimerTab('stopwatch')}
                     className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
                       drawerTab === 'stopwatch'
                         ? 'bg-[var(--bg-card)] text-[var(--accent-orange)] shadow-sm'

@@ -237,6 +237,15 @@ interface WorkoutStoreState {
   }>;
 
   // Timer Actions
+  selectTimerMode: (
+    mode: 'rest' | 'circuit',
+    options?: {
+      restSec?: number;
+      rounds?: number;
+      workSec?: number;
+      circuitRestSec?: number;
+    }
+  ) => void;
   startRestTimer: (seconds: number) => void;
   startCircuitTimer: (rounds: number, workSec: number, restSec: number) => void;
   finishCircuitWorkRound: () => void;
@@ -1664,6 +1673,47 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           }
         }
         return result;
+      },
+
+      selectTimerMode: (mode, options) => {
+        const t = get().timer;
+        if (mode === 'rest') {
+          const parsedRest = Number(options?.restSec ?? 60);
+          const cleanRest = Number.isNaN(parsedRest) || parsedRest <= 0 ? 60 : parsedRest;
+          set({
+            timer: {
+              ...t,
+              isOpen: true,
+              isRunning: false,
+              mode: 'rest',
+              phase: 'rest',
+              remainingSec: cleanRest,
+              totalPhaseSec: cleanRest,
+            },
+          });
+        } else {
+          const pRounds = Number(options?.rounds ?? t.totalRounds ?? 15);
+          const cleanRounds = Number.isNaN(pRounds) ? 0 : Math.max(0, pRounds);
+          const pWork = Number(options?.workSec ?? t.workSec ?? 60);
+          const cleanWork = Number.isNaN(pWork) ? 0 : Math.max(0, pWork);
+          const pRest = Number(options?.circuitRestSec ?? t.restSec ?? 0);
+          const cleanRest = Number.isNaN(pRest) ? 0 : Math.max(0, pRest);
+          set({
+            timer: {
+              ...t,
+              isOpen: true,
+              isRunning: false,
+              mode: 'circuit',
+              phase: 'work',
+              currentRound: 1,
+              totalRounds: cleanRounds,
+              workSec: cleanWork,
+              restSec: cleanRest,
+              remainingSec: cleanWork,
+              totalPhaseSec: cleanWork,
+            },
+          });
+        }
       },
 
       startRestTimer: (seconds) => {
