@@ -68,9 +68,11 @@ export const HistoryView: React.FC = () => {
   const [dateTo, setDateTo] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
-  // Filtered Workout Logs (exclude pending/in-progress live drafts until completed or skipped)
-  const filteredLogs = useMemo(() => {
-    return logs
+  // Filtered Workout Logs: strictly include ONLY completed logs in History stats, charts & feed
+  // so unstarted 'pending' / 'in_progress' drafts (0 kg) never skew metrics.
+  const { filteredLogs, skippedCount } = useMemo(() => {
+    let skipped = 0;
+    const completed = logs
       .filter((log) => {
         const st = normalizeLogStatus(log.status);
         if (st === 'in_progress' || st === 'pending') {
@@ -94,11 +96,18 @@ export const HistoryView: React.FC = () => {
           const matchTitle = log.workoutTitleSnapshot.toLowerCase().includes(q);
           const matchNotes = (log.sessionNotes || '').toLowerCase().includes(q);
           const matchEx = log.exercises.some((e) => e.exerciseName.toLowerCase().includes(q));
-          return matchId || matchLegacy || matchTitle || matchNotes || matchEx;
+          if (!(matchId || matchLegacy || matchTitle || matchNotes || matchEx)) {
+            return false;
+          }
         }
-        return true;
+        if (st === 'skipped') {
+          skipped += 1;
+          return false;
+        }
+        return st === 'completed';
       })
       .sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
+    return { filteredLogs: completed, skippedCount: skipped };
   }, [
     logs,
     selectedProgramUuid,
@@ -109,9 +118,9 @@ export const HistoryView: React.FC = () => {
     searchQuery,
   ]);
 
-  // KPI Summary Calculations
+  // KPI Summary Calculations (strictly status === 'completed')
   const kpiStats = useMemo(() => {
-    const completed = filteredLogs.filter((l) => l.status === 'completed');
+    const completed = filteredLogs.filter((l) => normalizeLogStatus(l.status) === 'completed');
     const totalVolumeKg = completed.reduce(
       (sum, l) => sum + (Number(l.totalSessionVolumeKg) || 0),
       0
@@ -167,11 +176,11 @@ export const HistoryView: React.FC = () => {
     };
   }, [filteredLogs]);
 
-  // Chart 1: Session Volume Trend (chronological)
+  // Chart 1: Session Volume Trend (chronological, strictly completed logs)
   const workoutVolumeChartData = useMemo(() => {
     const byDate: Record<string, { date: string; volumeKg: number; workouts: number }> = {};
     filteredLogs
-      .filter((l) => l.status === 'completed')
+      .filter((l) => normalizeLogStatus(l.status) === 'completed')
       .slice()
       .reverse()
       .forEach((l) => {
@@ -184,11 +193,13 @@ export const HistoryView: React.FC = () => {
     return Object.values(byDate);
   }, [filteredLogs]);
 
-  // Individual Exercise Explorer Data & PRs
+  // Individual Exercise Explorer Data & PRs (strictly completed logs)
   const exercisePerformanceSeries = useMemo(() => {
     const matchingLogs = logs
       .filter(
-        (l) => l.status === 'completed' && l.exerciseUuids.includes(selectedExerciseUuid)
+        (l) =>
+          normalizeLogStatus(l.status) === 'completed' &&
+          l.exerciseUuids.includes(selectedExerciseUuid)
       )
       .sort((a, b) => a.date.localeCompare(b.date) || a.createdAt.localeCompare(b.createdAt));
 
@@ -391,8 +402,12 @@ export const HistoryView: React.FC = () => {
             <Flame className="w-4 h-4 text-orange-500" />
           </div>
           <div className="font-display font-extrabold text-2xl text-slate-900 dark:text-slate-100 tabular-nums">
-            {filteredLogs.length > 0
-              ? Math.round((kpiStats.completedWorkoutsCount / filteredLogs.length) * 100)
+            {kpiStats.completedWorkoutsCount + skippedCount > 0
+              ? Math.round(
+                  (kpiStats.completedWorkoutsCount /
+                    (kpiStats.completedWorkoutsCount + skippedCount)) *
+                    100
+                )
               : 100}
             %
           </div>

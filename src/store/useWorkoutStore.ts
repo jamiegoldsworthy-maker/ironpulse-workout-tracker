@@ -513,6 +513,197 @@ function createDraftFromPreset(
   };
 }
 
+function hasLoggedWorkoutData(
+  log: Pick<WorkoutLog, 'exercises' | 'completedRounds' | 'durationSec' | 'elapsedSeconds'>
+): boolean {
+  if ((log.completedRounds ?? 0) > 0) return true;
+  if ((log.durationSec ?? 0) > 0 || (log.elapsedSeconds ?? 0) > 0) return true;
+  return (log.exercises || []).some(
+    (ex) =>
+      ex.sets?.some((s) => (Number(s.reps) || 0) > 0) ||
+      ex.isCompleted === true ||
+      (Number(ex.distance) || 0) > 0 ||
+      (Number(ex.durationSec) || 0) > 0
+  );
+}
+
+function rebuildLogFromScheduledPreset(
+  existingLog: WorkoutLog,
+  item: ScheduledItem,
+  preset: WorkoutPreset,
+  defaultDistanceUnit: DistanceUnit,
+  now: string
+): WorkoutLog {
+  const freshDraft = createDraftFromPreset(
+    preset,
+    existingLog.date,
+    existingLog.sessionGroupUuid,
+    item.orderIndex,
+    parseInt(existingLog.displayId.replace('ID-', ''), 10) || 1,
+    defaultDistanceUnit,
+    {
+      scheduleItemUuid: item.scheduleItemUuid,
+      programUuid: item.programUuid || preset.programIds?.[0],
+      coachNotes: item.coachNotes,
+      slotRole: item.slotRole,
+      exerciseNotesByUid: item.exerciseNotesByUid,
+      exerciseNotesByIndex: item.exerciseNotesByIndex,
+    }
+  );
+  const status = normalizeScheduleStatus(item.status);
+  return {
+    ...freshDraft,
+    logUuid: existingLog.logUuid,
+    uid: existingLog.uid,
+    displayId: existingLog.displayId,
+    legacyId: existingLog.legacyId,
+    status,
+    createdAt: existingLog.createdAt || now,
+    updatedAt: item.updatedAt || now,
+  };
+}
+
+function reconcileSchedulesAndLogs(
+  schedules: Record<string, DailySchedule>,
+  logs: WorkoutLog[],
+  presets: WorkoutPreset[],
+  defaultDistanceUnit: DistanceUnit
+): {
+  schedules: Record<string, DailySchedule>;
+  logs: WorkoutLog[];
+  modifiedScheduleDates: string[];
+  modifiedLogUuids: string[];
+} {
+  const now = new Date().toISOString();
+  const nextSchedules: Record<string, DailySchedule> = {};
+  for (const [dateKey, sch] of Object.entries(schedules || {})) {
+    if (sch) nextSchedules[dateKey] = normalizeDailySchedule(sch);
+  }
+  const nextLogs = (logs || []).map((l) => normalizeWorkoutLog(l));
+  const modifiedScheduleDates = new Set<string>();
+  const modifiedLogUuids = new Set<string>();
+
+  for (const [date, daySched] of Object.entries(nextSchedules)) {
+    const matchedLogIndices = new Set<number>();
+    let dayChanged = false;
+
+    const updatedItems = daySched.items.map((item) => {
+      // Match log by scheduleItemUuid -> linkedLogUuid -> same date + presetUuid / slot order
+      let logIdx = nextLogs.findIndex(
+        (l, idx) => !matchedLogIndices.has(idx) && l.scheduleItemUuid === item.scheduleItemUuid
+      );
+      if (logIdx === -1 && item.linkedLogUuid) {
+        logIdx = nextLogs.findIndex(
+          (l, idx) => !matchedLogIndices.has(idx) && l.logUuid === item.linkedLogUuid
+        );
+      }
+      if (logIdx === -1) {
+        logIdx = nextLogs.findIndex(
+          (l, idx) =>
+            !matchedLogIndices.has(idx) &&
+            l.date === date &&
+            !l.scheduleItemUuid &&
+            l.presetUuid === item.presetUuid
+        );
+      }
+      if (logIdx === -1) return item;
+      matchedLogIndices.add(logIdx);
+
+      let log = nextLogs[logIdx];
+      let nextItem = item;
+      let logChanged = false;
+
+      if (log.scheduleItemUuid !== item.scheduleItemUuid) {
+        log = { ...log, scheduleItemUuid: item.scheduleItemUuid };
+        logChanged = true;
+      }
+      if (nextItem.linkedLogUuid !== log.logUuid) {
+        nextItem = { ...nextItem, linkedLogUuid: log.logUuid };
+        dayChanged = true;
+      }
+
+      const logHasData = hasLoggedWorkoutData(log);
+      let logStatus = normalizeLogStatus(log.status);
+      let schedStatus = normalizeScheduleStatus(nextItem.status);
+
+      // If log is still an empty 'pending' draft whose preset differs from wt_schedule, align to wt_schedule
+      if (logStatus === 'pending' && !logHasData && log.presetUuid !== nextItem.presetUuid) {
+        const scheduledPreset = presets.find((p) => p.presetUuid === nextItem.presetUuid);
+        if (scheduledPreset) {
+          log = rebuildLogFromScheduledPreset(
+            log,
+            nextItem,
+            scheduledPreset,
+            defaultDistanceUnit,
+            now
+          );
+          logStatus = normalizeLogStatus(log.status);
+          logChanged = true;
+        }
+      }
+
+      // If log has actual logged sets/duration while both sides are still 'pending', promote to 'in_progress'
+      if (logHasData && logStatus === 'pending' && schedStatus === 'pending') {
+        const ts = log.updatedAt || now;
+        log = { ...log, status: 'in_progress', updatedAt: ts };
+        nextItem = { ...nextItem, status: 'in_progress', completed: false, updatedAt: ts };
+        logStatus = 'in_progress';
+        schedStatus = 'in_progress';
+        logChanged = true;
+        dayChanged = true;
+      }
+
+      if (logStatus !== schedStatus) {
+        const logTs = log.updatedAt || log.createdAt || '';
+        const schedTs = nextItem.updatedAt || daySched.updatedAt || '';
+
+        if (logHasData && logStatus === 'in_progress' && schedStatus === 'pending' && schedTs <= logTs) {
+          nextItem = {
+            ...nextItem,
+            status: 'in_progress',
+            completed: false,
+            updatedAt: logTs || now,
+          };
+          dayChanged = true;
+        } else if (schedTs > logTs) {
+          log = { ...log, status: schedStatus, updatedAt: schedTs };
+          logChanged = true;
+        } else {
+          nextItem = {
+            ...nextItem,
+            status: logStatus,
+            completed: logStatus === 'completed',
+            updatedAt: logTs || now,
+          };
+          dayChanged = true;
+        }
+      }
+
+      if (logChanged) {
+        nextLogs[logIdx] = log;
+        modifiedLogUuids.add(log.logUuid);
+      }
+      return nextItem;
+    });
+
+    if (dayChanged) {
+      nextSchedules[date] = {
+        ...daySched,
+        items: updatedItems,
+        updatedAt: daySched.updatedAt || now,
+      };
+      modifiedScheduleDates.add(date);
+    }
+  }
+
+  return {
+    schedules: nextSchedules,
+    logs: nextLogs,
+    modifiedScheduleDates: Array.from(modifiedScheduleDates),
+    modifiedLogUuids: Array.from(modifiedLogUuids),
+  };
+}
+
 function buildInitialDraftsForDate(
   date: string,
   logs: WorkoutLog[],
@@ -524,62 +715,158 @@ function buildInitialDraftsForDate(
     .filter((l) => l.date === date)
     .sort((a, b) => (a.chainOrderIndex ?? 0) - (b.chainOrderIndex ?? 0));
 
+  const daySchedule = schedules[date];
+  const sortedScheduledItems = (daySchedule?.items || [])
+    .slice()
+    .sort((a, b) => a.orderIndex - b.orderIndex);
+
   if (existingLogsForDate.length > 0) {
     const groupUuid = existingLogsForDate[0].sessionGroupUuid || `ses-${uuidv4()}`;
-    const daySchedule = schedules[date];
+    const matchedSchedIds = new Set<string>();
+
     const drafts: DraftWorkoutCard[] = existingLogsForDate.map((l, idx) => {
       const normalizedStatus = normalizeLogStatus(l.status);
-      const linkedSched = daySchedule?.items.find(
-        (it) => it.linkedLogUuid === l.logUuid || it.scheduleItemUuid === l.scheduleItemUuid
-      );
+      const linkedSched =
+        sortedScheduledItems.find(
+          (it) =>
+            !matchedSchedIds.has(it.scheduleItemUuid) &&
+            (it.linkedLogUuid === l.logUuid || it.scheduleItemUuid === l.scheduleItemUuid)
+        ) ||
+        sortedScheduledItems.find(
+          (it) =>
+            !matchedSchedIds.has(it.scheduleItemUuid) &&
+            (it.presetUuid === l.presetUuid || it.orderIndex === (l.chainOrderIndex ?? idx))
+        );
+
+      if (linkedSched) {
+        matchedSchedIds.add(linkedSched.scheduleItemUuid);
+      }
+
+      // If this log is an empty 'pending' draft (0 sets/duration) and wt_schedule now points
+      // to a different preset (e.g. swapped Easy Cycle -> Easy Ruck in Plan), keep it aligned.
+      const logHasData = hasLoggedWorkoutData(l);
+      if (
+        linkedSched &&
+        normalizedStatus === 'pending' &&
+        !logHasData &&
+        l.presetUuid !== linkedSched.presetUuid
+      ) {
+        const schedPreset = presets.find((p) => p.presetUuid === linkedSched.presetUuid);
+        if (schedPreset) {
+          const rebuilt = createDraftFromPreset(
+            schedPreset,
+            date,
+            groupUuid,
+            linkedSched.orderIndex,
+            parseInt(l.displayId.replace('ID-', ''), 10) || meta.nextLogSequenceNumber,
+            meta.defaultDistanceUnit,
+            {
+              scheduleItemUuid: linkedSched.scheduleItemUuid,
+              programUuid: linkedSched.programUuid,
+              coachNotes: linkedSched.coachNotes,
+              slotRole: linkedSched.slotRole,
+              exerciseNotesByUid: linkedSched.exerciseNotesByUid,
+              exerciseNotesByIndex: linkedSched.exerciseNotesByIndex,
+            }
+          );
+          const schedStatus = normalizeScheduleStatus(linkedSched.status);
+          return {
+            ...rebuilt,
+            logUuid: l.logUuid,
+            displayId: l.displayId,
+            status: schedStatus,
+            isSaved: schedStatus === 'completed' || schedStatus === 'skipped',
+          };
+        }
+      }
+
+      // If linkedSched has a strictly newer status timestamp, reflect it cleanly
+      let effectiveStatus = normalizedStatus;
+      if (linkedSched) {
+        const schedStatus = normalizeScheduleStatus(linkedSched.status);
+        const schedTs = linkedSched.updatedAt || daySchedule?.updatedAt || '';
+        const logTs = l.updatedAt || l.createdAt || '';
+        if (schedStatus !== normalizedStatus && schedTs > logTs) {
+          effectiveStatus = schedStatus;
+        }
+      }
+
       return {
         ...JSON.parse(JSON.stringify(l)),
-        status: normalizedStatus,
-        isSaved: normalizedStatus === 'completed' || normalizedStatus === 'skipped',
+        scheduleItemUuid: linkedSched?.scheduleItemUuid || l.scheduleItemUuid,
+        status: effectiveStatus,
+        isSaved: effectiveStatus === 'completed' || effectiveStatus === 'skipped',
         coachNotes: linkedSched?.coachNotes,
         slotRole: linkedSched?.slotRole || (idx === 0 ? 'Primary' : `Chained #${idx + 1}`),
         updatePresetOnSave: false,
       };
     });
+
+    // Also include any newly added scheduled items on this date that do not have a log yet
+    let seq = meta.nextLogSequenceNumber + drafts.length;
+    sortedScheduledItems.forEach((item, idx) => {
+      if (matchedSchedIds.has(item.scheduleItemUuid)) return;
+      const preset = presets.find((p) => p.presetUuid === item.presetUuid);
+      if (!preset) return;
+      const itemStatus = normalizeScheduleStatus(item.status);
+      const built = createDraftFromPreset(
+        preset,
+        date,
+        groupUuid,
+        idx,
+        seq++,
+        meta.defaultDistanceUnit,
+        {
+          scheduleItemUuid: item.scheduleItemUuid,
+          programUuid: item.programUuid,
+          coachNotes: item.coachNotes,
+          slotRole: item.slotRole,
+          exerciseNotesByUid: item.exerciseNotesByUid,
+          exerciseNotesByIndex: item.exerciseNotesByIndex,
+        }
+      );
+      drafts.push({
+        ...built,
+        status: itemStatus,
+        isSaved: itemStatus === 'completed' || itemStatus === 'skipped',
+      });
+    });
+
     return { sessionGroupUuid: groupUuid, drafts };
   }
 
   // If no logs exist for this date, check if there are scheduled items for today
-  const daySchedule = schedules[date];
   const groupUuid = `ses-${uuidv4()}`;
-  if (daySchedule && daySchedule.items.length > 0) {
+  if (sortedScheduledItems.length > 0) {
     let seq = meta.nextLogSequenceNumber;
     const drafts: DraftWorkoutCard[] = [];
-    daySchedule.items
-      .slice()
-      .sort((a, b) => a.orderIndex - b.orderIndex)
-      .forEach((item, idx) => {
-        const itemStatus = normalizeScheduleStatus(item.status);
-        const preset = presets.find((p) => p.presetUuid === item.presetUuid);
-        if (preset) {
-          const built = createDraftFromPreset(
-            preset,
-            date,
-            groupUuid,
-            idx,
-            seq++,
-            meta.defaultDistanceUnit,
-            {
-              scheduleItemUuid: item.scheduleItemUuid,
-              programUuid: item.programUuid,
-              coachNotes: item.coachNotes,
-              slotRole: item.slotRole,
-              exerciseNotesByUid: item.exerciseNotesByUid,
-              exerciseNotesByIndex: item.exerciseNotesByIndex,
-            }
-          );
-          drafts.push({
-            ...built,
-            status: itemStatus,
-            isSaved: itemStatus === 'completed' || itemStatus === 'skipped',
-          });
-        }
-      });
+    sortedScheduledItems.forEach((item, idx) => {
+      const itemStatus = normalizeScheduleStatus(item.status);
+      const preset = presets.find((p) => p.presetUuid === item.presetUuid);
+      if (preset) {
+        const built = createDraftFromPreset(
+          preset,
+          date,
+          groupUuid,
+          idx,
+          seq++,
+          meta.defaultDistanceUnit,
+          {
+            scheduleItemUuid: item.scheduleItemUuid,
+            programUuid: item.programUuid,
+            coachNotes: item.coachNotes,
+            slotRole: item.slotRole,
+            exerciseNotesByUid: item.exerciseNotesByUid,
+            exerciseNotesByIndex: item.exerciseNotesByIndex,
+          }
+        );
+        drafts.push({
+          ...built,
+          status: itemStatus,
+          isSaved: itemStatus === 'completed' || itemStatus === 'skipped',
+        });
+      }
+    });
     return { sessionGroupUuid: groupUuid, drafts };
   }
 
@@ -1067,6 +1354,8 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           );
           if (idx !== -1) {
             const existing = state.draftWorkouts[idx];
+            const now = new Date().toISOString();
+            const schedId = existing.scheduleItemUuid || `sch-${uuidv4()}`;
             const replacement = createDraftFromPreset(
               preset,
               state.activeDate,
@@ -1075,7 +1364,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
               parseInt(existing.displayId.replace('ID-', ''), 10) || state.meta.nextLogSequenceNumber,
               state.meta.defaultDistanceUnit,
               {
-                scheduleItemUuid: existing.scheduleItemUuid,
+                scheduleItemUuid: schedId,
                 programUuid: preset.programIds?.[0] || state.meta.activeProgramUuid,
                 coachNotes: options.coachNotes ?? existing.coachNotes,
                 slotRole: options.slotRole ?? existing.slotRole,
@@ -1087,14 +1376,90 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
             nextDrafts[idx] = replacement;
             const uid = state.authUser?.uid || state.meta.uid;
             const logRecord = draftToWorkoutLog(replacement, uid, idx);
+
+            // Sync swapped workout into wt_schedule for activeDate
+            const existingDaySched = state.schedules[state.activeDate];
+            const schedDocId = state.authUser
+              ? `${state.authUser.uid}_${state.activeDate}`
+              : `local_${state.activeDate}`;
+            let matchedSched = false;
+            const updatedItems: ScheduledItem[] = (existingDaySched?.items || []).map((it) => {
+              if (
+                it.scheduleItemUuid === existing.scheduleItemUuid ||
+                it.linkedLogUuid === existing.logUuid ||
+                (!existing.scheduleItemUuid && it.orderIndex === (existing.chainOrderIndex ?? idx))
+              ) {
+                matchedSched = true;
+                return {
+                  ...it,
+                  scheduleItemUuid: schedId,
+                  presetUuid: preset.presetUuid,
+                  programUuid: replacement.programUuid,
+                  slotRole: replacement.slotRole || it.slotRole,
+                  coachNotes: replacement.coachNotes ?? it.coachNotes,
+                  status: 'pending',
+                  completed: false,
+                  updatedAt: now,
+                  linkedLogUuid: logRecord.logUuid,
+                };
+              }
+              return it;
+            });
+            if (!matchedSched) {
+              updatedItems.push({
+                scheduleItemUuid: schedId,
+                orderIndex: updatedItems.length,
+                slotRole: replacement.slotRole || (idx === 0 ? 'Primary' : 'Secondary'),
+                presetUuid: preset.presetUuid,
+                programUuid: replacement.programUuid,
+                coachNotes: replacement.coachNotes,
+                status: 'pending',
+                completed: false,
+                updatedAt: now,
+                linkedLogUuid: logRecord.logUuid,
+              });
+            }
+            const nextDaySched: DailySchedule = {
+              scheduleId: existingDaySched?.scheduleId || schedDocId,
+              uid: state.authUser?.uid || existingDaySched?.uid,
+              date: state.activeDate,
+              items: updatedItems.map((it, i) => ({ ...it, orderIndex: i })),
+              updatedAt: now,
+            };
+            const nextSchedules = {
+              ...state.schedules,
+              [state.activeDate]: nextDaySched,
+            };
+
             set({
               draftWorkouts: nextDrafts,
               logs: upsertLogInArray(state.logs, logRecord),
+              schedules: nextSchedules,
+              excludedFromTasksIds: state.excludedFromTasksIds.filter((id) => id !== schedId),
+              dismissedTaskCompletionIds: state.dismissedTaskCompletionIds.filter(
+                (id) => id !== schedId
+              ),
             });
+
+            const syncedSchedItem = nextDaySched.items.find(
+              (it) => it.scheduleItemUuid === schedId
+            );
+            if (syncedSchedItem) {
+              void upsertGoogleTaskForSchedule({
+                date: state.activeDate,
+                item: syncedSchedItem,
+                preset,
+              });
+            }
+
             if (state.authUser) {
+              const authUid = state.authUser.uid;
               clearPendingDraftSync(logRecord.logUuid);
               set({ syncStatus: 'syncing', lastSyncError: undefined });
-              upsertFirestoreDoc('wt_logs', logRecord.logUuid, logRecord, state.authUser.uid)
+              Promise.all([
+                upsertFirestoreDoc('wt_logs', logRecord.logUuid, logRecord, authUid),
+                upsertFirestoreDoc('wt_schedule', `${authUid}_${state.activeDate}`, nextDaySched, authUid),
+              ])
                 .then(() => set({ syncStatus: 'synced', lastSyncError: undefined }))
                 .catch((err) => {
                   console.error('[Sync] Failed to upsert swapped workout to Firestore:', err);
@@ -1108,8 +1473,13 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           }
         }
 
+        const now = new Date().toISOString();
         const unsavedCount = state.draftWorkouts.filter((d) => !d.isSaved).length;
         const seq = state.meta.nextLogSequenceNumber + unsavedCount;
+        const newSchedId = options?.scheduleItemUuid || `sch-${uuidv4()}`;
+        const slotRole =
+          options?.slotRole ||
+          (state.draftWorkouts.length === 0 ? 'Primary' : 'Secondary');
         const newDraft = createDraftFromPreset(
           preset,
           state.activeDate,
@@ -1118,25 +1488,74 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           seq,
           state.meta.defaultDistanceUnit,
           {
-            scheduleItemUuid: options?.scheduleItemUuid,
+            scheduleItemUuid: newSchedId,
             programUuid: preset.programIds?.[0] || state.meta.activeProgramUuid,
             coachNotes: options?.coachNotes,
-            slotRole:
-              options?.slotRole ||
-              (state.draftWorkouts.length === 0 ? 'Primary' : `Chained #${state.draftWorkouts.length + 1}`),
+            slotRole,
           }
         );
 
         const uid = state.authUser?.uid || state.meta.uid;
         const logRecord = draftToWorkoutLog(newDraft, uid, state.draftWorkouts.length);
+
+        // Mirror newly added workout into wt_schedule for activeDate
+        const existingDaySched = state.schedules[state.activeDate];
+        const schedDocId = state.authUser
+          ? `${state.authUser.uid}_${state.activeDate}`
+          : `local_${state.activeDate}`;
+        const alreadyScheduled = (existingDaySched?.items || []).some(
+          (it) => it.scheduleItemUuid === newSchedId
+        );
+        const newSchedItem: ScheduledItem = {
+          scheduleItemUuid: newSchedId,
+          orderIndex: (existingDaySched?.items || []).length,
+          slotRole,
+          presetUuid: preset.presetUuid,
+          programUuid: newDraft.programUuid,
+          coachNotes: options?.coachNotes,
+          status: 'pending',
+          completed: false,
+          updatedAt: now,
+          linkedLogUuid: logRecord.logUuid,
+        };
+        const nextDaySched: DailySchedule = {
+          scheduleId: existingDaySched?.scheduleId || schedDocId,
+          uid: state.authUser?.uid || existingDaySched?.uid,
+          date: state.activeDate,
+          items: alreadyScheduled
+            ? (existingDaySched?.items || []).map((it) =>
+                it.scheduleItemUuid === newSchedId
+                  ? { ...it, linkedLogUuid: logRecord.logUuid, updatedAt: now }
+                  : it
+              )
+            : [...(existingDaySched?.items || []), newSchedItem],
+          updatedAt: now,
+        };
+        const nextSchedules = {
+          ...state.schedules,
+          [state.activeDate]: nextDaySched,
+        };
+
         set({
           draftWorkouts: [...state.draftWorkouts, newDraft],
           logs: upsertLogInArray(state.logs, logRecord),
+          schedules: nextSchedules,
         });
+
+        void upsertGoogleTaskForSchedule({
+          date: state.activeDate,
+          item: newSchedItem,
+          preset,
+        });
+
         if (state.authUser) {
+          const authUid = state.authUser.uid;
           clearPendingDraftSync(logRecord.logUuid);
           set({ syncStatus: 'syncing', lastSyncError: undefined });
-          upsertFirestoreDoc('wt_logs', logRecord.logUuid, logRecord, state.authUser.uid)
+          Promise.all([
+            upsertFirestoreDoc('wt_logs', logRecord.logUuid, logRecord, authUid),
+            upsertFirestoreDoc('wt_schedule', `${authUid}_${state.activeDate}`, nextDaySched, authUid),
+          ])
             .then(() => set({ syncStatus: 'synced', lastSyncError: undefined }))
             .catch((err) => {
               console.error('[Sync] Failed to upsert new workout to Firestore:', err);
@@ -1296,23 +1715,45 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
 
         const nextSchedules = { ...state.schedules };
         const removeNow = new Date().toISOString();
-        if (target?.scheduleItemUuid && nextSchedules[state.activeDate]) {
-          const daySched = nextSchedules[state.activeDate];
-          nextSchedules[state.activeDate] = {
-            ...daySched,
-            items: daySched.items.map((it) =>
-              it.scheduleItemUuid === target.scheduleItemUuid
-                ? {
-                    ...it,
-                    status: 'skipped' as const,
-                    completed: false,
-                    updatedAt: removeNow,
-                    linkedLogUuid: null,
-                  }
-                : it
-            ),
-            updatedAt: removeNow,
-          };
+        const targetDate = target?.date || state.activeDate;
+        const daySched = nextSchedules[targetDate];
+        let modifiedDaySched = false;
+        if (target && daySched) {
+          const isCompletedTarget = normalizeLogStatus(target.status) === 'completed';
+          const remainingItems = daySched.items
+            .filter((it) => {
+              const matches =
+                (target.scheduleItemUuid && it.scheduleItemUuid === target.scheduleItemUuid) ||
+                it.linkedLogUuid === target.logUuid;
+              if (!matches) return true;
+              // If removing a non-completed workout from Log, remove it from wt_schedule too
+              return isCompletedTarget;
+            })
+            .map((it, idx) => {
+              const matches =
+                (target.scheduleItemUuid && it.scheduleItemUuid === target.scheduleItemUuid) ||
+                it.linkedLogUuid === target.logUuid;
+              if (matches && isCompletedTarget) {
+                return {
+                  ...it,
+                  orderIndex: idx,
+                  status: 'pending' as const,
+                  completed: false,
+                  updatedAt: removeNow,
+                  linkedLogUuid: null,
+                };
+              }
+              return { ...it, orderIndex: idx };
+            });
+
+          if (remainingItems.length !== daySched.items.length || isCompletedTarget) {
+            modifiedDaySched = true;
+            nextSchedules[targetDate] = {
+              ...daySched,
+              items: remainingItems,
+              updatedAt: removeNow,
+            };
+          }
         }
 
         const targetSchedId = target?.scheduleItemUuid;
@@ -1354,12 +1795,12 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           const uid = state.authUser.uid;
           set({ syncStatus: 'syncing', lastSyncError: undefined });
           const ops: Promise<void>[] = [removeFirestoreDoc('wt_logs', logUuid)];
-          if (target?.scheduleItemUuid && nextSchedules[state.activeDate]) {
+          if (modifiedDaySched && nextSchedules[targetDate]) {
             ops.push(
               upsertFirestoreDoc(
                 'wt_schedule',
-                `${uid}_${state.activeDate}`,
-                nextSchedules[state.activeDate],
+                `${uid}_${targetDate}`,
+                nextSchedules[targetDate],
                 uid
               )
             );
@@ -1657,11 +2098,19 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
 
         // 'in_progress'
         const now = new Date().toISOString();
-        const nextDrafts = state.draftWorkouts.map((d) =>
-          d.logUuid === logUuid
-            ? { ...d, isSaved: false, status: 'in_progress' as const, updatedAt: now }
-            : d
-        );
+        const uid = state.authUser?.uid || state.meta.uid;
+        let updatedLogRecord: WorkoutLog | null = null;
+        const nextDrafts = state.draftWorkouts.map((d, idx) => {
+          if (d.logUuid !== logUuid) return d;
+          const nextDraft: DraftWorkoutCard = {
+            ...d,
+            isSaved: false,
+            status: 'in_progress',
+            updatedAt: now,
+          };
+          updatedLogRecord = draftToWorkoutLog(nextDraft, uid, idx);
+          return nextDraft;
+        });
         const nextSchedules = { ...state.schedules };
         let matchedSchedItem: ScheduledItem | undefined;
         const daySched = nextSchedules[draft.date];
@@ -1691,6 +2140,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         const schedId = matchedSchedItem?.scheduleItemUuid || draft.scheduleItemUuid;
         set({
           draftWorkouts: nextDrafts,
+          ...(updatedLogRecord ? { logs: upsertLogInArray(state.logs, updatedLogRecord) } : {}),
           schedules: nextSchedules,
           excludedFromTasksIds: schedId
             ? state.excludedFromTasksIds.filter((id) => id !== schedId)
@@ -1708,13 +2158,25 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
             preset,
           });
         }
-        if (state.authUser && nextSchedules[draft.date]) {
-          await upsertFirestoreDoc(
-            'wt_schedule',
-            `${state.authUser.uid}_${draft.date}`,
-            nextSchedules[draft.date],
-            state.authUser.uid
-          ).catch(() => {});
+        if (state.authUser) {
+          const authUid = state.authUser.uid;
+          const ops: Promise<void>[] = [];
+          if (updatedLogRecord) {
+            ops.push(
+              upsertFirestoreDoc('wt_logs', (updatedLogRecord as WorkoutLog).logUuid, updatedLogRecord, authUid)
+            );
+          }
+          if (nextSchedules[draft.date]) {
+            ops.push(
+              upsertFirestoreDoc(
+                'wt_schedule',
+                `${authUid}_${draft.date}`,
+                nextSchedules[draft.date],
+                authUid
+              )
+            );
+          }
+          await Promise.all(ops).catch(() => {});
         }
       },
 
@@ -2819,29 +3281,139 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         const state = get();
         const now = new Date().toISOString();
         const docId = state.authUser ? `${state.authUser.uid}_${date}` : `local_${date}`;
+        const normalizedItems: ScheduledItem[] = items.map((it, idx) => {
+          const status = normalizeScheduleStatus(it.status);
+          return {
+            ...it,
+            orderIndex: idx,
+            status,
+            completed: status === 'completed',
+            updatedAt: it.updatedAt || now,
+          };
+        });
         const nextSched: DailySchedule = {
           scheduleId: docId,
           uid: state.authUser?.uid,
           date,
-          items: items.map((it, idx) => {
-            const status = normalizeScheduleStatus(it.status);
-            return {
-              ...it,
-              orderIndex: idx,
-              status,
-              completed: status === 'completed',
-              updatedAt: it.updatedAt || now,
-            };
-          }),
+          items: normalizedItems,
           updatedAt: now,
         };
         const nextSchedules = {
           ...state.schedules,
           [date]: nextSched,
         };
-        set({ schedules: nextSchedules });
+
+        // Immediately sync any non-completed wt_logs on this date with the edited schedule
+        const prevItems = state.schedules[date]?.items || [];
+        const nextItemIds = new Set(normalizedItems.map((it) => it.scheduleItemUuid));
+        const removedItemIds = new Set(
+          prevItems
+            .filter((it) => !nextItemIds.has(it.scheduleItemUuid))
+            .map((it) => it.scheduleItemUuid)
+        );
+        const removedLinkedLogIds = new Set(
+          prevItems
+            .filter((it) => !nextItemIds.has(it.scheduleItemUuid) && it.linkedLogUuid)
+            .map((it) => it.linkedLogUuid as string)
+        );
+
+        const logsToDeleteFromCloud: string[] = [];
+        const logsToUpsertToCloud: WorkoutLog[] = [];
+        const nextLogs: WorkoutLog[] = [];
+
+        for (const log of state.logs) {
+          if (log.date !== date) {
+            nextLogs.push(log);
+            continue;
+          }
+          const logStatus = normalizeLogStatus(log.status);
+          // Never overwrite or delete a completed log from schedule edits
+          if (logStatus === 'completed') {
+            nextLogs.push(log);
+            continue;
+          }
+
+          const wasRemovedFromSchedule =
+            (log.scheduleItemUuid && removedItemIds.has(log.scheduleItemUuid)) ||
+            removedLinkedLogIds.has(log.logUuid);
+          if (wasRemovedFromSchedule) {
+            clearPendingDraftSync(log.logUuid);
+            logsToDeleteFromCloud.push(log.logUuid);
+            continue;
+          }
+
+          const matchedItem = normalizedItems.find(
+            (it) =>
+              it.scheduleItemUuid === log.scheduleItemUuid ||
+              it.linkedLogUuid === log.logUuid ||
+              (!log.scheduleItemUuid && it.orderIndex === (log.chainOrderIndex ?? 0))
+          );
+          if (matchedItem) {
+            if (log.presetUuid !== matchedItem.presetUuid) {
+              // Swapped workout on this date/slot -> update non-completed wt_logs entry immediately
+              const newPreset = state.presets.find(
+                (p) => p.presetUuid === matchedItem.presetUuid
+              );
+              if (newPreset) {
+                const rebuilt = rebuildLogFromScheduledPreset(
+                  log,
+                  matchedItem,
+                  newPreset,
+                  state.meta.defaultDistanceUnit,
+                  now
+                );
+                clearPendingDraftSync(log.logUuid);
+                nextLogs.push(rebuilt);
+                logsToUpsertToCloud.push(rebuilt);
+                continue;
+              }
+            }
+            const nextStatus = normalizeScheduleStatus(matchedItem.status);
+            if (
+              logStatus !== nextStatus ||
+              log.chainOrderIndex !== matchedItem.orderIndex ||
+              log.scheduleItemUuid !== matchedItem.scheduleItemUuid
+            ) {
+              const updatedLog: WorkoutLog = {
+                ...log,
+                scheduleItemUuid: matchedItem.scheduleItemUuid,
+                chainOrderIndex: matchedItem.orderIndex,
+                status: nextStatus,
+                updatedAt: now,
+              };
+              nextLogs.push(updatedLog);
+              logsToUpsertToCloud.push(updatedLog);
+              continue;
+            }
+          }
+
+          nextLogs.push(log);
+        }
+
+        const refreshedFloor =
+          state.activeDate === date
+            ? buildInitialDraftsForDate(date, nextLogs, nextSchedules, state.presets, state.meta)
+            : null;
+
+        set({
+          schedules: nextSchedules,
+          logs: nextLogs,
+          ...(refreshedFloor
+            ? {
+                activeSessionGroupUuid: refreshedFloor.sessionGroupUuid,
+                draftWorkouts: refreshedFloor.drafts,
+              }
+            : {}),
+        });
+
         if (state.authUser) {
-          upsertFirestoreDoc('wt_schedule', docId, nextSched, state.authUser.uid).catch((err) => {
+          const uid = state.authUser.uid;
+          const ops: Promise<void>[] = [
+            upsertFirestoreDoc('wt_schedule', docId, nextSched, uid),
+            ...logsToUpsertToCloud.map((l) => upsertFirestoreDoc('wt_logs', l.logUuid, l, uid)),
+            ...logsToDeleteFromCloud.map((id) => removeFirestoreDoc('wt_logs', id)),
+          ];
+          Promise.all(ops).catch((err) => {
             console.error('[Sync] Failed to save daily schedule:', err);
             set({ syncStatus: 'error', lastSyncError: err?.message || 'Failed to sync schedule' });
           });
@@ -2879,14 +3451,34 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           [date]: nextDaySched,
         };
 
+        // Immediately propagate status + updatedAt to any matching wt_logs entry on that date
+        const updatedLogsForCloud: WorkoutLog[] = [];
+        const nextLogs = state.logs.map((l) => {
+          const matchesLog =
+            l.scheduleItemUuid === scheduleItemUuid ||
+            (updatedItem.linkedLogUuid && l.logUuid === updatedItem.linkedLogUuid) ||
+            (l.date === date && !l.scheduleItemUuid && l.presetUuid === updatedItem.presetUuid);
+          if (!matchesLog) return l;
+          const patched: WorkoutLog = {
+            ...l,
+            scheduleItemUuid,
+            status: canonicalStatus,
+            updatedAt: now,
+          };
+          updatedLogsForCloud.push(patched);
+          return patched;
+        });
+
         // Keep active LogView draft in sync if the user is viewing this date
         const nextDrafts =
           state.activeDate === date
             ? state.draftWorkouts.map((d) =>
                 d.scheduleItemUuid === scheduleItemUuid ||
-                (updatedItem.linkedLogUuid && d.logUuid === updatedItem.linkedLogUuid)
+                (updatedItem.linkedLogUuid && d.logUuid === updatedItem.linkedLogUuid) ||
+                (!d.scheduleItemUuid && d.presetUuid === updatedItem.presetUuid)
                   ? {
                       ...d,
+                      scheduleItemUuid,
                       status: canonicalStatus,
                       isSaved: canonicalStatus === 'completed' || canonicalStatus === 'skipped',
                       updatedAt: now,
@@ -2919,6 +3511,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
 
         set({
           schedules: nextSchedules,
+          logs: nextLogs,
           draftWorkouts: nextDrafts,
           excludedFromTasksIds: nextExcludedIds,
           dismissedTaskCompletionIds: nextDismissedIds,
@@ -2966,12 +3559,11 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         }
 
         if (state.authUser) {
-          await upsertFirestoreDoc(
-            'wt_schedule',
-            `${state.authUser.uid}_${date}`,
-            nextDaySched,
-            state.authUser.uid
-          ).catch((err) => {
+          const uid = state.authUser.uid;
+          await Promise.all([
+            upsertFirestoreDoc('wt_schedule', `${uid}_${date}`, nextDaySched, uid),
+            ...updatedLogsForCloud.map((l) => upsertFirestoreDoc('wt_logs', l.logUuid, l, uid)),
+          ]).catch((err) => {
             console.error('[Sync] Failed to sync schedule status:', err);
             set({
               syncStatus: 'error',
@@ -3129,14 +3721,45 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           dayCounter += 1;
         }
 
-        set({ schedules: nextSchedules });
+        // Reconcile any empty 'pending' wt_logs on affected dates (never overwriting completed/in_progress logs)
+        const reconciled = reconcileSchedulesAndLogs(
+          nextSchedules,
+          state.logs,
+          state.presets,
+          state.meta.defaultDistanceUnit
+        );
+        const refreshedFloor =
+          state.activeDate >= startDate && state.activeDate <= endDate
+            ? buildInitialDraftsForDate(
+                state.activeDate,
+                reconciled.logs,
+                reconciled.schedules,
+                state.presets,
+                state.meta
+              )
+            : null;
+
+        set({
+          schedules: reconciled.schedules,
+          logs: reconciled.logs,
+          ...(refreshedFloor
+            ? {
+                activeSessionGroupUuid: refreshedFloor.sessionGroupUuid,
+                draftWorkouts: refreshedFloor.drafts,
+              }
+            : {}),
+        });
         if (state.authUser) {
           const uid = state.authUser.uid;
-          Promise.all(
-            Object.values(nextSchedules).map((sch) =>
+          const modifiedLogs = reconciled.logs.filter((l) =>
+            reconciled.modifiedLogUuids.includes(l.logUuid)
+          );
+          Promise.all([
+            ...Object.values(reconciled.schedules).map((sch) =>
               upsertFirestoreDoc('wt_schedule', `${uid}_${sch.date}`, sch, uid)
-            )
-          ).catch((err) => {
+            ),
+            ...modifiedLogs.map((l) => upsertFirestoreDoc('wt_logs', l.logUuid, l, uid)),
+          ]).catch((err) => {
             console.error('[Sync] Auto-fill schedule cloud write failed:', err);
             set({ syncStatus: 'error', lastSyncError: err?.message || 'Failed to sync auto-filled schedule' });
           });
@@ -4133,13 +4756,40 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           },
           onSchedules: (remoteSchedules) => {
             if (remoteSchedules.length > 0) {
-              const scheduleMap: Record<string, DailySchedule> = { ...get().schedules };
+              const state = get();
+              const scheduleMap: Record<string, DailySchedule> = { ...state.schedules };
               for (const sch of remoteSchedules) {
                 if (sch.date) {
                   scheduleMap[sch.date] = mergeDailyScheduleByTimestamp(scheduleMap[sch.date], sch);
                 }
               }
-              set({ schedules: scheduleMap, syncStatus: 'synced' });
+              const reconciled = reconcileSchedulesAndLogs(
+                scheduleMap,
+                state.logs,
+                state.presets,
+                state.meta.defaultDistanceUnit
+              );
+              const refreshedFloor =
+                !isUserActivelyTyping() && pendingDraftLogUuids.size === 0
+                  ? buildInitialDraftsForDate(
+                      state.activeDate,
+                      reconciled.logs,
+                      reconciled.schedules,
+                      state.presets,
+                      state.meta
+                    )
+                  : null;
+              set({
+                schedules: reconciled.schedules,
+                logs: reconciled.logs,
+                ...(refreshedFloor
+                  ? {
+                      activeSessionGroupUuid: refreshedFloor.sessionGroupUuid,
+                      draftWorkouts: refreshedFloor.drafts,
+                    }
+                  : {}),
+                syncStatus: 'synced',
+              });
             }
           },
           onContextBlocks: (remoteBlocks) => {
@@ -4187,6 +4837,13 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
                 )
             );
 
+            const reconciled = reconcileSchedulesAndLogs(
+              state.schedules,
+              sortedMergedLogs,
+              state.presets,
+              state.meta.defaultDistanceUnit
+            );
+
             // Hydrate LogView drafts for activeDate when remote updates arrive,
             // provided the user isn't actively typing or holding a pending debounced edit.
             const shouldSkipDraftHydration =
@@ -4194,34 +4851,22 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
 
             if (shouldSkipDraftHydration) {
               set({
-                logs: sortedMergedLogs,
+                schedules: reconciled.schedules,
+                logs: reconciled.logs,
                 syncStatus: 'synced',
                 lastSyncError: undefined,
               });
               return;
             }
 
-            const remoteForActiveDate = sortedMergedLogs
-              .filter((l) => l.date === state.activeDate)
-              .sort((a, b) => (a.chainOrderIndex ?? 0) - (b.chainOrderIndex ?? 0))
-              .map((l, idx) => {
-                const daySchedule = state.schedules[state.activeDate];
-                const linkedSched = daySchedule?.items.find(
-                  (it) => it.linkedLogUuid === l.logUuid || it.scheduleItemUuid === l.scheduleItemUuid
-                );
-                return {
-                  ...l,
-                  status: normalizeLogStatus(l.status),
-                  isSaved:
-                    normalizeLogStatus(l.status) === 'completed' ||
-                    normalizeLogStatus(l.status) === 'skipped',
-                  coachNotes: linkedSched?.coachNotes,
-                  slotRole: linkedSched?.slotRole || (idx === 0 ? 'Primary' : `Workout #${idx + 1}`),
-                  updatePresetOnSave: false,
-                } as DraftWorkoutCard;
-              });
-
-            const remoteIds = new Set(remoteForActiveDate.map((d) => d.logUuid));
+            const rebuiltFloor = buildInitialDraftsForDate(
+              state.activeDate,
+              reconciled.logs,
+              reconciled.schedules,
+              state.presets,
+              state.meta
+            );
+            const remoteIds = new Set(rebuiltFloor.drafts.map((d) => d.logUuid));
             const previouslySyncedIds = new Set(state.logs.map((l) => l.logUuid));
             const localOnlyDrafts = state.draftWorkouts.filter(
               (d) =>
@@ -4230,10 +4875,12 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
                 !remoteIds.has(d.logUuid) &&
                 !previouslySyncedIds.has(d.logUuid)
             );
-            const mergedDrafts = [...remoteForActiveDate, ...localOnlyDrafts];
+            const mergedDrafts = [...rebuiltFloor.drafts, ...localOnlyDrafts];
 
             set({
-              logs: sortedMergedLogs,
+              schedules: reconciled.schedules,
+              logs: reconciled.logs,
+              activeSessionGroupUuid: rebuiltFloor.sessionGroupUuid,
               draftWorkouts: mergedDrafts,
               syncStatus: 'synced',
               lastSyncError: undefined,
@@ -4338,15 +4985,22 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           const nextPrograms = remote.programs.length > 0 ? remote.programs : state.programs;
           // NEVER fall back to local/seed logs when the cloud account exists —
           // if cloud wt_logs is empty, all logs were deleted!
-          const nextLogs = sortedLogs;
           const nextMeta = remote.meta ? { ...state.meta, ...remote.meta } : state.meta;
+          const reconciled = reconcileSchedulesAndLogs(
+            scheduleMap,
+            sortedLogs,
+            nextPresets,
+            nextMeta.defaultDistanceUnit
+          );
+          const nextSchedules = reconciled.schedules;
+          const nextLogs = reconciled.logs;
 
           // Refresh drafts for activeDate from pulled remote logs unless user is actively typing
           const refreshedFloor = !isUserActivelyTyping()
             ? buildInitialDraftsForDate(
                 state.activeDate,
                 nextLogs,
-                scheduleMap,
+                nextSchedules,
                 nextPresets,
                 nextMeta
               )
@@ -4368,7 +5022,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
             exercises: nextExercises,
             presets: sortPresetsAlphabetically(nextPresets),
             programs: nextPrograms,
-            schedules: scheduleMap,
+            schedules: nextSchedules,
             logs: nextLogs,
             contextBlocks: nextContextBlocks,
             meta: nextMeta,
@@ -4577,20 +5231,23 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
       onRehydrateStorage: () => (rehydratedState, error) => {
         if (error || !rehydratedState) return;
 
-        // Migrate any legacy 'did_not_complete' / 'incomplete' statuses to canonical 'skipped'
-        const normalizedSchedules: Record<string, DailySchedule> = {};
-        for (const [dateKey, sch] of Object.entries(rehydratedState.schedules || {})) {
-          if (sch) normalizedSchedules[dateKey] = normalizeDailySchedule(sch);
-        }
-        const normalizedLogs = (rehydratedState.logs || []).map((l) => normalizeWorkoutLog(l));
-        const normalizedDrafts = (rehydratedState.draftWorkouts || []).map((d) => {
-          const st = normalizeLogStatus(d.status);
-          return {
-            ...d,
-            status: st,
-            isSaved: st === 'completed' || st === 'skipped',
-          };
-        });
+        // Migrate any legacy 'did_not_complete' / 'incomplete' statuses and reconcile wt_schedule <-> wt_logs
+        const reconciled = reconcileSchedulesAndLogs(
+          rehydratedState.schedules || {},
+          rehydratedState.logs || [],
+          rehydratedState.presets || [],
+          rehydratedState.meta?.defaultDistanceUnit || 'mi'
+        );
+        const normalizedSchedules = reconciled.schedules;
+        const normalizedLogs = reconciled.logs;
+        const refreshedFloor = buildInitialDraftsForDate(
+          rehydratedState.activeDate || getTodayIsoDate(),
+          normalizedLogs,
+          normalizedSchedules,
+          rehydratedState.presets || [],
+          rehydratedState.meta || SEED_META
+        );
+        const normalizedDrafts = refreshedFloor.drafts;
 
         if (rehydratedState.hasSeeded) {
           queueMicrotask(() => {

@@ -884,14 +884,49 @@ export const PlanView: React.FC = () => {
                               itemStatus === 'skipped' ? 'opacity-55' : ''
                             }`}
                           >
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                              <div className="flex items-center gap-2 min-w-0">
+                            <div className="flex flex-wrap items-center justify-between gap-2 min-w-0">
+                              <div className="flex items-center gap-2 min-w-0 flex-1">
                                 <span className="px-2 py-0.5 rounded-md text-[10px] font-bold uppercase bg-orange-500/15 text-orange-600 dark:text-orange-400 shrink-0">
                                   {item.slotRole}
                                 </span>
-                                <span className="font-display font-bold text-sm text-slate-900 dark:text-slate-100 truncate">
-                                  {preset?.title || 'Workout'}
-                                </span>
+                                {isEditingThisDay && itemStatus !== 'completed' ? (
+                                  <select
+                                    value={item.presetUuid}
+                                    onChange={(e) => {
+                                      const nextPresetUuid = e.target.value;
+                                      const swappedPreset = presets.find(
+                                        (p) => p.presetUuid === nextPresetUuid
+                                      );
+                                      updateDailySchedule(
+                                        date,
+                                        items.map((it) =>
+                                          it.scheduleItemUuid === item.scheduleItemUuid
+                                            ? {
+                                                ...it,
+                                                presetUuid: nextPresetUuid,
+                                                updatedAt: new Date().toISOString(),
+                                              }
+                                            : it
+                                        )
+                                      );
+                                      if (swappedPreset) {
+                                        triggerNotice(`Swapped to "${swappedPreset.title}"`);
+                                      }
+                                    }}
+                                    style={{ minWidth: 0, flex: '1 1 0%', width: '100%' }}
+                                    className="min-w-0 flex-1 w-full px-2 py-1 text-xs font-bold rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 truncate"
+                                  >
+                                    {presets.map((p) => (
+                                      <option key={p.presetUuid} value={p.presetUuid}>
+                                        {p.title}
+                                      </option>
+                                    ))}
+                                  </select>
+                                ) : (
+                                  <span className="font-display font-bold text-sm text-slate-900 dark:text-slate-100 truncate">
+                                    {preset?.title || 'Workout'}
+                                  </span>
+                                )}
                               </div>
 
                               <div className="flex items-center gap-1 shrink-0">
