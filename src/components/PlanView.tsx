@@ -236,6 +236,17 @@ export const PlanView: React.FC = () => {
   );
 
   const [activeTemplateWeek, setActiveTemplateWeek] = useState<number>(1);
+  const [duplicateWeekModal, setDuplicateWeekModal] = useState<{
+    open: boolean;
+    targetMode: 'new' | 'existing';
+    targetWeek: number;
+    modifier: 'exact' | 'build_5' | 'deload';
+  }>({
+    open: false,
+    targetMode: 'new',
+    targetWeek: 2,
+    modifier: 'exact',
+  });
   const [autoFillStart, setAutoFillStart] = useState<string>(() => {
     if (activeProgramDates.length > 0) return activeProgramDates[0];
     const saved = selectedProgram
@@ -787,7 +798,7 @@ export const PlanView: React.FC = () => {
                       )}
                     </div>
 
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex flex-wrap items-center gap-1.5">
                       <button
                         type="button"
                         onClick={() => {
@@ -1452,7 +1463,7 @@ export const PlanView: React.FC = () => {
                     >
                       {/* Top Badge Row: Slot Role + Status + Actions (Never Overlaps!) */}
                       <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex flex-wrap items-center gap-1.5">
                           <span className="px-2 py-0.5 rounded-md text-[10px] font-bold uppercase bg-orange-500/15 text-orange-600 dark:text-orange-400">
                             {item.slotRole}
                           </span>
@@ -1850,7 +1861,7 @@ export const PlanView: React.FC = () => {
                     </h3>
                   </div>
 
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex flex-wrap items-center gap-1.5">
                     {Array.from(
                       { length: selectedProgram.cycleLengthWeeks },
                       (_, i) => i + 1
@@ -1880,6 +1891,28 @@ export const PlanView: React.FC = () => {
                       className="px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-xs font-bold text-orange-500"
                     >
                       + Week
+                    </button>
+                    <button
+                      type="button"
+                      data-tooltip="Clone this week into a new or existing week with optional progression note"
+                      title="Duplicate & Progress Week"
+                      onClick={() => {
+                        const fallbackExisting =
+                          Array.from(
+                            { length: selectedProgram.cycleLengthWeeks },
+                            (_, i) => i + 1
+                          ).find((w) => w !== activeTemplateWeek) ?? 1;
+                        setDuplicateWeekModal({
+                          open: true,
+                          targetMode: 'new',
+                          targetWeek: fallbackExisting,
+                          modifier: 'exact',
+                        });
+                      }}
+                      className="px-2.5 py-1.5 rounded-xl bg-orange-500/10 hover:bg-orange-500/20 text-xs font-bold text-orange-600 dark:text-orange-400 inline-flex items-center gap-1 transition-colors"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                      Duplicate Week
                     </button>
                   </div>
                 </div>
@@ -2589,6 +2622,243 @@ export const PlanView: React.FC = () => {
                 className="px-4 py-2 rounded-xl text-xs font-bold bg-orange-500 text-white"
               >
                 Save Name
+              </button>
+            </div>
+          </div>
+        )}
+      </ModalPortal>
+
+      {/* Portaled Duplicate & Progress Week Modal (z-1000) */}
+      <ModalPortal
+        open={duplicateWeekModal.open && Boolean(selectedProgram)}
+        onClose={() => setDuplicateWeekModal((prev) => ({ ...prev, open: false }))}
+        tier="primary"
+      >
+        {selectedProgram && (
+          <div className="w-full max-w-md rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-5 space-y-4 shadow-2xl">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <h3 className="font-display font-bold text-base flex items-center gap-2">
+                  <Copy className="w-4 h-4 text-orange-500" />
+                  Duplicate &amp; Progress Week {activeTemplateWeek}
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  Clone all Primary/Secondary slots and workouts from Week {activeTemplateWeek}.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDuplicateWeekModal((prev) => ({ ...prev, open: false }))}
+                aria-label="Close duplicate week modal"
+                className="p-1.5 rounded-xl text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Destination Selection */}
+            <div className="space-y-2">
+              <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                Destination Week
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setDuplicateWeekModal((prev) => ({ ...prev, targetMode: 'new' }))
+                  }
+                  className={`px-3 py-2 rounded-xl text-xs font-bold border transition-colors ${
+                    duplicateWeekModal.targetMode === 'new'
+                      ? 'bg-orange-500 text-white border-orange-500'
+                      : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200'
+                  }`}
+                >
+                  New Week (Week {selectedProgram.cycleLengthWeeks + 1})
+                </button>
+                <button
+                  type="button"
+                  disabled={selectedProgram.cycleLengthWeeks <= 1}
+                  onClick={() =>
+                    setDuplicateWeekModal((prev) => ({ ...prev, targetMode: 'existing' }))
+                  }
+                  className={`px-3 py-2 rounded-xl text-xs font-bold border transition-colors disabled:opacity-40 ${
+                    duplicateWeekModal.targetMode === 'existing'
+                      ? 'bg-orange-500 text-white border-orange-500'
+                      : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200'
+                  }`}
+                >
+                  Overwrite Existing
+                </button>
+              </div>
+
+              {duplicateWeekModal.targetMode === 'existing' &&
+                selectedProgram.cycleLengthWeeks > 1 && (
+                  <select
+                    value={duplicateWeekModal.targetWeek}
+                    onChange={(e) =>
+                      setDuplicateWeekModal((prev) => ({
+                        ...prev,
+                        targetWeek: Number(e.target.value),
+                      }))
+                    }
+                    className="w-full px-3 py-2 rounded-xl text-xs font-semibold bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700"
+                  >
+                    {Array.from(
+                      { length: selectedProgram.cycleLengthWeeks },
+                      (_, i) => i + 1
+                    )
+                      .filter((wk) => wk !== activeTemplateWeek)
+                      .map((wk) => (
+                        <option key={wk} value={wk}>
+                          Overwrite Week {wk}
+                        </option>
+                      ))}
+                  </select>
+                )}
+            </div>
+
+            {/* Quick Modifier Options */}
+            <div className="space-y-2">
+              <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                Progression Modifier
+              </label>
+              <div className="space-y-1.5">
+                {(
+                  [
+                    {
+                      id: 'exact',
+                      label: 'Exact Copy',
+                      desc: 'Keep all slot notes and focus cues identical.',
+                    },
+                    {
+                      id: 'build_5',
+                      label: '+5% Build Note',
+                      desc: 'Prefixes template slot notes with "+5% Build:" for progressive overload.',
+                    },
+                    {
+                      id: 'deload',
+                      label: 'Deload Week',
+                      desc: 'Prefixes template slot notes with "Deload:" for recovery/volume drop.',
+                    },
+                  ] as const
+                ).map((opt) => {
+                  const active = duplicateWeekModal.modifier === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() =>
+                        setDuplicateWeekModal((prev) => ({ ...prev, modifier: opt.id }))
+                      }
+                      className={`w-full text-left p-2.5 rounded-2xl border transition-all ${
+                        active
+                          ? 'bg-orange-500/10 border-orange-500 text-slate-900 dark:text-slate-100'
+                          : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:border-orange-400'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold">{opt.label}</span>
+                        <span
+                          className={`w-3.5 h-3.5 rounded-full border-2 flex items-center justify-center ${
+                            active ? 'border-orange-500 bg-orange-500' : 'border-slate-400'
+                          }`}
+                        >
+                          {active && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                        {opt.desc}
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setDuplicateWeekModal((prev) => ({ ...prev, open: false }))}
+                className="px-4 py-2 rounded-xl text-xs font-semibold bg-slate-100 dark:bg-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const destWeek =
+                    duplicateWeekModal.targetMode === 'new'
+                      ? selectedProgram.cycleLengthWeeks + 1
+                      : duplicateWeekModal.targetWeek;
+                  const nextCycleLength = Math.max(selectedProgram.cycleLengthWeeks, destWeek);
+
+                  const applyNoteModifier = (rawNote: string | undefined): string => {
+                    const cleaned = (rawNote || '')
+                      .replace(/^(?:\+5%\s*Build|Deload)\s*[:—-]\s*/i, '')
+                      .trim();
+                    if (duplicateWeekModal.modifier === 'build_5') {
+                      return cleaned ? `+5% Build: ${cleaned}` : '+5% Build';
+                    }
+                    if (duplicateWeekModal.modifier === 'deload') {
+                      return cleaned ? `Deload: ${cleaned}` : 'Deload';
+                    }
+                    return rawNote || '';
+                  };
+
+                  const sourceDays = selectedProgram.scheduleTemplate.filter(
+                    (d) => d.weekNumber === activeTemplateWeek
+                  );
+                  const clonedDays: ProgramDayTemplate[] = sourceDays.map((day) => ({
+                    weekNumber: destWeek,
+                    dayOfWeek: day.dayOfWeek,
+                    items: day.items.map((slot, idx) => ({
+                      ...slot,
+                      orderIndex: idx,
+                      defaultNotes: applyNoteModifier(slot.defaultNotes),
+                    })),
+                  }));
+
+                  const remainingDays = selectedProgram.scheduleTemplate.filter(
+                    (d) => d.weekNumber !== destWeek
+                  );
+                  const nextTemplate = [...remainingDays, ...clonedDays].sort(
+                    (a, b) => a.weekNumber - b.weekNumber || a.dayOfWeek - b.dayOfWeek
+                  );
+
+                  const sourceWeekFocus =
+                    selectedProgram.weekProgressionNotes?.[String(activeTemplateWeek)] || '';
+                  const nextWeekFocus =
+                    duplicateWeekModal.modifier === 'build_5'
+                      ? applyNoteModifier(sourceWeekFocus)
+                      : duplicateWeekModal.modifier === 'deload'
+                      ? applyNoteModifier(sourceWeekFocus)
+                      : sourceWeekFocus;
+
+                  upsertProgram({
+                    ...selectedProgram,
+                    cycleLengthWeeks: nextCycleLength,
+                    scheduleTemplate: nextTemplate,
+                    weekProgressionNotes: {
+                      ...(selectedProgram.weekProgressionNotes || {}),
+                      ...(nextWeekFocus ? { [String(destWeek)]: nextWeekFocus } : {}),
+                    },
+                  });
+
+                  setActiveTemplateWeek(destWeek);
+                  setDuplicateWeekModal((prev) => ({ ...prev, open: false }));
+                  const modLabel =
+                    duplicateWeekModal.modifier === 'build_5'
+                      ? ' (+5% Build)'
+                      : duplicateWeekModal.modifier === 'deload'
+                      ? ' (Deload)'
+                      : '';
+                  triggerNotice(
+                    `Duplicated Week ${activeTemplateWeek} → Week ${destWeek}${modLabel}`
+                  );
+                }}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-orange-500 hover:bg-orange-600 text-white shadow-sm"
+              >
+                Duplicate Week
               </button>
             </div>
           </div>

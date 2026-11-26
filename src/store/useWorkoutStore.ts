@@ -29,13 +29,14 @@ import {
   SEED_PROGRAMS,
   SEED_SCHEDULES,
 } from '../data/seedData';
-import { AiNotesPatchPayload } from '../utils/aiCoachPatch';
+import { AiNotesPatchPayload, ParsedProgramCycleImport } from '../utils/aiCoachPatch';
 import {
   PendingTaskCompletion,
   TasksActionResult,
   checkCompletedTasksInbound as fetchCompletedTasksInbound,
   completeGoogleTaskForSchedule,
   deleteGoogleTaskForSchedule,
+  getCachedGoogleTasksToken,
   syncGoogleTasksTwoWay,
   upsertGoogleTaskForSchedule,
 } from '../lib/googleTasks';
@@ -65,6 +66,57 @@ import {
 } from '../services/firebase';
 
 export type AppTab = 'log' | 'plan' | 'library' | 'history' | 'settings';
+
+export const SAFETY_SNAPSHOT_STORAGE_KEY = 'wt_safety_snapshot';
+
+export interface SafetySnapshot {
+  timestamp: string;
+  reason: string;
+  wt_schedule: Record<string, DailySchedule>;
+  wt_logs: WorkoutLog[];
+  wt_programs: WorkoutProgram[];
+  wt_context: ContextBlock[];
+}
+
+export interface SafetySnapshotMeta {
+  timestamp: string;
+  reason: string;
+  scheduleDaysCount: number;
+  logsCount: number;
+  programsCount: number;
+  contextCount: number;
+}
+
+export interface OfflineSyncQueue {
+  firestoreSyncNeeded: boolean;
+  googleTasksSyncNeeded: boolean;
+  pendingCount: number;
+  queuedAt?: string;
+}
+
+function isNavigatorOffline(): boolean {
+  return typeof navigator !== 'undefined' && navigator.onLine === false;
+}
+
+export function readSafetySnapshotMetaFromStorage(): SafetySnapshotMeta | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(SAFETY_SNAPSHOT_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<SafetySnapshot>;
+    if (!parsed || typeof parsed.timestamp !== 'string') return null;
+    return {
+      timestamp: parsed.timestamp,
+      reason: parsed.reason || 'Automatic Pre-Reset Backup',
+      scheduleDaysCount: Object.keys(parsed.wt_schedule || {}).length,
+      logsCount: Array.isArray(parsed.wt_logs) ? parsed.wt_logs.length : 0,
+      programsCount: Array.isArray(parsed.wt_programs) ? parsed.wt_programs.length : 0,
+      contextCount: Array.isArray(parsed.wt_context) ? parsed.wt_context.length : 0,
+    };
+  } catch {
+    return null;
+  }
+}
 
 const ACTIVE_TAB_STORAGE_KEY = 'ironpulse_active_tab';
 const VALID_APP_TABS: readonly AppTab[] = ['log', 'plan', 'library', 'history', 'settings'];
@@ -185,6 +237,31 @@ interface WorkoutStoreState {
     status: 'success' | 'failed';
     message?: string;
   } | null;
+
+  // Offline Resilience & Pre-Reset Safety Snapshot
+  isOnline: boolean;
+  offlineSyncQueue: OfflineSyncQueue;
+  safetySnapshotMeta: SafetySnapshotMeta | null;
+
+  setOnlineStatus: (online: boolean) => void;
+  queueOfflineSync: (kind: 'firestore' | 'tasks' | 'both') => void;
+  flushOfflineSyncQueue: () => Promise<{ flushedFirestore: boolean; flushedTasks: boolean }>;
+  saveSafetySnapshot: (reason: string) => SafetySnapshotMeta | null;
+  restoreSafetySnapshot: () => Promise<{
+    ok: boolean;
+    reason?: string;
+    timestamp?: string;
+    error?: string;
+  }>;
+  importProgramCycle: (
+    parsed: ParsedProgramCycleImport,
+    mode: 'create_new' | 'replace_active'
+  ) => {
+    programTitle: string;
+    cycleWeeks: number;
+    presetsCount: number;
+    autoFillResult?: { daysModified: number; itemsCreated: number };
+  };
 
   // Navigation & Theme
   setActiveTab: (tab: AppTab) => void;
@@ -331,7 +408,8 @@ interface WorkoutStoreState {
     programUuid: string,
     startDate: string,
     endDate: string,
-    conflictMode: 'replace' | 'update_matching' | 'skip'
+    conflictMode: 'replace' | 'update_matching' | 'skip',
+    options?: { skipSafetySnapshot?: boolean }
   ) => { daysModified: number; itemsCreated: number };
 
   // Mitigating Factors / Schedule Context CRUD
@@ -352,7 +430,10 @@ interface WorkoutStoreState {
   deleteLog: (logUuid: string) => Promise<void>;
 
   // Bulk Imports (AI JSON & Reconciled Legacy Google Sheet)
-  applyAiImportPayload: (payload: AIImportPayload) => {
+  applyAiImportPayload: (
+    payload: AIImportPayload,
+    options?: { skipSafetySnapshot?: boolean }
+  ) => {
     presetsCount: number;
     programsCount: number;
     scheduleDaysCount: number;
@@ -1182,6 +1263,286 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
       tasksActionToast: null,
       lastTasksSync: null,
 
+      isOnline: typeof navigator !== 'undefined' ? navigator.onLine : true,
+      offlineSyncQueue: {
+        firestoreSyncNeeded: false,
+        googleTasksSyncNeeded: false,
+        pendingCount: 0,
+      },
+      safetySnapshotMeta: readSafetySnapshotMetaFromStorage(),
+
+      setOnlineStatus: (online) => {
+        set({ isOnline: online });
+      },
+
+      queueOfflineSync: (kind) => {
+        const prev = get().offlineSyncQueue;
+        const nowIso = new Date().toISOString();
+        set({
+          offlineSyncQueue: {
+            firestoreSyncNeeded:
+              prev.firestoreSyncNeeded || kind === 'firestore' || kind === 'both',
+            googleTasksSyncNeeded:
+              prev.googleTasksSyncNeeded || kind === 'tasks' || kind === 'both',
+            pendingCount: prev.pendingCount + 1,
+            queuedAt: prev.queuedAt || nowIso,
+          },
+        });
+      },
+
+      flushOfflineSyncQueue: async () => {
+        if (isNavigatorOffline()) {
+          return { flushedFirestore: false, flushedTasks: false };
+        }
+        const state = get();
+        const queue = state.offlineSyncQueue;
+        if (!queue.firestoreSyncNeeded && !queue.googleTasksSyncNeeded && queue.pendingCount === 0) {
+          return { flushedFirestore: false, flushedTasks: false };
+        }
+
+        let flushedFirestore = false;
+        let flushedTasks = false;
+
+        if (queue.firestoreSyncNeeded && state.authUser) {
+          const pushRes = await get().pushLocalToCloud();
+          if (pushRes.ok) {
+            await get().syncWithFirestore();
+            flushedFirestore = true;
+          }
+        } else if (!state.authUser) {
+          flushedFirestore = true;
+        }
+
+        if (queue.googleTasksSyncNeeded && getCachedGoogleTasksToken()) {
+          const tasksRes = await get().runGoogleTasksSync(false);
+          if (tasksRes.ok) {
+            flushedTasks = true;
+          }
+        } else if (!getCachedGoogleTasksToken()) {
+          // Clear queued flag if no active session token exists so it doesn't spin endlessly
+          flushedTasks = true;
+        }
+
+        const stillNeedsFirestore = queue.firestoreSyncNeeded && !flushedFirestore;
+        const stillNeedsTasks = queue.googleTasksSyncNeeded && !flushedTasks;
+
+        set({
+          offlineSyncQueue: {
+            firestoreSyncNeeded: stillNeedsFirestore,
+            googleTasksSyncNeeded: stillNeedsTasks,
+            pendingCount: stillNeedsFirestore || stillNeedsTasks ? queue.pendingCount : 0,
+            queuedAt: stillNeedsFirestore || stillNeedsTasks ? queue.queuedAt : undefined,
+          },
+          ...(flushedFirestore || flushedTasks
+            ? {
+                tasksActionToast: {
+                  status: 'synced',
+                  message: '✓ Back online — synced queued offline changes',
+                },
+              }
+            : {}),
+        });
+        if (flushedFirestore || flushedTasks) {
+          setTimeout(() => set({ tasksActionToast: null }), 3500);
+        }
+
+        return { flushedFirestore, flushedTasks };
+      },
+
+      saveSafetySnapshot: (reason) => {
+        if (typeof window === 'undefined') return null;
+        try {
+          const state = get();
+          const snapshot: SafetySnapshot = {
+            timestamp: new Date().toISOString(),
+            reason,
+            wt_schedule: state.schedules,
+            wt_logs: state.logs,
+            wt_programs: state.programs,
+            wt_context: state.contextBlocks,
+          };
+          window.localStorage.setItem(SAFETY_SNAPSHOT_STORAGE_KEY, JSON.stringify(snapshot));
+          const meta: SafetySnapshotMeta = {
+            timestamp: snapshot.timestamp,
+            reason: snapshot.reason,
+            scheduleDaysCount: Object.keys(snapshot.wt_schedule).length,
+            logsCount: snapshot.wt_logs.length,
+            programsCount: snapshot.wt_programs.length,
+            contextCount: snapshot.wt_context.length,
+          };
+          set({ safetySnapshotMeta: meta });
+          return meta;
+        } catch (err) {
+          console.error('[SafetySnapshot] Failed to save snapshot to localStorage:', err);
+          return null;
+        }
+      },
+
+      restoreSafetySnapshot: async () => {
+        if (typeof window === 'undefined') {
+          return { ok: false, error: 'Storage unavailable.' };
+        }
+        try {
+          const raw = window.localStorage.getItem(SAFETY_SNAPSHOT_STORAGE_KEY);
+          if (!raw) {
+            return { ok: false, error: 'No safety snapshot found.' };
+          }
+          const parsed = JSON.parse(raw) as Partial<SafetySnapshot>;
+          if (!parsed || typeof parsed.timestamp !== 'string') {
+            return { ok: false, error: 'Safety snapshot is corrupted.' };
+          }
+
+          const state = get();
+          const restoredSchedules = parsed.wt_schedule || {};
+          const restoredLogs = Array.isArray(parsed.wt_logs) ? parsed.wt_logs : [];
+          const restoredPrograms = Array.isArray(parsed.wt_programs)
+            ? parsed.wt_programs
+            : state.programs;
+          const restoredContext = Array.isArray(parsed.wt_context)
+            ? parsed.wt_context
+            : state.contextBlocks;
+
+          const reconciled = reconcileSchedulesAndLogs(
+            restoredSchedules,
+            restoredLogs,
+            state.presets,
+            state.meta.defaultDistanceUnit
+          );
+          const refreshedFloor = buildInitialDraftsForDate(
+            state.activeDate,
+            reconciled.logs,
+            reconciled.schedules,
+            state.presets,
+            state.meta
+          );
+
+          const activeStillExists = restoredPrograms.some(
+            (p) => p.programUuid === state.meta.activeProgramUuid
+          );
+          const nextMeta: UserMeta = activeStillExists
+            ? state.meta
+            : {
+                ...state.meta,
+                activeProgramUuid: restoredPrograms[0]?.programUuid,
+                updatedAt: new Date().toISOString(),
+              };
+
+          set({
+            schedules: reconciled.schedules,
+            logs: reconciled.logs,
+            programs: restoredPrograms,
+            contextBlocks: restoredContext,
+            meta: nextMeta,
+            activeSessionGroupUuid: refreshedFloor.sessionGroupUuid,
+            draftWorkouts: refreshedFloor.drafts,
+          });
+
+          if (isNavigatorOffline()) {
+            get().queueOfflineSync('both');
+          } else if (state.authUser) {
+            await get().pushLocalToCloud();
+          }
+
+          return {
+            ok: true,
+            reason: parsed.reason,
+            timestamp: parsed.timestamp,
+          };
+        } catch (err) {
+          return {
+            ok: false,
+            error: getErrorMessage(err, 'Failed to restore safety snapshot.'),
+          };
+        }
+      },
+
+      importProgramCycle: (parsed, mode) => {
+        get().saveSafetySnapshot('Import Program & Cycle');
+        const now = new Date().toISOString();
+
+        // 1. Upsert any optional new/updated preset workouts first
+        let presetsCount = 0;
+        if (parsed.presets.length > 0) {
+          const presetPayload: AIImportPayload = {
+            mode: 'update',
+            presets: parsed.presets,
+          };
+          const res = get().applyAiImportPayload(presetPayload, { skipSafetySnapshot: true });
+          presetsCount = res.presetsCount;
+        }
+
+        const latestState = get();
+        const activeProgram =
+          latestState.programs.find(
+            (p) => p.programUuid === latestState.meta.activeProgramUuid
+          ) || null;
+
+        let targetProgram: WorkoutProgram;
+        if (mode === 'replace_active' && activeProgram) {
+          targetProgram = {
+            ...activeProgram,
+            title: parsed.programName || activeProgram.title,
+            description:
+              parsed.description !== undefined ? parsed.description : activeProgram.description,
+            cycleLengthWeeks: parsed.cycleWeeks,
+            scheduleTemplate: parsed.scheduleTemplate,
+            weekProgressionNotes: {
+              ...(activeProgram.weekProgressionNotes || {}),
+              ...parsed.weekProgressionNotes,
+            },
+            updatedAt: now,
+          };
+        } else {
+          targetProgram = {
+            programUuid: `prog-${uuidv4()}`,
+            slug: slugify(parsed.programName, 'prog'),
+            title: parsed.programName,
+            description: parsed.description || 'Imported via AI Coach',
+            cycleLengthWeeks: parsed.cycleWeeks,
+            scheduleTemplate: parsed.scheduleTemplate,
+            weekProgressionNotes: parsed.weekProgressionNotes,
+            createdAt: now,
+            updatedAt: now,
+          };
+        }
+
+        get().upsertProgram(targetProgram);
+        get().setActiveProgram(targetProgram.programUuid);
+
+        let autoFillResult: { daysModified: number; itemsCreated: number } | undefined;
+        if (parsed.autoFill) {
+          autoFillResult = get().autoFillSchedule(
+            targetProgram.programUuid,
+            parsed.autoFill.startDate,
+            parsed.autoFill.endDate,
+            parsed.autoFill.conflictMode || 'replace',
+            { skipSafetySnapshot: true }
+          );
+          try {
+            window.localStorage.setItem(
+              `ironpulse_autofill_range_${targetProgram.programUuid}`,
+              JSON.stringify({
+                start: parsed.autoFill.startDate,
+                end: parsed.autoFill.endDate,
+              })
+            );
+          } catch {
+            // Ignore localStorage restrictions
+          }
+        }
+
+        if (isNavigatorOffline()) {
+          get().queueOfflineSync('both');
+        }
+
+        return {
+          programTitle: targetProgram.title,
+          cycleWeeks: targetProgram.cycleLengthWeeks,
+          presetsCount,
+          autoFillResult,
+        };
+      },
+
       setActiveTab: (tab) => {
         persistActiveTab(tab);
         set({ activeTab: tab });
@@ -1567,6 +1928,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         }
 
         const { program, cycleWeek, items: templateItems } = preview;
+        get().saveSafetySnapshot('Reset to Program Plan');
         const now = new Date().toISOString();
         const uid = state.authUser?.uid || state.meta.uid;
         const weekNotePrefix = program.weekProgressionNotes?.[String(cycleWeek)]
@@ -1659,21 +2021,25 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         });
 
         // Sync Google Tasks (delete replaced tasks, upsert fresh pending template tasks)
-        for (const oldItem of oldSchedItems) {
-          const oldPreset = state.presets.find((p) => p.presetUuid === oldItem.presetUuid);
-          void deleteGoogleTaskForSchedule({
-            scheduleId: oldItem.scheduleItemUuid,
-            date,
-            workoutName: oldPreset?.title,
-          });
-        }
-        for (const freshItem of newScheduledItems) {
-          const freshPreset = state.presets.find((p) => p.presetUuid === freshItem.presetUuid);
-          void upsertGoogleTaskForSchedule({
-            date,
-            item: freshItem,
-            preset: freshPreset,
-          });
+        if (isNavigatorOffline()) {
+          get().queueOfflineSync('both');
+        } else {
+          for (const oldItem of oldSchedItems) {
+            const oldPreset = state.presets.find((p) => p.presetUuid === oldItem.presetUuid);
+            void deleteGoogleTaskForSchedule({
+              scheduleId: oldItem.scheduleItemUuid,
+              date,
+              workoutName: oldPreset?.title,
+            });
+          }
+          for (const freshItem of newScheduledItems) {
+            const freshPreset = state.presets.find((p) => p.presetUuid === freshItem.presetUuid);
+            void upsertGoogleTaskForSchedule({
+              date,
+              item: freshItem,
+              preset: freshPreset,
+            });
+          }
         }
 
         // Persist replacement to Firestore
@@ -1975,6 +2341,10 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         });
 
         if (!state.authUser) return { ok: true };
+        if (isNavigatorOffline()) {
+          get().queueOfflineSync('firestore');
+          return { ok: true };
+        }
 
         set({ syncStatus: 'syncing', lastSyncError: undefined });
         try {
@@ -2418,7 +2788,9 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           }
         };
 
-        if (finalStatus === 'completed') {
+        if (isNavigatorOffline()) {
+          get().queueOfflineSync('both');
+        } else if (finalStatus === 'completed') {
           void completeGoogleTaskForSchedule({
             scheduleId: matchedScheduleIdForTasks,
             date: draft.date,
@@ -3039,6 +3411,16 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
       },
 
       runGoogleTasksSync: async (interactive) => {
+        if (isNavigatorOffline()) {
+          get().queueOfflineSync('tasks');
+          return {
+            ok: false,
+            pulled: 0,
+            pushed: 0,
+            rescheduled: 0,
+            error: 'Offline — Google Tasks sync queued for when you reconnect.',
+          };
+        }
         const state = get();
         const todayIso = getTodayIsoDate();
         const res = await syncGoogleTasksTwoWay({
@@ -3530,6 +3912,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
       },
 
       deleteProgram: (programUuid) => {
+        get().saveSafetySnapshot('Delete Program');
         const state = get();
         const today = getTodayIsoDate();
         const now = new Date().toISOString();
@@ -3671,6 +4054,9 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
       },
 
       updateDailySchedule: (date, items) => {
+        if (isNavigatorOffline()) {
+          get().queueOfflineSync('both');
+        }
         const state = get();
         const now = new Date().toISOString();
         const docId = state.authUser ? `${state.authUser.uid}_${date}` : `local_${date}`;
@@ -3931,7 +4317,9 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           }
         };
 
-        if (canonicalStatus === 'completed') {
+        if (isNavigatorOffline()) {
+          get().queueOfflineSync('both');
+        } else if (canonicalStatus === 'completed') {
           void completeGoogleTaskForSchedule({
             scheduleId: scheduleItemUuid,
             date,
@@ -4023,10 +4411,17 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         });
       },
 
-      autoFillSchedule: (programUuid, startDate, endDate, conflictMode) => {
+      autoFillSchedule: (programUuid, startDate, endDate, conflictMode, options) => {
         const state = get();
         const program = state.programs.find((p) => p.programUuid === programUuid);
         if (!program) return { daysModified: 0, itemsCreated: 0 };
+
+        if (!options?.skipSafetySnapshot && conflictMode === 'replace') {
+          get().saveSafetySnapshot('Auto-Fill Calendar Overwrite');
+        }
+        if (isNavigatorOffline()) {
+          get().queueOfflineSync('both');
+        }
 
         const nextSchedules = { ...state.schedules };
         const now = new Date().toISOString();
@@ -4504,7 +4899,10 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         return get().deleteWorkoutLog(logUuid);
       },
 
-      applyAiImportPayload: (payload) => {
+      applyAiImportPayload: (payload, options) => {
+        if (!options?.skipSafetySnapshot) {
+          get().saveSafetySnapshot('Import Program & Cycle');
+        }
         const state = get();
         const mode = payload.mode || 'update';
         const now = new Date().toISOString();
@@ -4861,7 +5259,8 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         }
 
         // 3. Upcoming schedule coachNotes & session-specific exercise notes
-        const schedulePatches = patch.upcomingSchedule || patch.schedule || [];
+        const schedulePatches =
+          patch.upcomingSchedule || patch.schedule || patch.updates || patch.notesPatch || [];
         const scheduleNoteMap = new Map<string, string>();
         const scheduleExUidMap = new Map<string, Record<string, string>>();
         const scheduleExIdxMap = new Map<string, Record<string, string>>();
@@ -4871,6 +5270,8 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
               ? sPatch.coachNotes
               : typeof sPatch.notes === 'string'
               ? sPatch.notes
+              : typeof sPatch.targetCues === 'string'
+              ? sPatch.targetCues
               : undefined;
           const hasExUid = Boolean(sPatch.exerciseNotesByUid && Object.keys(sPatch.exerciseNotesByUid).length > 0);
           const hasExIdx = Boolean(sPatch.exerciseNotesByIndex && Object.keys(sPatch.exerciseNotesByIndex).length > 0);
@@ -4878,6 +5279,17 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           if (nextNote === undefined && !hasExUid && !hasExIdx && !hasExList) continue;
 
           const itemId = sPatch.scheduleItemUuid || sPatch.scheduleId || sPatch.id;
+          const targetWorkoutRef = sPatch.workoutId || sPatch.presetId || sPatch.presetUuid;
+          const targetSlot = (sPatch.slot || sPatch.slotRole || '').trim().toLowerCase();
+          const resolvedPresetUuid = targetWorkoutRef
+            ? nextPresets.find(
+                (p) =>
+                  p.presetUuid === targetWorkoutRef ||
+                  p.slug === targetWorkoutRef ||
+                  p.legacyWorkoutId === targetWorkoutRef ||
+                  p.title.toLowerCase() === targetWorkoutRef.toLowerCase()
+              )?.presetUuid || targetWorkoutRef
+            : undefined;
           const candidateDates = sPatch.date && nextSchedules[sPatch.date] ? [sPatch.date] : Object.keys(nextSchedules);
 
           for (const d of candidateDates) {
@@ -4886,11 +5298,22 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
             let dayChanged = false;
             const nextItems = daySch.items.map((item) => {
               const matchesId = itemId && item.scheduleItemUuid === itemId;
-              const matchesDatePreset =
+              const matchesDateSlotOrWorkout =
+                !itemId &&
                 Boolean(sPatch.date) &&
-                (sPatch.presetId || sPatch.presetUuid) &&
-                item.presetUuid === (sPatch.presetId || sPatch.presetUuid);
-              if (!matchesId && !matchesDatePreset) return item;
+                (() => {
+                  const slotMatch = targetSlot
+                    ? (item.slotRole || '').trim().toLowerCase() === targetSlot
+                    : false;
+                  const workoutMatch = resolvedPresetUuid
+                    ? item.presetUuid === resolvedPresetUuid
+                    : false;
+                  if (targetSlot && resolvedPresetUuid) return slotMatch && workoutMatch;
+                  if (workoutMatch) return true;
+                  if (slotMatch) return true;
+                  return false;
+                })();
+              if (!matchesId && !matchesDateSlotOrWorkout) return item;
 
               let updatedItem = { ...item };
               let itemChanged = false;
@@ -5649,6 +6072,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         lastTasksSync: state.lastTasksSync,
         excludedFromTasksIds: state.excludedFromTasksIds,
         dismissedTaskCompletionIds: state.dismissedTaskCompletionIds,
+        offlineSyncQueue: state.offlineSyncQueue,
       }),
       onRehydrateStorage: () => (rehydratedState, error) => {
         if (error || !rehydratedState) return;

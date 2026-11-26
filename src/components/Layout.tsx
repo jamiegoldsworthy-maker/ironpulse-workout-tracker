@@ -19,6 +19,7 @@ import {
   GalleryHorizontalEnd,
   RefreshCw,
   CheckCircle2,
+  WifiOff,
 } from 'lucide-react';
 import {
   AppTab,
@@ -96,6 +97,10 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
     dismissPendingTaskCompletion,
     openPendingTaskInLog,
     quickCompletePendingTask,
+    isOnline,
+    offlineSyncQueue,
+    setOnlineStatus,
+    flushOfflineSyncQueue,
   } = useWorkoutStore();
 
   const [cogOpen, setCogOpen] = useState(false);
@@ -118,6 +123,28 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
     };
   }
   const slideDirection = tabTransitionRef.current.direction;
+
+  // Track online/offline state and automatically flush queued mutations when reconnecting
+  useEffect(() => {
+    const handleOnline = () => {
+      setOnlineStatus(true);
+      void flushOfflineSyncQueue();
+    };
+    const handleOffline = () => {
+      setOnlineStatus(false);
+    };
+    const currentlyOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
+    setOnlineStatus(currentlyOnline);
+    if (currentlyOnline && useWorkoutStore.getState().offlineSyncQueue.pendingCount > 0) {
+      void flushOfflineSyncQueue();
+    }
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [setOnlineStatus, flushOfflineSyncQueue, authUser?.uid]);
 
   // Mirror activeTab to hash/localStorage on mount & respond to browser hashchange
   useEffect(() => {
@@ -355,8 +382,28 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
               </h1>
             </div>
 
-            {/* Right Controls: Single Minimal Cog Popover */}
-            <div ref={cogRef} className="relative flex items-center shrink-0">
+            {/* Right Controls: Offline Indicator Pill + Single Minimal Cog Popover */}
+            <div ref={cogRef} className="relative flex items-center gap-2 shrink-0">
+              {!isOnline && (
+                <span
+                  role="status"
+                  aria-live="polite"
+                  title={
+                    offlineSyncQueue.pendingCount > 0
+                      ? `Offline — ${offlineSyncQueue.pendingCount} change(s) queued to sync when reconnected`
+                      : 'Offline — changes are saved locally and will sync automatically when back online'
+                  }
+                  className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-bold bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30 shrink-0"
+                >
+                  <WifiOff className="w-3 h-3 shrink-0" />
+                  <span>Offline</span>
+                  {offlineSyncQueue.pendingCount > 0 && (
+                    <span className="font-mono text-[9px] px-1 rounded-full bg-amber-500/20">
+                      {offlineSyncQueue.pendingCount}
+                    </span>
+                  )}
+                </span>
+              )}
               <button
                 type="button"
                 onClick={() => setCogOpen((prev) => !prev)}

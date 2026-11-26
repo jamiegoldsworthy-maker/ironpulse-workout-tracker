@@ -1,31 +1,42 @@
 import React, { useMemo, useState } from 'react';
 import {
+  AlertTriangle,
+  Calendar,
+  CheckCircle2,
+  ChevronDown,
+  ClipboardPaste,
   Cloud,
-  Code2,
   Copy,
   Database,
   Download,
   FileSpreadsheet,
+  History,
+  Layers,
   LogIn,
   LogOut,
+  Monitor,
   Moon,
   RefreshCw,
-  CheckCircle2,
+  RotateCcw,
+  ShieldCheck,
   Sparkles,
   Sun,
-  Monitor,
   Upload,
-  BookOpen,
-  ClipboardPaste,
+  X,
 } from 'lucide-react';
-import { ImportAiNotesPatchModal } from './ImportAiNotesPatchModal';
-import { buildAiCoachExportPayload } from '../utils/aiCoachPatch';
+import { ModalPortal } from './ModalPortal';
+import {
+  buildAiNotesDiffPreview,
+  buildCoachReviewExport,
+  parseAiNotesPatch,
+  parseAiProgramCycleImport,
+} from '../utils/aiCoachPatch';
 import {
   GOOGLE_TASKS_TARGET_LIST_ID,
   getCachedGoogleTasksToken,
 } from '../lib/googleTasks';
 import { useWorkoutStore } from '../store/useWorkoutStore';
-import { AIImportPayload, DistanceUnit, ThemeMode, WorkoutPreset } from '../types/workout';
+import { DistanceUnit, ThemeMode, WorkoutPreset } from '../types/workout';
 import {
   formatLoadBadge,
   getTodayIsoDate,
@@ -48,6 +59,25 @@ import {
   signOutFirebase,
 } from '../services/firebase';
 
+type SettingsTab = 'sync_prefs' | 'ai_coach';
+type CoachReviewPeriod = '7d' | '14d' | '30d' | 'program_block' | 'custom';
+
+function formatSnapshotTimestamp(iso: string): string {
+  try {
+    const dt = new Date(iso);
+    if (Number.isNaN(dt.getTime())) return iso;
+    return dt.toLocaleString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+  } catch {
+    return iso;
+  }
+}
+
 export const SettingsView: React.FC = () => {
   const {
     presets,
@@ -62,42 +92,57 @@ export const SettingsView: React.FC = () => {
     authUser,
     syncStatus,
     lastSyncError,
+    isOnline,
+    offlineSyncQueue,
+    safetySnapshotMeta,
     setTheme,
     setDefaultDistanceUnit,
     setDefaultAutoStartRestTimer,
     setKeepScreenAwake,
     setTimerSoundEnabled,
     upsertPreset,
-    applyAiImportPayload,
+    applyAiNotesPatch,
+    importProgramCycle,
     commitReconciledLegacyImport,
     importContextBlocks,
     syncWithFirestore,
     pushLocalToCloud,
     resetToDemoSeed,
-    setActiveTab,
+    restoreSafetySnapshot,
     lastTasksSync,
     runGoogleTasksSync,
   } = useWorkoutStore();
 
+  const todayIso = getTodayIsoDate();
+
+  // Top 2-Tab Segmented Switcher (Sync & Preferences default on open)
+  const [activeSettingsTab, setActiveSettingsTab] = useState<SettingsTab>('sync_prefs');
   const [isSyncingTasks, setIsSyncingTasks] = useState(false);
 
-  const [activeSection, setActiveSection] = useState<
-    'sheet_import' | 'ai_drawer' | 'cloud_prefs'
-  >('sheet_import');
-
-  // Sub-mode inside Google Sheet Importer: 'presets' vs 'logs'
+  // Collapsible bottom accordions inside Sync & Preferences (collapsed by default)
+  const [backupAccordionOpen, setBackupAccordionOpen] = useState(false);
+  const [legacyCsvAccordionOpen, setLegacyCsvAccordionOpen] = useState(false);
   const [sheetImportMode, setSheetImportMode] = useState<'presets' | 'logs'>('presets');
-  const [aiNotesModalOpen, setAiNotesModalOpen] = useState(false);
 
+  // Portaled confirmation modals
+  const [restoreSnapshotConfirmOpen, setRestoreSnapshotConfirmOpen] = useState(false);
+  const [isRestoringSnapshot, setIsRestoringSnapshot] = useState(false);
+  const [applyNotesConfirmOpen, setApplyNotesConfirmOpen] = useState(false);
+  const [isApplyingNotes, setIsApplyingNotes] = useState(false);
+
+  // Toast notice
   const [notice, setNotice] = useState<string | null>(null);
   const showNotice = (msg: string) => {
     setNotice(msg);
-    setTimeout(() => setNotice(null), 3200);
+    setTimeout(() => setNotice(null), 3400);
   };
 
   // =========================================================================
-  // 1A. GOOGLE SHEET PRESET WORKOUTS IMPORTER STATE
+  // SYNC & PREFERENCES: FIREBASE CONFIG & LEGACY GOOGLE SHEET IMPORTER
   // =========================================================================
+  const [firebaseJsonInput, setFirebaseJsonInput] = useState<string>('');
+  const effectiveFbConfig = getEffectiveFirebaseConfig();
+
   const [presetSheetCsv, setPresetSheetCsv] = useState<string>('');
   const [parsedSheetPresets, setParsedSheetPresets] = useState<WorkoutPreset[]>([]);
 
@@ -122,9 +167,6 @@ export const SettingsView: React.FC = () => {
     showNotice(`Imported ${count} Preset Workout(s) into your Library!`);
   };
 
-  // =========================================================================
-  // 1B. GOOGLE SHEET HISTORICAL LOGS IMPORTER STATE
-  // =========================================================================
   const [csvInputText, setCsvInputText] = useState<string>('');
   const [parsedLegacyRows, setParsedLegacyRows] = useState<ParsedLegacyRow[]>([]);
   const [workoutNameMap, setWorkoutNameMap] = useState<Record<string, string>>({});
@@ -170,1149 +212,1489 @@ export const SettingsView: React.FC = () => {
   };
 
   // =========================================================================
-  // 2. AI CODE BLOCK IMPORT / EXPORT DRAWER STATE
+  // AI COACH & DATA — CARD A: EXPORT TRAINING DATA FOR AI COACH REVIEW
   // =========================================================================
-  const [aiJsonText, setAiJsonText] = useState<string>('');
-  const [aiConflictMode, setAiConflictMode] = useState<'add' | 'update' | 'replace'>('update');
+  const [reviewPeriod, setReviewPeriod] = useState<CoachReviewPeriod>('14d');
+  const [customStartDate, setCustomStartDate] = useState<string>(() =>
+    shiftIsoDate(todayIso, -13)
+  );
+  const [customEndDate, setCustomEndDate] = useState<string>(todayIso);
+  const [includeUpcoming7Days, setIncludeUpcoming7Days] = useState<boolean>(true);
+  const [includeContextFlags, setIncludeContextFlags] = useState<boolean>(true);
+  const [includeSundayCheckInPrompt, setIncludeSundayCheckInPrompt] = useState<boolean>(true);
 
-  const { preview: parsedAiPreview, error: aiParseError } = useMemo((): {
-    preview: AIImportPayload | null;
-    error: string | null;
-  } => {
-    if (!aiJsonText.trim()) return { preview: null, error: null };
-    try {
-      const cleaned = aiJsonText
-        .replace(/^```(?:json)?\s*/i, '')
-        .replace(/```\s*$/i, '')
-        .trim();
-      const obj = JSON.parse(cleaned);
-      return { preview: obj as AIImportPayload, error: null };
-    } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : 'Invalid JSON syntax';
-      return { preview: null, error: message };
+  const activeProgram = useMemo(
+    () =>
+      programs.find((p) => p.programUuid === meta.activeProgramUuid) || programs[0] || null,
+    [programs, meta.activeProgramUuid]
+  );
+
+  const reviewWindow = useMemo(() => {
+    if (reviewPeriod === '7d') {
+      return {
+        startDate: shiftIsoDate(todayIso, -6),
+        endDate: todayIso,
+        label: 'Last 7 Days',
+      };
     }
-  }, [aiJsonText]);
-
-  const handleCopyAiSchemaAndIds = () => {
-    const schemaDirectory = {
-      _instructions:
-        'Generate a JSON code block matching the AIImportPayload contract below. Reference existing presetUuid/slug and programUuid values whenever scheduling or updating existing workouts.',
-      contract: {
-        mode: 'update | add | replace',
-        presets: [
-          {
-            presetUuid: 'optional-existing-uuid',
-            slug: 'wkt_example_slug',
-            title: 'Example Workout Title',
-            workoutType:
-              'Strength | Conditioning | Complex | Circuit/HIIT | Cardio | Mobility | Core',
-            programIds: ['prog-hybrid-kb-ruck'],
-            tags: ['Kettlebell', 'Double KB'],
-            defaultTimer: { mode: 'circuit', rounds: 15, workSec: 60, restSec: 0 },
-            exercises: [
-              {
-                exerciseUuid: 'ex-kb-clean-and-press',
-                exerciseName: 'KB Clean & Press',
-                category: 'Complex',
-                trackingType: 'strength | circuit | cardio',
-                loadType: 'single_kg | double_kg | bodyweight | bw_plus_kg | ruck_kg | none',
-                defaultWeight: 16,
-                defaultSets: 5,
-                defaultReps: '5',
-                defaultDistanceUnit: 'mi | km',
-                baseNotes: 'Optional coaching cue',
-              },
-            ],
-          },
-        ],
-        schedule: [
-          {
-            date: getTodayIsoDate(),
-            items: [
-              {
-                slotRole: 'Primary',
-                presetUuid: 'pre-abc-double',
-                presetSlug: 'wkt_abc_double',
-                programUuid: 'prog-hybrid-kb-ruck',
-                coachNotes: 'Target 16 rounds EMOM @ 2x16kg',
-              },
-            ],
-          },
-        ],
-      },
-      currentDirectory: {
-        activeProgramUuid: meta.activeProgramUuid,
-        programs: programs.map((p) => ({
-          programUuid: p.programUuid,
-          slug: p.slug,
-          title: p.title,
-        })),
-        presets: presets.map((p) => ({
-          presetUuid: p.presetUuid,
-          slug: p.slug,
-          title: p.title,
-          workoutType: p.workoutType,
-        })),
-        exercises: globalExercises.map((e) => ({
-          exerciseUuid: e.exerciseUuid,
-          slug: e.slug,
-          exerciseName: e.exerciseName,
-          trackingType: e.trackingType,
-          defaultLoadType: e.defaultLoadType,
-        })),
-      },
+    if (reviewPeriod === '14d') {
+      return {
+        startDate: shiftIsoDate(todayIso, -13),
+        endDate: todayIso,
+        label: 'Last 14 Days',
+      };
+    }
+    if (reviewPeriod === '30d') {
+      return {
+        startDate: shiftIsoDate(todayIso, -29),
+        endDate: todayIso,
+        label: 'Last 30 Days',
+      };
+    }
+    if (reviewPeriod === 'program_block') {
+      if (activeProgram) {
+        try {
+          const savedRaw = window.localStorage.getItem(
+            `ironpulse_autofill_range_${activeProgram.programUuid}`
+          );
+          if (savedRaw) {
+            const saved = JSON.parse(savedRaw) as { start?: string; end?: string };
+            if (saved.start && saved.end) {
+              return {
+                startDate: saved.start,
+                endDate: saved.end > todayIso ? todayIso : saved.end,
+                label: `Current Program Block (${activeProgram.title})`,
+              };
+            }
+          }
+        } catch {
+          // ignore
+        }
+        const progDates = Object.keys(schedules)
+          .filter((d) =>
+            schedules[d]?.items.some((it) => it.programUuid === activeProgram.programUuid)
+          )
+          .sort();
+        if (progDates.length > 0) {
+          return {
+            startDate: progDates[0],
+            endDate: todayIso,
+            label: `Current Program Block (${activeProgram.title})`,
+          };
+        }
+      }
+      return {
+        startDate: shiftIsoDate(todayIso, -27),
+        endDate: todayIso,
+        label: 'Current Program Block',
+      };
+    }
+    const start = customStartDate <= customEndDate ? customStartDate : customEndDate;
+    const end = customStartDate <= customEndDate ? customEndDate : customStartDate;
+    return {
+      startDate: start,
+      endDate: end,
+      label: `Custom (${start} to ${end})`,
     };
+  }, [reviewPeriod, todayIso, activeProgram, schedules, customStartDate, customEndDate]);
 
-    navigator.clipboard?.writeText(JSON.stringify(schemaDirectory, null, 2));
-    showNotice('Copied AI Schema & Workout Directory to clipboard!');
+  const reviewStats = useMemo(() => {
+    const completedCount = logs.filter(
+      (l) =>
+        l.status === 'completed' &&
+        l.date >= reviewWindow.startDate &&
+        l.date <= reviewWindow.endDate
+    ).length;
+    const next7End = shiftIsoDate(todayIso, 6);
+    const upcomingCount = Object.keys(schedules)
+      .filter((d) => d >= todayIso && d <= next7End)
+      .reduce((acc, d) => acc + (schedules[d]?.items.length || 0), 0);
+    const contextCount = contextBlocks.filter(
+      (b) => b.endDate >= reviewWindow.startDate && b.startDate <= next7End
+    ).length;
+    return { completedCount, upcomingCount, contextCount };
+  }, [logs, schedules, contextBlocks, reviewWindow, todayIso]);
+
+  const handleCopyCoachReviewJson = async () => {
+    const result = buildCoachReviewExport({
+      startDate: reviewWindow.startDate,
+      endDate: reviewWindow.endDate,
+      periodLabel: reviewWindow.label,
+      logs,
+      schedules,
+      contextBlocks,
+      presets,
+      programs,
+      activeProgramUuid: meta.activeProgramUuid,
+      includeUpcoming7Days,
+      includeContextFlags,
+      includeSundayCheckInPrompt,
+    });
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(result.payload, null, 2));
+      showNotice(
+        `Copied Coach Review JSON (${result.completedCount} completed workout${
+          result.completedCount === 1 ? '' : 's'
+        }${includeUpcoming7Days ? `, ${result.upcomingCount} upcoming` : ''})`
+      );
+    } catch {
+      showNotice('Clipboard write blocked by browser.');
+    }
   };
 
-  const handleLoadSampleAiBlock = () => {
-    const sample: AIImportPayload = {
-      mode: 'update',
-      presets: [
+  // =========================================================================
+  // AI COACH & DATA — CARD B: APPLY COACH NOTES PATCH (NON-DESTRUCTIVE)
+  // =========================================================================
+  const [notesPatchText, setNotesPatchText] = useState<string>('');
+
+  const { patch: parsedNotesPatch, error: notesPatchError } = useMemo(
+    () => parseAiNotesPatch(notesPatchText),
+    [notesPatchText]
+  );
+
+  const notesPatchDiff = useMemo(() => {
+    if (!parsedNotesPatch) return null;
+    return buildAiNotesDiffPreview(parsedNotesPatch, { programs, presets, schedules });
+  }, [parsedNotesPatch, programs, presets, schedules]);
+
+  const notesScheduledSessionsCount = useMemo(() => {
+    if (!notesPatchDiff) return 0;
+    return new Set(notesPatchDiff.scheduleNoteDiffs.map((d) => d.scheduleItemUuid)).size;
+  }, [notesPatchDiff]);
+
+  const notesTotalUpdatesCount = notesPatchDiff
+    ? notesPatchDiff.scheduleNoteDiffs.length +
+      notesPatchDiff.programWeekDiffs.length +
+      notesPatchDiff.presetNoteDiffs.length +
+      notesPatchDiff.exerciseNoteDiffs.length
+    : 0;
+
+  const handleConfirmApplyNotesPatch = async () => {
+    if (!parsedNotesPatch) return;
+    setIsApplyingNotes(true);
+    const res = await applyAiNotesPatch(parsedNotesPatch, {
+      allowStructuralChanges: false,
+    });
+    setIsApplyingNotes(false);
+    setApplyNotesConfirmOpen(false);
+    if (res.ok) {
+      setNotesPatchText('');
+      const parts: string[] = [];
+      if (res.schedulesUpdated > 0) parts.push(`${res.schedulesUpdated} scheduled session(s)`);
+      if (res.weeksUpdated > 0) parts.push(`${res.weeksUpdated} week focus note(s)`);
+      if (res.presetsUpdated > 0) parts.push(`${res.presetsUpdated} workout note(s)`);
+      if (res.exercisesUpdated > 0) parts.push(`${res.exercisesUpdated} exercise cue(s)`);
+      showNotice(
+        parts.length > 0
+          ? `Applied notes patch: ${parts.join(', ')}`
+          : 'Notes patch checked — no differences to apply'
+      );
+    } else {
+      showNotice(res.error || 'Failed to apply notes patch');
+    }
+  };
+
+  // =========================================================================
+  // AI COACH & DATA — CARD C: IMPORT FULL PROGRAM & WEEKLY CYCLE
+  // =========================================================================
+  const [programImportText, setProgramImportText] = useState<string>('');
+  const [programImportMode, setProgramImportMode] = useState<'create_new' | 'replace_active'>(
+    'create_new'
+  );
+
+  const { parsed: parsedProgramImport, error: programImportError } = useMemo(
+    () => parseAiProgramCycleImport(programImportText, presets),
+    [programImportText, presets]
+  );
+
+  const handleLoadSampleProgramJson = () => {
+    const firstId = presets[0]?.presetUuid || 'pre-abc-double';
+    const secondId = presets[1]?.presetUuid || firstId;
+    const sample = {
+      programName: 'AI 2-Week Hybrid Strength & Engine',
+      cycleWeeks: 2,
+      description: 'Two-week rotating progression generated by AI Coach',
+      weeks: [
         {
-          slug: 'wkt_dan_john_humane_burpee',
-          title: 'Humane Burpee Conditioning',
-          workoutType: 'Conditioning',
-          programIds: ['prog-hybrid-kb-ruck'],
-          tags: ['Kettlebell', 'Conditioning'],
-          defaultTimer: { mode: 'rest', restSec: 45 },
-          exercises: [
+          weekNumber: 1,
+          focusNote: 'Week 1: Establish crisp pacing at RIR 2',
+          days: [
             {
-              exerciseUuid: 'ex-kb-swing',
-              exerciseName: 'KB Swing',
-              category: 'Hinge / Conditioning',
-              trackingType: 'strength',
-              loadType: 'single_kg',
-              defaultWeight: 24,
-              defaultSets: 5,
-              defaultReps: '15',
-              baseNotes: '15 swings every round; ladder down goblet squats & pushups 5-4-3-2-1',
+              dayOfWeek: 1,
+              slots: [{ slotRole: 'Primary', workoutId: firstId, notes: 'Target steady tempo' }],
+            },
+            {
+              dayOfWeek: 3,
+              slots: [{ slotRole: 'Primary', workoutId: secondId, notes: 'Zone 2 nasal breathing' }],
+            },
+          ],
+        },
+        {
+          weekNumber: 2,
+          focusNote: 'Week 2: +5% volume progression',
+          days: [
+            {
+              dayOfWeek: 1,
+              slots: [{ slotRole: 'Primary', workoutId: firstId, notes: '+5% Build: add 1 set' }],
+            },
+            {
+              dayOfWeek: 3,
+              slots: [{ slotRole: 'Primary', workoutId: secondId, notes: '+5% Build: +5 mins' }],
             },
           ],
         },
       ],
-      schedule: [
-        {
-          date: shiftIsoDate(getTodayIsoDate(), 2),
-          items: [
-            {
-              slotRole: 'Primary',
-              presetSlug: 'wkt_dan_john_humane_burpee',
-              coachNotes: 'AI Scheduled: 5 ladders @ 24kg bell, nasal recovery breathing',
-            },
-            {
-              slotRole: 'Core',
-              presetUuid: 'pre-core-finisher',
-              coachNotes: 'Chained finisher: 3x40 paces Suitcase Carry',
-            },
-          ],
-        },
-      ],
+      autoFill: {
+        startDate: todayIso,
+        endDate: shiftIsoDate(todayIso, 13),
+      },
     };
-    setAiJsonText(JSON.stringify(sample, null, 2));
+    setProgramImportText(JSON.stringify(sample, null, 2));
   };
 
-  // =========================================================================
-  // 3. FIREBASE RUNTIME CONFIG & AUTH STATE
-  // =========================================================================
-  const [firebaseJsonInput, setFirebaseJsonInput] = useState<string>('');
-  const effectiveFbConfig = getEffectiveFirebaseConfig();
+  const handleImportProgramCycle = () => {
+    if (!parsedProgramImport) return;
+    const res = importProgramCycle(parsedProgramImport, programImportMode);
+    setProgramImportText('');
+    const autoFillMsg = res.autoFillResult
+      ? ` & auto-filled ${res.autoFillResult.daysModified} day(s)`
+      : '';
+    showNotice(
+      `Imported "${res.programTitle}" (${res.cycleWeeks}-week cycle${
+        res.presetsCount > 0 ? `, ${res.presetsCount} preset(s)` : ''
+      }${autoFillMsg}). Safety snapshot saved.`
+    );
+  };
 
   return (
     <div className="space-y-4 pb-24">
       {notice && (
-        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-2xl bg-slate-900 dark:bg-orange-500 text-white text-xs font-bold shadow-lg flex items-center gap-2">
-          <CheckCircle2 className="w-4 h-4 text-orange-400 dark:text-white" />
-          {notice}
+        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-[1200] px-4 py-2 rounded-2xl bg-slate-900 dark:bg-orange-500 text-white text-xs font-bold shadow-lg flex items-center gap-2 max-w-[92vw]">
+          <CheckCircle2 className="w-4 h-4 text-orange-400 dark:text-white shrink-0" />
+          <span className="truncate">{notice}</span>
         </div>
       )}
 
-      {/* Sub-navigation Pills */}
-      <div className="bg-white dark:bg-slate-900 rounded-3xl p-3 border border-slate-200/80 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2">
-        <div className="flex flex-wrap gap-1.5">
-          {(
-            [
-              {
-                id: 'sheet_import',
-                label: 'Google Sheet Importer',
-                tooltip: 'Import Preset Workouts or Past Logs from Google Sheets',
-                icon: FileSpreadsheet,
-              },
-              {
-                id: 'ai_drawer',
-                label: 'AI Assistant Import',
-                tooltip: 'Paste JSON from Gemini to add workouts & schedule dates',
-                icon: Code2,
-              },
-              {
-                id: 'cloud_prefs',
-                label: 'Cloud Sync & Preferences',
-                tooltip: 'Google Sign-In, theme & app preferences',
-                icon: Cloud,
-              },
-            ] as Array<{
-              id: 'sheet_import' | 'ai_drawer' | 'cloud_prefs';
-              label: string;
-              tooltip: string;
-              icon: React.ComponentType<{ className?: string }>;
-            }>
-          ).map((tab) => {
-            const Icon = tab.icon;
-            const active = activeSection === tab.id;
-            return (
-              <button
-                key={tab.id}
-                type="button"
-                data-tooltip={tab.tooltip}
-                title={tab.tooltip}
-                onClick={() => setActiveSection(tab.id)}
-                className={`tactile-pill px-3.5 py-2 rounded-2xl text-xs font-bold inline-flex items-center gap-1.5 transition-all ${
-                  active
-                    ? 'bg-orange-500 text-white shadow-sm'
-                    : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
-                }`}
-              >
-                <Icon className="w-4 h-4" />
-                {tab.label}
-              </button>
-            );
-          })}
-        </div>
-
+      {/* Clean 2-Tab Segmented Switcher */}
+      <div className="bg-white dark:bg-slate-900 rounded-3xl p-1.5 border border-slate-200/80 dark:border-slate-800 grid grid-cols-2 gap-1.5">
         <button
           type="button"
-          data-tooltip="Go to the Workout Library tab"
-          title="Go to the Workout Library tab"
-          onClick={() => setActiveTab('library')}
-          className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-xs font-bold text-orange-600 dark:text-orange-400 inline-flex items-center gap-1.5 hover:bg-orange-500 hover:text-white transition-colors"
+          onClick={() => setActiveSettingsTab('sync_prefs')}
+          className={`tactile-pill py-2.5 px-3 rounded-2xl text-xs font-bold inline-flex items-center justify-center gap-1.5 transition-all ${
+            activeSettingsTab === 'sync_prefs'
+              ? 'bg-orange-500 text-white shadow-sm'
+              : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+          }`}
         >
-          <BookOpen className="w-3.5 h-3.5" />
-          Open Workout Library
+          <Cloud className="w-4 h-4 shrink-0" />
+          <span>Sync &amp; Preferences</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveSettingsTab('ai_coach')}
+          className={`tactile-pill py-2.5 px-3 rounded-2xl text-xs font-bold inline-flex items-center justify-center gap-1.5 transition-all ${
+            activeSettingsTab === 'ai_coach'
+              ? 'bg-orange-500 text-white shadow-sm'
+              : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+          }`}
+        >
+          <Sparkles className="w-4 h-4 shrink-0" />
+          <span>AI Coach &amp; Data</span>
         </button>
       </div>
 
       {/* =====================================================================
-          SECTION 1: GOOGLE SHEET IMPORTER (PRESETS & HISTORICAL LOGS)
+          TAB 1: SYNC & PREFERENCES (DEFAULT)
          ===================================================================== */}
-      {activeSection === 'sheet_import' && (
-        <div className="bg-white dark:bg-slate-900 rounded-3xl p-5 border border-slate-200/80 dark:border-slate-800 space-y-5">
-          {/* Switcher between Preset Import and Historical Log Import */}
-          <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
-            <div className="inline-flex rounded-2xl bg-slate-100 dark:bg-slate-800 p-1">
-              <button
-                type="button"
-                onClick={() => setSheetImportMode('presets')}
-                data-tooltip="Import Workout Templates / Presets from a Google Sheet CSV"
-                title="Import Workout Templates / Presets from a Google Sheet CSV"
-                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-                  sheetImportMode === 'presets'
-                    ? 'bg-orange-500 text-white shadow-2xs'
-                    : 'text-slate-600 dark:text-slate-400'
-                }`}
-              >
-                1. Import Preset Workouts
-              </button>
-              <button
-                type="button"
-                onClick={() => setSheetImportMode('logs')}
-                data-tooltip="Import Past Completed Workout Logs from a Google Sheet CSV"
-                title="Import Past Completed Workout Logs from a Google Sheet CSV"
-                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-                  sheetImportMode === 'logs'
-                    ? 'bg-orange-500 text-white shadow-2xs'
-                    : 'text-slate-600 dark:text-slate-400'
-                }`}
-              >
-                2. Import Past Workout Logs
-              </button>
-            </div>
-
-            {sheetImportMode === 'presets' ? (
-              <button
-                type="button"
-                data-tooltip="Fill with sample Preset Workouts CSV to test"
-                title="Fill with sample Preset Workouts CSV to test"
-                onClick={() => {
-                  const sample = generateSamplePresetSheetCsv();
-                  setPresetSheetCsv(sample);
-                  handleParsePresetSheet(sample);
-                }}
-                className="px-3.5 py-2 rounded-2xl bg-orange-500/10 text-orange-600 dark:text-orange-400 text-xs font-bold hover:bg-orange-500 hover:text-white transition-colors"
-              >
-                Load Sample Preset CSV
-              </button>
-            ) : (
-              <button
-                type="button"
-                data-tooltip="Fill with sample Historical Log CSV to test"
-                title="Fill with sample Historical Log CSV to test"
-                onClick={() => {
-                  const sample = generateSampleLegacyCsv();
-                  setCsvInputText(sample);
-                  handleParseCsv(sample);
-                }}
-                className="px-3.5 py-2 rounded-2xl bg-orange-500/10 text-orange-600 dark:text-orange-400 text-xs font-bold hover:bg-orange-500 hover:text-white transition-colors"
-              >
-                Load Sample Log CSV
-              </button>
-            )}
-          </div>
-
-          {/* SUB-MODE A: IMPORT PRESET WORKOUTS FROM GOOGLE SHEET */}
-          {sheetImportMode === 'presets' ? (
-            <div className="space-y-4">
-              <div>
-                <h3 className="font-display font-bold text-base text-slate-900 dark:text-slate-100">
-                  Import Preset Workouts from Google Sheet (CSV)
-                </h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                  Paste rows from your Google Sheet Preset tab (`WorkoutID, Workout Name, Workout
-                  Type, Exercise Name, Category, Sets, Reps, Default Weight, Notes, Tags` — or
-                  without `WorkoutID`) to automatically preserve legacy IDs like `ID-0037` for
-                  historical log matching.
-                </p>
+      {activeSettingsTab === 'sync_prefs' && (
+        <div className="space-y-4">
+          {/* Top Row: Cloud Sync & Google Tasks Sync */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Google Sign-In & Cloud Sync */}
+            <div className="bg-white dark:bg-slate-900 rounded-3xl p-5 border border-slate-200/80 dark:border-slate-800 space-y-4">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <Cloud className="w-5 h-5 text-orange-500 shrink-0" />
+                  <h3 className="font-display font-bold text-base truncate">
+                    Google Sign-In &amp; Cloud Sync
+                  </h3>
+                </div>
+                <span
+                  className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase shrink-0 ${
+                    !isOnline
+                      ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+                      : syncStatus === 'synced'
+                      ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                      : syncStatus === 'syncing'
+                      ? 'bg-orange-500/15 text-orange-500'
+                      : 'bg-slate-200 dark:bg-slate-800 text-slate-500'
+                  }`}
+                >
+                  {!isOnline
+                    ? `Offline${offlineSyncQueue.pendingCount > 0 ? ` (${offlineSyncQueue.pendingCount})` : ''}`
+                    : syncStatus === 'local'
+                    ? 'Saved on Device'
+                    : syncStatus}
+                </span>
               </div>
 
-              <textarea
-                rows={6}
-                value={presetSheetCsv}
-                onChange={(e) => {
-                  setPresetSheetCsv(e.target.value);
-                  handleParsePresetSheet(e.target.value);
-                }}
-                placeholder="WorkoutID, Workout Name, Workout Type, Exercise Name, Category, Sets, Reps, Default Weight, Notes, Tags..."
-                className="w-full p-3.5 rounded-2xl font-mono text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 focus:outline-none focus:border-orange-500"
-              />
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Sign in with Google to sync your workouts, schedule, and logs across your phone and
+                laptop, with full offline gym support.
+              </p>
 
-              {parsedSheetPresets.length > 0 && (
-                <div className="space-y-3 pt-2 border-t border-slate-100 dark:border-slate-800">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="text-xs font-bold uppercase tracking-wider text-orange-500">
-                      Preview: {parsedSheetPresets.length} Workout Preset(s) Ready to Import
-                    </span>
+              {authUser ? (
+                <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-xs font-bold truncate">
+                        {authUser.displayName || 'Signed In'}
+                      </div>
+                      <div className="text-[11px] text-slate-500 truncate">{authUser.email}</div>
+                    </div>
                     <button
                       type="button"
-                      onClick={handleCommitPresetSheetImport}
-                      className="px-5 py-2 rounded-2xl bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-md"
+                      onClick={() => signOutFirebase()}
+                      className="px-3 py-1.5 rounded-xl bg-slate-200 dark:bg-slate-700 text-xs font-semibold inline-flex items-center gap-1 shrink-0"
                     >
-                      <Upload className="w-4 h-4" />
-                      Save {parsedSheetPresets.length} Preset(s) to Library
+                      <LogOut className="w-3.5 h-3.5" /> Sign Out
                     </button>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {parsedSheetPresets.map((pre, idx) => (
-                      <div
-                        key={idx}
-                        className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-2"
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        await syncWithFirestore();
+                        showNotice('Synced workouts & schedule with Firestore');
+                      }}
+                      className="px-3 py-2 rounded-xl bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold inline-flex items-center gap-1.5 transition-colors"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" /> Sync Now
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const res = await pushLocalToCloud();
+                        if (res.ok) {
+                          showNotice(
+                            `Force Sync complete — pushed ${res.pushedLogs} workout(s) & drafts to cloud`
+                          );
+                        } else {
+                          showNotice(res.error || 'Force Sync failed');
+                        }
+                      }}
+                      className="px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 dark:bg-slate-700 dark:hover:bg-slate-600 text-white text-xs font-bold inline-flex items-center gap-1.5 transition-colors"
+                    >
+                      <Upload className="w-3.5 h-3.5" /> Force Sync / Push Local Data
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        await signInWithGoogle();
+                        showNotice('Signed in with Google!');
+                      } catch (e: unknown) {
+                        showNotice(
+                          e instanceof Error ? e.message : 'Configure Firebase project below first'
+                        );
+                      }
+                    }}
+                    className="w-full py-2.5 px-4 rounded-2xl bg-orange-500 hover:bg-orange-600 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-sm"
+                  >
+                    <LogIn className="w-4 h-4" />
+                    Sign In with Google
+                  </button>
+
+                  <div className="pt-2 border-t border-slate-100 dark:border-slate-800 space-y-2">
+                    <label className="block text-[11px] font-semibold text-slate-500">
+                      Firebase Project Config (Optional if not set in `.env`)
+                    </label>
+                    <textarea
+                      rows={3}
+                      value={firebaseJsonInput}
+                      onChange={(e) => setFirebaseJsonInput(e.target.value)}
+                      placeholder='Paste firebaseConfig object ({ "apiKey": "...", "projectId": "..." })...'
+                      className="w-full p-2.5 rounded-xl font-mono text-[11px] bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700"
+                    />
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] text-slate-400">
+                        {effectiveFbConfig
+                          ? `Project: ${effectiveFbConfig.projectId}`
+                          : 'Running in Local Offline Mode'}
+                      </span>
+                      <div className="flex gap-1.5">
+                        {effectiveFbConfig && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              clearRuntimeFirebaseConfig();
+                              window.location.reload();
+                            }}
+                            className="px-2.5 py-1 rounded-lg text-[11px] bg-slate-100 dark:bg-slate-800"
+                          >
+                            Disconnect
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (saveRuntimeFirebaseConfig(firebaseJsonInput)) {
+                              showNotice('Saved Firebase config — reloading...');
+                              setTimeout(() => window.location.reload(), 600);
+                            } else {
+                              showNotice('Invalid Firebase config JSON');
+                            }
+                          }}
+                          className="px-3 py-1 rounded-lg text-xs font-bold bg-slate-900 dark:bg-orange-500 text-white"
+                        >
+                          Save Config
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {lastSyncError && (
+                <div className="text-xs text-rose-500 bg-rose-500/10 p-2.5 rounded-xl">
+                  {lastSyncError}
+                </div>
+              )}
+            </div>
+
+            {/* Google Tasks Sync Card */}
+            <div className="bg-white dark:bg-slate-900 rounded-3xl p-5 border border-slate-200/80 dark:border-slate-800 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 className="font-display font-bold text-base">Google Tasks Sync</h3>
+                  <p className="text-xs text-slate-500">
+                    Two-way sync for today &amp; upcoming 6 days with stale-task cleanup.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={isSyncingTasks}
+                  onClick={async () => {
+                    setIsSyncingTasks(true);
+                    const res = await runGoogleTasksSync(true);
+                    setIsSyncingTasks(false);
+                    if (res.ok) {
+                      showNotice(
+                        `Google Tasks Master Sync complete (${res.pushed} pushed, ${res.pulled} completed)`
+                      );
+                    } else if (res.error) {
+                      showNotice(`Google Tasks sync: ${res.error}`);
+                    }
+                  }}
+                  className="px-3.5 py-2 rounded-2xl bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white text-xs font-bold inline-flex items-center gap-1.5 transition-colors"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncingTasks ? 'animate-spin' : ''}`} />
+                  {isSyncingTasks ? 'Syncing...' : 'Master Sync'}
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
+                <div className="p-3 rounded-2xl bg-[var(--bg-inset)] border border-[var(--border-subtle)] space-y-0.5">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">
+                    Connection / Token Status
+                  </div>
+                  <div
+                    className="font-bold"
+                    style={{
+                      color: getCachedGoogleTasksToken()
+                        ? 'var(--accent-sage)'
+                        : 'var(--accent-orange)',
+                    }}
+                  >
+                    {getCachedGoogleTasksToken()
+                      ? 'Active (this session)'
+                      : 'Needs authorization on next sync'}
+                  </div>
+                </div>
+
+                <div className="p-3 rounded-2xl bg-[var(--bg-inset)] border border-[var(--border-subtle)] space-y-0.5 min-w-0">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">
+                    Target List ID
+                  </div>
+                  <div className="font-mono text-[11px] text-[var(--text-secondary)] truncate">
+                    {GOOGLE_TASKS_TARGET_LIST_ID}
+                  </div>
+                </div>
+              </div>
+
+              <div className="text-xs text-[var(--text-secondary)]">
+                {lastTasksSync ? (
+                  <span
+                    style={{
+                      color:
+                        lastTasksSync.status === 'success'
+                          ? 'var(--accent-sage)'
+                          : 'var(--accent-rust)',
+                    }}
+                    className="font-semibold"
+                  >
+                    Last sync:{' '}
+                    {new Date(lastTasksSync.timestamp).toLocaleTimeString([], {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}{' '}
+                    · {lastTasksSync.status === 'success' ? 'Success' : 'Failed'}
+                    {lastTasksSync.message ? ` (${lastTasksSync.message})` : ''}
+                  </span>
+                ) : (
+                  <span className="text-[var(--text-muted)]">Not synced yet this session.</span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Preferences Card */}
+          <div className="bg-white dark:bg-slate-900 rounded-3xl p-5 border border-slate-200/80 dark:border-slate-800 space-y-4">
+            <h3 className="font-display font-bold text-base">Preferences</h3>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Appearance */}
+              <div className="space-y-1.5 md:col-span-2">
+                <label className="block text-xs font-semibold text-slate-500">Appearance</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {(
+                    [
+                      { id: 'light', label: 'Light Sand', icon: Sun },
+                      { id: 'dark', label: 'Dark Charcoal', icon: Moon },
+                      { id: 'system', label: 'System', icon: Monitor },
+                    ] as Array<{
+                      id: ThemeMode;
+                      label: string;
+                      icon: React.ComponentType<{ className?: string }>;
+                    }>
+                  ).map((t) => {
+                    const Icon = t.icon;
+                    return (
+                      <button
+                        key={t.id}
+                        type="button"
+                        onClick={() => setTheme(t.id)}
+                        className={`py-2.5 px-3 rounded-2xl text-xs font-bold flex items-center justify-center gap-1.5 border transition-all ${
+                          meta.theme === t.id
+                            ? 'bg-orange-500 text-white border-orange-500 shadow-sm'
+                            : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700'
+                        }`}
                       >
-                        <div className="flex flex-wrap items-center justify-between gap-1.5">
-                          <div className="flex items-center gap-1.5 min-w-0">
-                            {pre.legacyWorkoutId && (
-                              <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 shrink-0">
-                                {pre.legacyWorkoutId}
-                              </span>
-                            )}
-                            <span className="font-display font-bold text-sm truncate">
-                              {pre.title}
-                            </span>
-                          </div>
-                          <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-orange-500/15 text-orange-600 dark:text-orange-400 shrink-0">
-                            {pre.workoutType}
+                        <Icon className="w-4 h-4 shrink-0" />
+                        <span className="truncate">{t.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Default Cardio Distance Unit */}
+              <div className="space-y-1.5">
+                <label className="block text-xs font-semibold text-slate-500">
+                  Default Cardio Distance Unit
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  {(['mi', 'km'] as DistanceUnit[]).map((u) => (
+                    <button
+                      key={u}
+                      type="button"
+                      onClick={() => setDefaultDistanceUnit(u)}
+                      className={`py-2 px-3 rounded-2xl text-xs font-bold uppercase border ${
+                        (meta.defaultDistanceUnit || 'mi') === u
+                          ? 'bg-orange-500 text-white border-orange-500'
+                          : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700'
+                      }`}
+                    >
+                      {u === 'mi' ? 'Miles (mi)' : 'Kilometers (km)'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Default Log View */}
+              <div className="space-y-1.5">
+                <label className="block text-xs font-semibold text-slate-500">
+                  Default Log View
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  {(['compact', 'detailed'] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => setLogDensityMode(mode)}
+                      className={`py-2 px-3 rounded-2xl text-xs font-bold capitalize border ${
+                        logDensityMode === mode
+                          ? 'bg-orange-500 text-white border-orange-500'
+                          : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700'
+                      }`}
+                    >
+                      {mode}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 pt-1">
+              <label className="flex items-center justify-between gap-2 p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 cursor-pointer">
+                <div>
+                  <div className="text-xs font-bold">Keep Screen Awake</div>
+                  <div className="text-[11px] text-slate-500">Prevent sleep while logging</div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={meta.keepScreenAwake !== false}
+                  onChange={(e) => setKeepScreenAwake(e.target.checked)}
+                  className="rounded accent-orange-500 w-4 h-4 shrink-0"
+                />
+              </label>
+
+              <label className="flex items-center justify-between gap-2 p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 cursor-pointer">
+                <div>
+                  <div className="text-xs font-bold">Timer Beeps</div>
+                  <div className="text-[11px] text-slate-500">3-2-1 &amp; finish chimes</div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={meta.timerSoundEnabled !== false}
+                  onChange={(e) => setTimerSoundEnabled(e.target.checked)}
+                  className="rounded accent-orange-500 w-4 h-4 shrink-0"
+                />
+              </label>
+
+              <label className="flex items-center justify-between gap-2 p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 cursor-pointer">
+                <div>
+                  <div className="text-xs font-bold">Auto-Start Rest</div>
+                  <div className="text-[11px] text-slate-500">Start rest on set log</div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={meta.defaultAutoStartRestTimer}
+                  onChange={(e) => setDefaultAutoStartRestTimer(e.target.checked)}
+                  className="rounded accent-orange-500 w-4 h-4 shrink-0"
+                />
+              </label>
+            </div>
+          </div>
+
+          {/* Collapsible Accordion 1: Safety Snapshots & JSON Backup */}
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/80 dark:border-slate-800 overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setBackupAccordionOpen((prev) => !prev)}
+              aria-expanded={backupAccordionOpen}
+              className="w-full px-5 py-4 flex items-center justify-between gap-2 text-left hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors"
+            >
+              <div className="flex items-center gap-2.5 min-w-0">
+                <ShieldCheck className="w-4 h-4 text-orange-500 shrink-0" />
+                <div className="min-w-0">
+                  <div className="font-display font-bold text-sm truncate">
+                    Safety Snapshots &amp; Full JSON Backup
+                  </div>
+                  <div className="text-[11px] text-slate-500 truncate">
+                    {safetySnapshotMeta
+                      ? `Auto-snapshot saved ${formatSnapshotTimestamp(safetySnapshotMeta.timestamp)}`
+                      : 'Automatic pre-reset snapshots, export & restore JSON backups'}
+                  </div>
+                </div>
+              </div>
+              <ChevronDown
+                className={`w-4 h-4 text-slate-400 shrink-0 transition-transform duration-200 ${
+                  backupAccordionOpen ? 'rotate-180' : ''
+                }`}
+              />
+            </button>
+
+            {backupAccordionOpen && (
+              <div className="px-5 pb-5 pt-2 border-t border-slate-100 dark:border-slate-800 space-y-4">
+                {/* Automatic Pre-Reset Safety Snapshot Block */}
+                <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/80 space-y-2.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <History className="w-4 h-4 text-orange-500 shrink-0" />
+                      <span className="text-xs font-bold">Automatic Pre-Reset Safety Snapshot</span>
+                    </div>
+                    {safetySnapshotMeta && (
+                      <button
+                        type="button"
+                        onClick={() => setRestoreSnapshotConfirmOpen(true)}
+                        className="px-3 py-1.5 rounded-xl bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-sm transition-colors"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        Restore Safety Snapshot
+                      </button>
+                    )}
+                  </div>
+
+                  {safetySnapshotMeta ? (
+                    <div className="text-xs text-slate-600 dark:text-slate-300 space-y-1">
+                      <div>
+                        Saved{' '}
+                        <strong>{formatSnapshotTimestamp(safetySnapshotMeta.timestamp)}</strong>{' '}
+                        before <span className="font-semibold">{safetySnapshotMeta.reason}</span>.
+                      </div>
+                      <div className="text-[11px] text-slate-500">
+                        Contains {safetySnapshotMeta.scheduleDaysCount} scheduled day(s),{' '}
+                        {safetySnapshotMeta.logsCount} workout log(s),{' '}
+                        {safetySnapshotMeta.programsCount} program(s), and{' '}
+                        {safetySnapshotMeta.contextCount} context flag(s).
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-slate-500">
+                      No snapshot recorded yet. A rolling snapshot (`wt_safety_snapshot`) is saved
+                      automatically right before Reset to Program Plan, Auto-Fill overwrite, Delete
+                      Program, or Program Import.
+                    </p>
+                  )}
+                </div>
+
+                {/* Full JSON Backup Export / Import / Demo Seed */}
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const backup = {
+                        exportedAt: new Date().toISOString(),
+                        meta,
+                        exercises: globalExercises,
+                        presets,
+                        programs,
+                        schedules,
+                        logs,
+                        contextBlocks,
+                      };
+                      const blob = new Blob([JSON.stringify(backup, null, 2)], {
+                        type: 'application/json',
+                      });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = `ironpulse-backup-${todayIso}.json`;
+                      a.click();
+                      URL.revokeObjectURL(url);
+                      showNotice('Downloaded full JSON backup');
+                    }}
+                    className="px-3.5 py-2 rounded-2xl bg-slate-100 dark:bg-slate-800 text-xs font-bold inline-flex items-center gap-1.5 hover:text-orange-500 transition-colors"
+                  >
+                    <Download className="w-4 h-4 text-orange-500" />
+                    Export Backup JSON
+                  </button>
+
+                  <label className="px-3.5 py-2 rounded-2xl bg-slate-100 dark:bg-slate-800 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer hover:text-orange-500 transition-colors">
+                    <Upload className="w-4 h-4 text-orange-500" />
+                    Import Backup JSON
+                    <input
+                      type="file"
+                      accept="application/json,.json"
+                      className="sr-only"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        e.target.value = '';
+                        if (!file) return;
+                        try {
+                          const raw = await file.text();
+                          const parsed = JSON.parse(raw) as {
+                            contextBlocks?: typeof contextBlocks;
+                            presets?: typeof presets;
+                          };
+                          const importedParts: string[] = [];
+                          if (
+                            Array.isArray(parsed.contextBlocks) &&
+                            parsed.contextBlocks.length > 0
+                          ) {
+                            importContextBlocks(parsed.contextBlocks);
+                            importedParts.push(`${parsed.contextBlocks.length} context flag(s)`);
+                          }
+                          if (Array.isArray(parsed.presets) && parsed.presets.length > 0) {
+                            for (const p of parsed.presets) {
+                              if (p?.presetUuid && p?.title) upsertPreset(p);
+                            }
+                            importedParts.push(`${parsed.presets.length} preset(s)`);
+                          }
+                          showNotice(
+                            importedParts.length > 0
+                              ? `Imported ${importedParts.join(' & ')} from backup`
+                              : 'Backup file contained no importable records'
+                          );
+                        } catch {
+                          showNotice('Failed to parse backup JSON file');
+                        }
+                      }}
+                    />
+                  </label>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      resetToDemoSeed();
+                      showNotice('Loaded sample workouts & history');
+                    }}
+                    className="px-3.5 py-2 rounded-2xl bg-rose-500/10 text-rose-600 dark:text-rose-400 text-xs font-bold ml-auto"
+                  >
+                    Load Sample Data
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Collapsible Accordion 2: Legacy Google Sheet CSV Importer */}
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200/80 dark:border-slate-800 overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setLegacyCsvAccordionOpen((prev) => !prev)}
+              aria-expanded={legacyCsvAccordionOpen}
+              className="w-full px-5 py-4 flex items-center justify-between gap-2 text-left hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors"
+            >
+              <div className="flex items-center gap-2.5 min-w-0">
+                <FileSpreadsheet className="w-4 h-4 text-orange-500 shrink-0" />
+                <div className="min-w-0">
+                  <div className="font-display font-bold text-sm truncate">
+                    Legacy Google Sheet CSV Importer
+                  </div>
+                  <div className="text-[11px] text-slate-500 truncate">
+                    Import preset templates or historical workout logs from spreadsheet CSV exports
+                  </div>
+                </div>
+              </div>
+              <ChevronDown
+                className={`w-4 h-4 text-slate-400 shrink-0 transition-transform duration-200 ${
+                  legacyCsvAccordionOpen ? 'rotate-180' : ''
+                }`}
+              />
+            </button>
+
+            {legacyCsvAccordionOpen && (
+              <div className="px-5 pb-5 pt-3 border-t border-slate-100 dark:border-slate-800 space-y-5">
+                <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
+                  <div className="inline-flex rounded-2xl bg-slate-100 dark:bg-slate-800 p-1">
+                    <button
+                      type="button"
+                      onClick={() => setSheetImportMode('presets')}
+                      className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                        sheetImportMode === 'presets'
+                          ? 'bg-orange-500 text-white shadow-2xs'
+                          : 'text-slate-600 dark:text-slate-400'
+                      }`}
+                    >
+                      1. Preset Workouts
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSheetImportMode('logs')}
+                      className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                        sheetImportMode === 'logs'
+                          ? 'bg-orange-500 text-white shadow-2xs'
+                          : 'text-slate-600 dark:text-slate-400'
+                      }`}
+                    >
+                      2. Historical Logs
+                    </button>
+                  </div>
+
+                  {sheetImportMode === 'presets' ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const sample = generateSamplePresetSheetCsv();
+                        setPresetSheetCsv(sample);
+                        handleParsePresetSheet(sample);
+                      }}
+                      className="px-3 py-1.5 rounded-xl bg-orange-500/10 text-orange-600 dark:text-orange-400 text-xs font-bold hover:bg-orange-500 hover:text-white transition-colors"
+                    >
+                      Load Sample Preset CSV
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const sample = generateSampleLegacyCsv();
+                        setCsvInputText(sample);
+                        handleParseCsv(sample);
+                      }}
+                      className="px-3 py-1.5 rounded-xl bg-orange-500/10 text-orange-600 dark:text-orange-400 text-xs font-bold hover:bg-orange-500 hover:text-white transition-colors"
+                    >
+                      Load Sample Log CSV
+                    </button>
+                  )}
+                </div>
+
+                {sheetImportMode === 'presets' ? (
+                  <div className="space-y-4">
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      Paste rows from your Google Sheet Preset tab (`WorkoutID, Workout Name,
+                      Workout Type, Exercise Name, Category, Sets, Reps, Default Weight, Notes,
+                      Tags`).
+                    </p>
+                    <textarea
+                      rows={5}
+                      value={presetSheetCsv}
+                      onChange={(e) => {
+                        setPresetSheetCsv(e.target.value);
+                        handleParsePresetSheet(e.target.value);
+                      }}
+                      placeholder="WorkoutID, Workout Name, Workout Type, Exercise Name, Category, Sets, Reps, Default Weight, Notes, Tags..."
+                      className="w-full p-3 rounded-2xl font-mono text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 focus:outline-none focus:border-orange-500"
+                    />
+
+                    {parsedSheetPresets.length > 0 && (
+                      <div className="space-y-3 pt-2 border-t border-slate-100 dark:border-slate-800">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="text-xs font-bold uppercase tracking-wider text-orange-500">
+                            Preview: {parsedSheetPresets.length} Workout Preset(s) Ready
                           </span>
+                          <button
+                            type="button"
+                            onClick={handleCommitPresetSheetImport}
+                            className="px-4 py-2 rounded-2xl bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-md"
+                          >
+                            <Upload className="w-4 h-4" />
+                            Save {parsedSheetPresets.length} Preset(s)
+                          </button>
                         </div>
-                        <div className="space-y-1">
-                          {pre.exercises.map((ex, i) => (
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          {parsedSheetPresets.map((pre, idx) => (
                             <div
-                              key={i}
-                              className="text-xs flex items-center justify-between text-slate-600 dark:text-slate-300"
+                              key={idx}
+                              className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-1.5"
                             >
-                              <span>
-                                {i + 1}. {ex.exerciseName}
-                              </span>
-                              <span className="font-mono text-[11px]">
-                                {ex.defaultSets}×{ex.defaultReps} @{' '}
-                                {formatLoadBadge(ex.loadType, ex.defaultWeight)}
-                              </span>
+                              <div className="flex items-center justify-between gap-1.5">
+                                <span className="font-display font-bold text-xs truncate">
+                                  {pre.title}
+                                </span>
+                                <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-orange-500/15 text-orange-600 dark:text-orange-400 shrink-0">
+                                  {pre.workoutType}
+                                </span>
+                              </div>
+                              <div className="space-y-0.5">
+                                {pre.exercises.map((ex, i) => (
+                                  <div
+                                    key={i}
+                                    className="text-[11px] flex items-center justify-between text-slate-600 dark:text-slate-300"
+                                  >
+                                    <span>
+                                      {i + 1}. {ex.exerciseName}
+                                    </span>
+                                    <span className="font-mono text-[10px]">
+                                      {ex.defaultSets}×{ex.defaultReps} @{' '}
+                                      {formatLoadBadge(ex.loadType, ex.defaultWeight)}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
                             </div>
                           ))}
                         </div>
                       </div>
-                    ))}
+                    )}
                   </div>
-                </div>
-              )}
-            </div>
-          ) : (
-            /* SUB-MODE B: IMPORT HISTORICAL LOGS FROM GOOGLE SHEET */
-            <div className="space-y-4">
+                ) : (
+                  <div className="space-y-4">
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      Paste exported Google Sheet log rows. Summary `"Total"` rows are ignored
+                      automatically.
+                    </p>
+                    <textarea
+                      rows={5}
+                      value={csvInputText}
+                      onChange={(e) => {
+                        setCsvInputText(e.target.value);
+                        handleParseCsv(e.target.value);
+                      }}
+                      placeholder="Paste exported Google Sheet log CSV rows here..."
+                      className="w-full p-3 rounded-2xl font-mono text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 focus:outline-none focus:border-orange-500"
+                    />
+
+                    {parsedLegacyRows.length > 0 && (
+                      <div className="space-y-4 pt-2 border-t border-slate-200 dark:border-slate-800">
+                        <h4 className="font-display font-bold text-sm">
+                          Match Workouts &amp; Exercises ({parsedLegacyRows.length} rows parsed)
+                        </h4>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800 space-y-2.5">
+                            <div className="text-xs font-bold uppercase tracking-wider text-orange-500">
+                              1. Match Sheet Workout Names
+                            </div>
+                            {Object.keys(workoutNameMap).map((wName) => (
+                              <div key={wName} className="space-y-1">
+                                <div className="text-xs font-semibold">"{wName}"</div>
+                                <select
+                                  value={workoutNameMap[wName]}
+                                  onChange={(e) =>
+                                    setWorkoutNameMap({
+                                      ...workoutNameMap,
+                                      [wName]: e.target.value,
+                                    })
+                                  }
+                                  className="w-full px-2.5 py-1.5 text-xs rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700"
+                                >
+                                  <option value={workoutNameMap[wName]}>
+                                    {presets.some((p) => p.presetUuid === workoutNameMap[wName])
+                                      ? `Link to Library: ${
+                                          presets.find(
+                                            (p) => p.presetUuid === workoutNameMap[wName]
+                                          )?.title
+                                        }`
+                                      : `Create New Workout ("${wName}")`}
+                                  </option>
+                                  {presets.map((p) => (
+                                    <option key={p.presetUuid} value={p.presetUuid}>
+                                      Link to: {p.title}
+                                      {p.legacyWorkoutId ? ` (${p.legacyWorkoutId})` : ''}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            ))}
+                          </div>
+
+                          <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800 space-y-2.5">
+                            <div className="text-xs font-bold uppercase tracking-wider text-orange-500">
+                              2. Match Sheet Exercise Names
+                            </div>
+                            {Object.keys(exerciseNameMap).map((eName) => (
+                              <div key={eName} className="space-y-1">
+                                <div className="text-xs font-semibold">"{eName}"</div>
+                                <select
+                                  value={exerciseNameMap[eName]}
+                                  onChange={(e) =>
+                                    setExerciseNameMap({
+                                      ...exerciseNameMap,
+                                      [eName]: e.target.value,
+                                    })
+                                  }
+                                  className="w-full px-2.5 py-1.5 text-xs rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700"
+                                >
+                                  <option value={exerciseNameMap[eName]}>
+                                    {globalExercises.some(
+                                      (g) => g.exerciseUuid === exerciseNameMap[eName]
+                                    )
+                                      ? `Link to: ${
+                                          globalExercises.find(
+                                            (g) => g.exerciseUuid === exerciseNameMap[eName]
+                                          )?.exerciseName
+                                        }`
+                                      : `Create New Exercise ("${eName}")`}
+                                  </option>
+                                  {globalExercises.map((ge) => (
+                                    <option key={ge.exerciseUuid} value={ge.exerciseUuid}>
+                                      Link to existing: {ge.exerciseName}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="flex justify-end">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const reconciled = buildLogsFromReconciledRows(
+                                parsedLegacyRows,
+                                workoutNameMap,
+                                exerciseNameMap,
+                                presets,
+                                globalExercises
+                              );
+                              commitReconciledLegacyImport(reconciled);
+                              setCsvInputText('');
+                              setParsedLegacyRows([]);
+                              showNotice(
+                                `Imported ${reconciled.newLogs.length} historical workout logs!`
+                              );
+                            }}
+                            className="px-5 py-2.5 rounded-2xl bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-md"
+                          >
+                            <Database className="w-4 h-4" />
+                            Import Historical Logs
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* =====================================================================
+          TAB 2: AI COACH & DATA (3 PURPOSE-BUILT CARDS)
+         ===================================================================== */}
+      {activeSettingsTab === 'ai_coach' && (
+        <div className="space-y-4">
+          {/* CARD A: Export Training Data for AI Coach Review */}
+          <section className="bg-white dark:bg-slate-900 rounded-3xl p-5 border border-slate-200/80 dark:border-slate-800 space-y-4">
+            <div className="flex items-start justify-between gap-3">
               <div>
-                <h3 className="font-display font-bold text-base text-slate-900 dark:text-slate-100">
-                  Import Past Workout Logs from Google Sheet (CSV)
-                </h3>
+                <div className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-orange-500 mb-1">
+                  <Sparkles className="w-3.5 h-3.5" />
+                  Card A · Weekly Review Export
+                </div>
+                <h2 className="font-display font-bold text-base sm:text-lg">
+                  Export Training Data for AI Coach Review
+                </h2>
                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                  Paste your exported Google Sheet log rows. Summary `"Total"` rows are
-                  automatically ignored, and you can match renamed workouts to your current
-                  Library before saving.
+                  Copies completed workouts (sets, reps, weight, RIR, duration, notes, and total
+                  volume) for your chosen window in clean coaching JSON.
                 </p>
               </div>
+            </div>
 
-              <textarea
-                rows={6}
-                value={csvInputText}
-                onChange={(e) => {
-                  setCsvInputText(e.target.value);
-                  handleParseCsv(e.target.value);
-                }}
-                placeholder="Paste exported Google Sheet log CSV rows here..."
-                className="w-full p-3.5 rounded-2xl font-mono text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 focus:outline-none focus:border-orange-500"
-              />
+            {/* Period Selector */}
+            <div className="space-y-2">
+              <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                Review Period
+              </label>
+              <div className="flex flex-wrap gap-1.5">
+                {(
+                  [
+                    { id: '7d', label: 'Last 7 Days' },
+                    { id: '14d', label: 'Last 14 Days' },
+                    { id: '30d', label: 'Last 30 Days' },
+                    { id: 'program_block', label: 'Current Program Block' },
+                    { id: 'custom', label: 'Custom Dates' },
+                  ] as Array<{ id: CoachReviewPeriod; label: string }>
+                ).map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => setReviewPeriod(opt.id)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${
+                      reviewPeriod === opt.id
+                        ? 'bg-orange-500 text-white border-orange-500 shadow-xs'
+                        : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-orange-400'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
 
-              {parsedLegacyRows.length > 0 && (
-                <div className="space-y-4 pt-2 border-t border-slate-200 dark:border-slate-800">
-                  <div className="flex items-center justify-between">
-                    <h4 className="font-display font-bold text-sm text-slate-900 dark:text-slate-100">
-                      Match Workouts & Exercises ({parsedLegacyRows.length} rows parsed)
-                    </h4>
+              {reviewPeriod === 'custom' && (
+                <div className="grid grid-cols-2 gap-2.5 pt-1">
+                  <div className="space-y-1">
+                    <label className="block text-[11px] font-semibold text-slate-500">
+                      Start Date
+                    </label>
+                    <input
+                      type="date"
+                      value={customStartDate}
+                      onChange={(e) => setCustomStartDate(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700"
+                    />
                   </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {/* Workout Name Matching */}
-                    <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800 space-y-2.5">
-                      <div className="text-xs font-bold uppercase tracking-wider text-orange-500">
-                        1. Match Sheet Workout Names
-                      </div>
-                      {Object.keys(workoutNameMap).map((wName) => {
-                        const rowIds = Array.from(
-                          new Set(
-                            parsedLegacyRows
-                              .filter((r) => r.workoutName === wName)
-                              .map((r) => r.legacyId)
-                          )
-                        );
-                        return (
-                          <div key={wName} className="space-y-1">
-                            <div className="flex flex-wrap items-center gap-1.5 text-xs font-semibold text-slate-700 dark:text-slate-200">
-                              <span>"{wName}"</span>
-                              {rowIds.map((rid) => (
-                                <span
-                                  key={rid}
-                                  className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300"
-                                >
-                                  {rid}
-                                </span>
-                              ))}
-                            </div>
-                            <select
-                              value={workoutNameMap[wName]}
-                              onChange={(e) =>
-                                setWorkoutNameMap({ ...workoutNameMap, [wName]: e.target.value })
-                              }
-                              className="w-full px-2.5 py-1.5 text-xs rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700"
-                            >
-                              <option value={workoutNameMap[wName]}>
-                                {presets.some((p) => p.presetUuid === workoutNameMap[wName])
-                                  ? `Link to Library: ${
-                                      presets.find((p) => p.presetUuid === workoutNameMap[wName])
-                                        ?.title
-                                    }`
-                                  : `Create New Workout in Library ("${wName}")`}
-                              </option>
-                              {presets.map((p) => (
-                                <option key={p.presetUuid} value={p.presetUuid}>
-                                  Link to: {p.title}
-                                  {p.legacyWorkoutId ? ` (${p.legacyWorkoutId})` : ''}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                        );
-                      })}
-                    </div>
-
-                    {/* Exercise Name Matching */}
-                    <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800 space-y-2.5">
-                      <div className="text-xs font-bold uppercase tracking-wider text-orange-500">
-                        2. Match Sheet Exercise Names
-                      </div>
-                      {Object.keys(exerciseNameMap).map((eName) => (
-                        <div key={eName} className="space-y-1">
-                          <div className="text-xs font-semibold text-slate-700 dark:text-slate-200">
-                            "{eName}"
-                          </div>
-                          <select
-                            value={exerciseNameMap[eName]}
-                            onChange={(e) =>
-                              setExerciseNameMap({
-                                ...exerciseNameMap,
-                                [eName]: e.target.value,
-                              })
-                            }
-                            className="w-full px-2.5 py-1.5 text-xs rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700"
-                          >
-                            <option value={exerciseNameMap[eName]}>
-                              {globalExercises.some(
-                                (g) => g.exerciseUuid === exerciseNameMap[eName]
-                              )
-                                ? `Link to: ${
-                                    globalExercises.find(
-                                      (g) => g.exerciseUuid === exerciseNameMap[eName]
-                                    )?.exerciseName
-                                  }`
-                                : `Create New Exercise ("${eName}")`}
-                            </option>
-                            {globalExercises.map((ge) => (
-                              <option key={ge.exerciseUuid} value={ge.exerciseUuid}>
-                                Link to existing: {ge.exerciseName}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="flex justify-end">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const reconciled = buildLogsFromReconciledRows(
-                          parsedLegacyRows,
-                          workoutNameMap,
-                          exerciseNameMap,
-                          presets,
-                          globalExercises
-                        );
-                        commitReconciledLegacyImport(reconciled);
-                        setCsvInputText('');
-                        setParsedLegacyRows([]);
-                        showNotice(
-                          `Imported ${reconciled.newLogs.length} historical workout logs!`
-                        );
-                      }}
-                      className="px-5 py-2.5 rounded-2xl bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-md"
-                    >
-                      <Database className="w-4 h-4" />
-                      Import Historical Logs
-                    </button>
+                  <div className="space-y-1">
+                    <label className="block text-[11px] font-semibold text-slate-500">
+                      End Date
+                    </label>
+                    <input
+                      type="date"
+                      value={customEndDate}
+                      onChange={(e) => setCustomEndDate(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700"
+                    />
                   </div>
                 </div>
               )}
             </div>
-          )}
-        </div>
-      )}
 
-      {/* =====================================================================
-          SECTION 2: AI ASSISTANT IMPORT / EXPORT DRAWER
-         ===================================================================== */}
-      {activeSection === 'ai_drawer' && (
-        <div className="bg-white dark:bg-slate-900 rounded-3xl p-5 border border-slate-200/80 dark:border-slate-800 space-y-4">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h2 className="font-display font-bold text-base sm:text-lg flex items-center gap-2">
-                <Sparkles className="w-5 h-5 text-orange-500" />
-                AI Assistant Workout & Schedule Import
-              </h2>
-              <p className="text-xs text-slate-500 dark:text-slate-400 max-w-2xl">
-                Copy your workout directory for Gemini, then paste the AI's JSON block below to
-                add or update workouts, programs, and calendar dates in one click.
-              </p>
-            </div>
-
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                data-tooltip="Copy your workout list & JSON format for Gemini"
-                title="Copy your workout list & JSON format for Gemini"
-                onClick={handleCopyAiSchemaAndIds}
-                className="px-3.5 py-2 rounded-2xl bg-slate-900 dark:bg-orange-500 text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-sm"
-              >
-                <Copy className="w-4 h-4" />
-                Copy AI Prompt & Workout IDs
-              </button>
-              <button
-                type="button"
-                data-tooltip="Load a sample AI response to preview how import works"
-                title="Load a sample AI response to preview how import works"
-                onClick={handleLoadSampleAiBlock}
-                className="px-3 py-2 rounded-2xl bg-slate-100 dark:bg-slate-800 text-xs font-semibold hover:text-orange-500"
-              >
-                Load Sample AI JSON
-              </button>
-              <button
-                type="button"
-                onClick={async () => {
-                  const activeProg =
-                    programs.find((p) => p.programUuid === meta.activeProgramUuid) ||
-                    programs[0] ||
-                    null;
-                  const payload = buildAiCoachExportPayload({
-                    program: activeProg,
-                    presets,
-                    schedules,
-                  });
-                  try {
-                    await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
-                    showNotice('Copied AI Coaching Context');
-                  } catch {
-                    showNotice('Clipboard write blocked by browser.');
-                  }
-                }}
-                className="px-3 py-2 rounded-2xl bg-orange-500/15 text-orange-600 dark:text-orange-400 text-xs font-bold inline-flex items-center gap-1.5 hover:bg-orange-500/20"
-              >
-                <Sparkles className="w-3.5 h-3.5" />
-                Export for AI Coach
-              </button>
-              <button
-                type="button"
-                onClick={() => setAiNotesModalOpen(true)}
-                className="px-3 py-2 rounded-2xl bg-slate-100 dark:bg-slate-800 text-xs font-semibold hover:text-orange-500 inline-flex items-center gap-1.5"
-              >
-                <ClipboardPaste className="w-3.5 h-3.5" />
-                Import AI Notes Patch
-              </button>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-xs font-semibold text-slate-500">Import Mode:</span>
-            {(['add', 'update', 'replace'] as const).map((m) => (
-              <button
-                key={m}
-                type="button"
-                onClick={() => setAiConflictMode(m)}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold capitalize ${
-                  aiConflictMode === m
-                    ? 'bg-orange-500 text-white'
-                    : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
-                }`}
-              >
-                {m}
-              </button>
-            ))}
-          </div>
-
-          <textarea
-            rows={10}
-            value={aiJsonText}
-            onChange={(e) => setAiJsonText(e.target.value)}
-            placeholder='Paste Gemini JSON block here...'
-            className="w-full p-4 rounded-2xl font-mono text-xs bg-slate-950 text-emerald-400 border border-slate-800 focus:outline-none focus:border-orange-500"
-          />
-
-          {aiParseError && (
-            <div className="p-3 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-600 dark:text-rose-400">
-              JSON Error: {aiParseError}
-            </div>
-          )}
-
-          {parsedAiPreview && (
-            <div className="p-4 rounded-2xl bg-orange-500/[0.06] border border-orange-500/30 space-y-2">
-              <div className="text-xs font-bold text-orange-600 dark:text-orange-400 uppercase tracking-wider">
-                Preview Changes
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
-                <div className="p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
-                  <strong>{parsedAiPreview.presets?.length || 0}</strong> Workout Preset(s)
-                </div>
-                <div className="p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
-                  <strong>{parsedAiPreview.programs?.length || 0}</strong> Program(s)
-                </div>
-                <div className="p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
-                  <strong>{parsedAiPreview.schedule?.length || 0}</strong> Calendar Date(s)
-                </div>
-              </div>
-              <div className="flex justify-end pt-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const res = applyAiImportPayload({
-                      ...parsedAiPreview,
-                      mode: aiConflictMode,
-                    });
-                    setAiJsonText('');
-                    showNotice(
-                      `Applied ${res.presetsCount} presets, ${res.programsCount} programs, and ${res.scheduleDaysCount} calendar dates!`
-                    );
-                  }}
-                  className="px-5 py-2.5 rounded-2xl bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-md"
-                >
-                  <Upload className="w-4 h-4" />
-                  Apply AI Changes
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* =====================================================================
-          SECTION 3: CLOUD SYNC & APP PREFERENCES
-         ===================================================================== */}
-      {activeSection === 'cloud_prefs' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="bg-white dark:bg-slate-900 rounded-3xl p-5 border border-slate-200/80 dark:border-slate-800 space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Cloud className="w-5 h-5 text-orange-500" />
-                <h3 className="font-display font-bold text-base">
-                  Google Sign-In & Cloud Sync
-                </h3>
-              </div>
-              <span
-                className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase ${
-                  syncStatus === 'synced'
-                    ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
-                    : syncStatus === 'syncing'
-                    ? 'bg-orange-500/15 text-orange-500'
-                    : 'bg-slate-200 dark:bg-slate-800 text-slate-500'
-                }`}
-              >
-                {syncStatus === 'local' ? 'Saved on Device' : syncStatus}
-              </span>
-            </div>
-
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              Sign in with Google to sync your workouts, schedule, and logs across your phone and
-              laptop, with full offline gym support.
-            </p>
-
-            {authUser ? (
-              <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="text-xs font-bold">{authUser.displayName || 'Signed In'}</div>
-                    <div className="text-[11px] text-slate-500">{authUser.email}</div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => signOutFirebase()}
-                    className="px-3 py-1.5 rounded-xl bg-slate-200 dark:bg-slate-700 text-xs font-semibold inline-flex items-center gap-1"
-                  >
-                    <LogOut className="w-3.5 h-3.5" /> Sign Out
-                  </button>
-                </div>
-
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      await syncWithFirestore();
-                      showNotice('Synced workouts & schedule with Firestore');
-                    }}
-                    className="px-3 py-2 rounded-xl bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold inline-flex items-center gap-1.5 transition-colors"
-                  >
-                    <RefreshCw className="w-3.5 h-3.5" /> Sync Now
-                  </button>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      const res = await pushLocalToCloud();
-                      if (res.ok) {
-                        showNotice(
-                          `Force Sync complete — pushed ${res.pushedLogs} workout(s) & drafts to cloud`
-                        );
-                      } else {
-                        showNotice(res.error || 'Force Sync failed');
-                      }
-                    }}
-                    className="px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 dark:bg-slate-700 dark:hover:bg-slate-600 text-white text-xs font-bold inline-flex items-center gap-1.5 transition-colors"
-                  >
-                    <Upload className="w-3.5 h-3.5" /> Force Sync / Push Local Data
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                <button
-                  type="button"
-                  onClick={async () => {
-                    try {
-                      await signInWithGoogle();
-                      showNotice('Signed in with Google!');
-                    } catch (e: unknown) {
-                      showNotice(
-                        e instanceof Error ? e.message : 'Configure Firebase project below first'
-                      );
-                    }
-                  }}
-                  className="w-full py-2.5 px-4 rounded-2xl bg-orange-500 hover:bg-orange-600 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-sm"
-                >
-                  <LogIn className="w-4 h-4" />
-                  Sign In with Google
-                </button>
-
-                <div className="pt-2 border-t border-slate-100 dark:border-slate-800 space-y-2">
-                  <label className="block text-[11px] font-semibold text-slate-500">
-                    Firebase Project Config (Optional if not set in `.env`)
-                  </label>
-                  <textarea
-                    rows={4}
-                    value={firebaseJsonInput}
-                    onChange={(e) => setFirebaseJsonInput(e.target.value)}
-                    placeholder='Paste firebaseConfig object ({ "apiKey": "...", "projectId": "..." })...'
-                    className="w-full p-2.5 rounded-xl font-mono text-[11px] bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700"
-                  />
-                  <div className="flex items-center justify-between">
-                    <span className="text-[11px] text-slate-400">
-                      {effectiveFbConfig
-                        ? `Project: ${effectiveFbConfig.projectId}`
-                        : 'Running in Local Offline Mode'}
-                    </span>
-                    <div className="flex gap-1.5">
-                      {effectiveFbConfig && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            clearRuntimeFirebaseConfig();
-                            window.location.reload();
-                          }}
-                          className="px-2.5 py-1 rounded-lg text-[11px] bg-slate-100 dark:bg-slate-800"
-                        >
-                          Disconnect
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (saveRuntimeFirebaseConfig(firebaseJsonInput)) {
-                            showNotice('Saved Firebase config — reloading...');
-                            setTimeout(() => window.location.reload(), 600);
-                          } else {
-                            showNotice('Invalid Firebase config JSON');
-                          }
-                        }}
-                        className="px-3 py-1 rounded-lg text-xs font-bold bg-slate-900 dark:bg-orange-500 text-white"
-                      >
-                        Save Config
-                      </button>
-                    </div>
+            {/* Export Inclusion Checkboxes (All Checked by Default) */}
+            <div className="space-y-2">
+              <label className="flex items-center justify-between gap-2 p-2.5 rounded-2xl bg-slate-50 dark:bg-slate-800/60 cursor-pointer">
+                <div>
+                  <div className="text-xs font-bold">Include Upcoming 7-Day Schedule</div>
+                  <div className="text-[11px] text-slate-500">
+                    Exports scheduled slots (`wt_schedule`) for today + 6 days ({reviewStats.upcomingCount} slot
+                    {reviewStats.upcomingCount === 1 ? '' : 's'})
                   </div>
                 </div>
-              </div>
-            )}
-
-            {lastSyncError && (
-              <div className="text-xs text-rose-500 bg-rose-500/10 p-2.5 rounded-xl">
-                {lastSyncError}
-              </div>
-            )}
-          </div>
-
-          {/* App Preferences & Backup */}
-          <div className="bg-white dark:bg-slate-900 rounded-3xl p-5 border border-slate-200/80 dark:border-slate-800 space-y-4">
-            <h3 className="font-display font-bold text-base">Preferences & Data Backup</h3>
-
-            {/* Theme Mode */}
-            <div className="space-y-1.5">
-              <label className="block text-xs font-semibold text-slate-500">
-                Appearance
-              </label>
-              <div className="grid grid-cols-3 gap-2">
-                {(
-                  [
-                    { id: 'light', label: 'Light Sand', icon: Sun },
-                    { id: 'dark', label: 'Dark Charcoal', icon: Moon },
-                    { id: 'system', label: 'System', icon: Monitor },
-                  ] as Array<{
-                    id: ThemeMode;
-                    label: string;
-                    icon: React.ComponentType<{ className?: string }>;
-                  }>
-                ).map((t) => {
-                  const Icon = t.icon;
-                  return (
-                    <button
-                      key={t.id}
-                      type="button"
-                      onClick={() => setTheme(t.id)}
-                      className={`py-2.5 px-3 rounded-2xl text-xs font-bold flex items-center justify-center gap-1.5 border transition-all ${
-                        meta.theme === t.id
-                          ? 'bg-orange-500 text-white border-orange-500 shadow-sm'
-                          : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700'
-                      }`}
-                    >
-                      <Icon className="w-4 h-4" />
-                      {t.label}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Default Cardio Distance Unit */}
-            <div className="space-y-1.5">
-              <label className="block text-xs font-semibold text-slate-500">
-                Default Cardio Distance Unit
-              </label>
-              <div className="grid grid-cols-2 gap-2">
-                {(['mi', 'km'] as DistanceUnit[]).map((u) => (
-                  <button
-                    key={u}
-                    type="button"
-                    onClick={() => setDefaultDistanceUnit(u)}
-                    className={`py-2 px-3 rounded-2xl text-xs font-bold uppercase border ${
-                      (meta.defaultDistanceUnit || 'mi') === u
-                        ? 'bg-orange-500 text-white border-orange-500'
-                        : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700'
-                    }`}
-                  >
-                    {u === 'mi' ? 'Miles (mi)' : 'Kilometers (km)'}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Default View Density */}
-            <div className="space-y-1.5">
-              <label className="block text-xs font-semibold text-slate-500">
-                Default Log View
-              </label>
-              <div className="grid grid-cols-2 gap-2">
-                {(['compact', 'detailed'] as const).map((mode) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    onClick={() => setLogDensityMode(mode)}
-                    className={`py-2 px-3 rounded-2xl text-xs font-bold capitalize border ${
-                      logDensityMode === mode
-                        ? 'bg-orange-500 text-white border-orange-500'
-                        : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700'
-                    }`}
-                  >
-                    {mode}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Keep Screen Awake Toggle */}
-            <label className="flex items-center justify-between p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 cursor-pointer">
-              <div>
-                <div className="text-xs font-bold">Keep Screen Awake</div>
-                <div className="text-[11px] text-slate-500">
-                  Prevent display sleep while logging workouts
-                </div>
-              </div>
-              <input
-                type="checkbox"
-                checked={meta.keepScreenAwake !== false}
-                onChange={(e) => setKeepScreenAwake(e.target.checked)}
-                className="rounded accent-orange-500 w-4 h-4"
-              />
-            </label>
-
-            {/* Timer Countdown Beeps Toggle */}
-            <label className="flex items-center justify-between p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 cursor-pointer">
-              <div>
-                <div className="text-xs font-bold">Timer Countdown Beeps</div>
-                <div className="text-[11px] text-slate-500">
-                  Play 3-2-1 countdown &amp; completion chimes
-                </div>
-              </div>
-              <input
-                type="checkbox"
-                checked={meta.timerSoundEnabled !== false}
-                onChange={(e) => setTimerSoundEnabled(e.target.checked)}
-                className="rounded accent-orange-500 w-4 h-4"
-              />
-            </label>
-
-            {/* Auto-Start Rest Timer Toggle */}
-            <label className="flex items-center justify-between p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 cursor-pointer">
-              <div>
-                <div className="text-xs font-bold">Auto-Start Rest Timer</div>
-                <div className="text-[11px] text-slate-500">
-                  Start rest countdown automatically when logging a set
-                </div>
-              </div>
-              <input
-                type="checkbox"
-                checked={meta.defaultAutoStartRestTimer}
-                onChange={(e) => setDefaultAutoStartRestTimer(e.target.checked)}
-                className="rounded text-orange-500 focus:ring-orange-500 w-4 h-4"
-              />
-            </label>
-
-            {/* Full JSON Backup Export, Import & Demo Reset */}
-            <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex flex-wrap gap-2">
-              <button
-                type="button"
-                data-tooltip="Download all workouts, schedules, context flags, and logs as a JSON backup file"
-                title="Download all workouts, schedules, context flags, and logs as a JSON backup file"
-                onClick={() => {
-                  const backup = {
-                    exportedAt: new Date().toISOString(),
-                    meta,
-                    exercises: globalExercises,
-                    presets,
-                    programs,
-                    schedules,
-                    logs,
-                    contextBlocks,
-                  };
-                  const blob = new Blob([JSON.stringify(backup, null, 2)], {
-                    type: 'application/json',
-                  });
-                  const url = URL.createObjectURL(blob);
-                  const a = document.createElement('a');
-                  a.href = url;
-                  a.download = `ironpulse-backup-${getTodayIsoDate()}.json`;
-                  a.click();
-                  URL.revokeObjectURL(url);
-                }}
-                className="px-3.5 py-2 rounded-2xl bg-slate-100 dark:bg-slate-800 text-xs font-bold inline-flex items-center gap-1.5"
-              >
-                <Download className="w-4 h-4 text-orange-500" />
-                Export Backup
-              </button>
-
-              <label
-                data-tooltip="Restore schedule context flags & backup data from JSON"
-                title="Restore schedule context flags & backup data from JSON"
-                className="px-3.5 py-2 rounded-2xl bg-slate-100 dark:bg-slate-800 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer hover:text-orange-500 transition-colors"
-              >
-                <Upload className="w-4 h-4 text-orange-500" />
-                Import Backup
                 <input
-                  type="file"
-                  accept="application/json,.json"
-                  className="sr-only"
-                  onChange={async (e) => {
-                    const file = e.target.files?.[0];
-                    e.target.value = '';
-                    if (!file) return;
-                    try {
-                      const raw = await file.text();
-                      const parsed = JSON.parse(raw) as {
-                        contextBlocks?: typeof contextBlocks;
-                        presets?: typeof presets;
-                      };
-                      let importedParts: string[] = [];
-                      if (Array.isArray(parsed.contextBlocks) && parsed.contextBlocks.length > 0) {
-                        importContextBlocks(parsed.contextBlocks);
-                        importedParts.push(`${parsed.contextBlocks.length} context flag(s)`);
-                      }
-                      if (Array.isArray(parsed.presets) && parsed.presets.length > 0) {
-                        for (const p of parsed.presets) {
-                          if (p?.presetUuid && p?.title) upsertPreset(p);
-                        }
-                        importedParts.push(`${parsed.presets.length} preset(s)`);
-                      }
-                      showNotice(
-                        importedParts.length > 0
-                          ? `Imported ${importedParts.join(' & ')} from backup`
-                          : 'Backup file contained no importable records'
-                      );
-                    } catch {
-                      showNotice('Failed to parse backup JSON file');
-                    }
-                  }}
+                  type="checkbox"
+                  checked={includeUpcoming7Days}
+                  onChange={(e) => setIncludeUpcoming7Days(e.target.checked)}
+                  className="rounded accent-orange-500 w-4 h-4 shrink-0"
                 />
               </label>
 
+              <label className="flex items-center justify-between gap-2 p-2.5 rounded-2xl bg-slate-50 dark:bg-slate-800/60 cursor-pointer">
+                <div>
+                  <div className="text-xs font-bold">
+                    Include Mitigating Factors / Injury &amp; Travel Flags
+                  </div>
+                  <div className="text-[11px] text-slate-500">
+                    Includes `wt_context` flags overlapping this window ({reviewStats.contextCount}{' '}
+                    flag{reviewStats.contextCount === 1 ? '' : 's'})
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={includeContextFlags}
+                  onChange={(e) => setIncludeContextFlags(e.target.checked)}
+                  className="rounded accent-orange-500 w-4 h-4 shrink-0"
+                />
+              </label>
+
+              <label className="flex items-center justify-between gap-2 p-2.5 rounded-2xl bg-slate-50 dark:bg-slate-800/60 cursor-pointer">
+                <div>
+                  <div className="text-xs font-bold">Sunday Night Check-In Prompt Wrapper</div>
+                  <div className="text-[11px] text-slate-500">
+                    Prepends coaching instructions for JSON notes patches or program cycles + your{' '}
+                    `workoutId` directory ({presets.filter((p) => !p.isArchived).length} workouts)
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={includeSundayCheckInPrompt}
+                  onChange={(e) => setIncludeSundayCheckInPrompt(e.target.checked)}
+                  className="rounded accent-orange-500 w-4 h-4 shrink-0"
+                />
+              </label>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+              <span className="text-xs text-slate-500 inline-flex items-center gap-1.5">
+                <Calendar className="w-3.5 h-3.5 text-orange-500" />
+                {reviewWindow.startDate} → {reviewWindow.endDate} ·{' '}
+                <strong className="text-slate-700 dark:text-slate-200">
+                  {reviewStats.completedCount} completed workout
+                  {reviewStats.completedCount === 1 ? '' : 's'}
+                </strong>
+              </span>
               <button
                 type="button"
-                data-tooltip="Load sample demo workouts & sample history"
-                title="Load sample demo workouts & sample history"
-                onClick={() => {
-                  resetToDemoSeed();
-                  showNotice('Loaded sample workouts & history');
-                }}
-                className="px-3.5 py-2 rounded-2xl bg-rose-500/10 text-rose-600 dark:text-rose-400 text-xs font-bold ml-auto"
+                onClick={() => void handleCopyCoachReviewJson()}
+                className="px-4 py-2.5 rounded-2xl bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-md shadow-orange-500/20 transition-colors"
               >
-                Load Sample Data
+                <Copy className="w-4 h-4" />
+                Copy Coach Review JSON
               </button>
             </div>
-          </div>
+          </section>
 
-          {/* Google Tasks Sync Card */}
-          <div className="bg-white dark:bg-slate-900 rounded-3xl p-5 border border-slate-200/80 dark:border-slate-800 space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
+          {/* CARD B: Apply Coach Notes Patch (Non-Destructive) */}
+          <section className="bg-white dark:bg-slate-900 rounded-3xl p-5 border border-slate-200/80 dark:border-slate-800 space-y-4">
+            <div>
+              <div className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-emerald-600 dark:text-emerald-400 mb-1">
+                <ClipboardPaste className="w-3.5 h-3.5" />
+                Card B · Surgical Notes Update (Non-Destructive)
+              </div>
+              <h2 className="font-display font-bold text-base sm:text-lg">
+                Apply Coach Notes Patch
+              </h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                Updates coaching notes &amp; target cues by `scheduleId` or `date` +
+                `slot`/`workoutId` without altering workout structure, exercise lists, or program
+                cycles.
+              </p>
+            </div>
+
+            <textarea
+              rows={5}
+              value={notesPatchText}
+              onChange={(e) => setNotesPatchText(e.target.value)}
+              placeholder='Paste Coach Notes Patch JSON (e.g. { "upcomingSchedule": [{ "date": "2026-11-30", "slot": "Primary", "notes": "Target 18 rounds @ 2x16kg" }] })...'
+              className="w-full p-3.5 rounded-2xl font-mono text-xs bg-slate-950 text-emerald-400 border border-slate-800 focus:outline-none focus:border-orange-500"
+            />
+
+            {notesPatchError && (
+              <div className="p-3 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-600 dark:text-rose-400">
+                JSON Error: {notesPatchError}
+              </div>
+            )}
+
+            {notesPatchDiff && (
+              <div className="p-3.5 rounded-2xl bg-emerald-500/[0.06] border border-emerald-500/25 space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-xs font-bold text-emerald-700 dark:text-emerald-300">
+                    Preview: {notesScheduledSessionsCount} scheduled session
+                    {notesScheduledSessionsCount === 1 ? '' : 's'} will be updated
+                    {notesTotalUpdatesCount > notesPatchDiff.scheduleNoteDiffs.length
+                      ? ` (+${notesTotalUpdatesCount - notesPatchDiff.scheduleNoteDiffs.length} week/workout note cue(s))`
+                      : ''}
+                  </div>
+                  {notesPatchDiff.structuralChangesCount > 0 && (
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400">
+                      {notesPatchDiff.structuralChangesCount} structural edit(s) ignored safely
+                    </span>
+                  )}
+                </div>
+
+                {notesPatchDiff.scheduleNoteDiffs.length > 0 && (
+                  <div className="space-y-1 max-h-32 overflow-y-auto pr-1">
+                    {notesPatchDiff.scheduleNoteDiffs.slice(0, 6).map((diff, idx) => (
+                      <div
+                        key={`${diff.scheduleItemUuid}-${idx}`}
+                        className="text-[11px] p-2 rounded-xl bg-white dark:bg-slate-900 border border-slate-200/70 dark:border-slate-800"
+                      >
+                        <div className="font-bold text-slate-800 dark:text-slate-100">
+                          {diff.date} · {diff.presetName}
+                        </div>
+                        <div className="text-emerald-600 dark:text-emerald-400 truncate">
+                          → {diff.newNote}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="flex justify-end">
+              <button
+                type="button"
+                disabled={!parsedNotesPatch || notesTotalUpdatesCount === 0}
+                onClick={() => setApplyNotesConfirmOpen(true)}
+                className="px-4 py-2.5 rounded-2xl bg-slate-900 dark:bg-orange-500 hover:opacity-95 disabled:opacity-40 text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-sm transition-all"
+              >
+                <ClipboardPaste className="w-4 h-4" />
+                Apply Notes Patch
+                {notesScheduledSessionsCount > 0 ? ` (${notesScheduledSessionsCount})` : ''}
+              </button>
+            </div>
+          </section>
+
+          {/* CARD C: Import Full Program & Weekly Cycle from AI Coach */}
+          <section className="bg-white dark:bg-slate-900 rounded-3xl p-5 border border-slate-200/80 dark:border-slate-800 space-y-4">
+            <div className="flex flex-wrap items-start justify-between gap-2">
               <div>
-                <h3 className="font-display font-bold text-base">Google Tasks Sync</h3>
-                <p className="text-xs text-slate-500">
-                  Two-way sync for today &amp; upcoming 6 days with stale-task cleanup.
+                <div className="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-orange-500 mb-1">
+                  <Layers className="w-3.5 h-3.5" />
+                  Card C · Multi-Week Program Builder
+                </div>
+                <h2 className="font-display font-bold text-base sm:text-lg">
+                  Import Full Program &amp; Weekly Cycle from AI Coach
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  Paste JSON with `programName`, `cycleWeeks`, `weeks` rotating slots (`Primary` /
+                  `Secondary`, `workoutId`, `notes`), optional `presets`, and optional `autoFill`.
                 </p>
               </div>
               <button
                 type="button"
-                disabled={isSyncingTasks}
-                onClick={async () => {
-                  setIsSyncingTasks(true);
-                  const res = await runGoogleTasksSync(true);
-                  setIsSyncingTasks(false);
-                  if (res.ok) {
-                    showNotice(
-                      `Google Tasks Master Sync complete (${res.pushed} pushed, ${res.pulled} completed)`
-                    );
-                  } else if (res.error) {
-                    showNotice(`Google Tasks sync failed: ${res.error}`);
-                  }
-                }}
-                className="px-3.5 py-2 rounded-2xl bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white text-xs font-bold inline-flex items-center gap-1.5 transition-colors"
+                onClick={handleLoadSampleProgramJson}
+                className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-xs font-semibold hover:text-orange-500 shrink-0"
               >
-                <RefreshCw className={`w-3.5 h-3.5 ${isSyncingTasks ? 'animate-spin' : ''}`} />
-                {isSyncingTasks ? 'Syncing...' : 'Master Sync'}
+                Load Sample JSON
               </button>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
-              <div className="p-3 rounded-2xl bg-[var(--bg-inset)] border border-[var(--border-subtle)] space-y-0.5">
-                <div className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">
-                  Connection / Token Status
-                </div>
-                <div
-                  className="font-bold"
-                  style={{
-                    color: getCachedGoogleTasksToken()
-                      ? 'var(--accent-sage)'
-                      : 'var(--accent-orange)',
-                  }}
+            {/* Mode Selector: Create as New Program (default) vs Replace Active Program Template */}
+            <div className="space-y-1.5">
+              <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                Import Mode
+              </label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setProgramImportMode('create_new')}
+                  className={`p-3 rounded-2xl text-left border transition-all ${
+                    programImportMode === 'create_new'
+                      ? 'bg-orange-500/10 border-orange-500 text-slate-900 dark:text-slate-100'
+                      : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
+                  }`}
                 >
-                  {getCachedGoogleTasksToken()
-                    ? 'Active (this session)'
-                    : 'Needs authorization on next sync'}
-                </div>
-              </div>
-
-              <div className="p-3 rounded-2xl bg-[var(--bg-inset)] border border-[var(--border-subtle)] space-y-0.5 min-w-0">
-                <div className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">
-                  Target List ID
-                </div>
-                <div className="font-mono text-[11px] text-[var(--text-secondary)] truncate">
-                  {GOOGLE_TASKS_TARGET_LIST_ID}
-                </div>
+                  <div className="text-xs font-bold">Create as New Program</div>
+                  <div className="text-[11px] text-slate-500 mt-0.5">
+                    Adds to `wt_programs` &amp; switches active without overwriting existing ones.
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setProgramImportMode('replace_active')}
+                  className={`p-3 rounded-2xl text-left border transition-all ${
+                    programImportMode === 'replace_active'
+                      ? 'bg-orange-500/10 border-orange-500 text-slate-900 dark:text-slate-100'
+                      : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
+                  }`}
+                >
+                  <div className="text-xs font-bold">Replace Active Program Template</div>
+                  <div className="text-[11px] text-slate-500 mt-0.5">
+                    Updates {activeProgram ? `"${activeProgram.title}"` : 'active program'}'s
+                    rotating cycle in place.
+                  </div>
+                </button>
               </div>
             </div>
 
-            <div className="text-xs text-[var(--text-secondary)]">
-              {lastTasksSync ? (
-                <span
-                  style={{
-                    color:
-                      lastTasksSync.status === 'success'
-                        ? 'var(--accent-sage)'
-                        : 'var(--accent-rust)',
-                  }}
-                  className="font-semibold"
-                >
-                  Last sync:{' '}
-                  {new Date(lastTasksSync.timestamp).toLocaleTimeString([], {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  })}{' '}
-                  · {lastTasksSync.status === 'success' ? 'Success' : 'Failed'}
-                  {lastTasksSync.message ? ` (${lastTasksSync.message})` : ''}
-                </span>
-              ) : (
-                <span className="text-[var(--text-muted)]">Not synced yet this session.</span>
-              )}
+            <textarea
+              rows={7}
+              value={programImportText}
+              onChange={(e) => setProgramImportText(e.target.value)}
+              placeholder='{ "programName": "...", "cycleWeeks": 2, "weeks": [...], "presets": [...], "autoFill": { "startDate": "YYYY-MM-DD", "endDate": "YYYY-MM-DD" } }'
+              className="w-full p-3.5 rounded-2xl font-mono text-xs bg-slate-950 text-emerald-400 border border-slate-800 focus:outline-none focus:border-orange-500"
+            />
+
+            {programImportError && (
+              <div className="p-3 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-600 dark:text-rose-400">
+                JSON Error: {programImportError}
+              </div>
+            )}
+
+            {parsedProgramImport && (
+              <div className="p-4 rounded-2xl bg-orange-500/[0.06] border border-orange-500/30 space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-xs font-bold text-orange-600 dark:text-orange-400 uppercase tracking-wider">
+                    Program Preview · {parsedProgramImport.programName}
+                  </div>
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-900/10 dark:bg-white/10">
+                    Auto-saves safety snapshot before import
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                  <div className="p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                    <strong>{parsedProgramImport.cycleWeeks}</strong> Week Cycle
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                    <strong>{parsedProgramImport.totalSlots}</strong> Template Slot(s)
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                    <strong>{parsedProgramImport.presets.length}</strong> New Preset(s)
+                  </div>
+                  <div className="p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 truncate">
+                    {parsedProgramImport.autoFill
+                      ? `Auto-Fill: ${parsedProgramImport.autoFill.startDate}`
+                      : 'No Auto-Fill'}
+                  </div>
+                </div>
+
+                {parsedProgramImport.unresolvedWorkoutRefs.length > 0 && (
+                  <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-700 dark:text-amber-300 flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <span>
+                      Unrecognized workout ID(s):{' '}
+                      <strong>{parsedProgramImport.unresolvedWorkoutRefs.join(', ')}</strong>. Make
+                      sure they match your `workoutDirectory` or are defined in `presets`.
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="flex justify-end">
+              <button
+                type="button"
+                disabled={!parsedProgramImport}
+                onClick={handleImportProgramCycle}
+                className="px-5 py-2.5 rounded-2xl bg-orange-500 hover:bg-orange-600 disabled:opacity-40 text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-md shadow-orange-500/20 transition-colors"
+              >
+                <Upload className="w-4 h-4" />
+                Import Program &amp; Cycle
+              </button>
             </div>
-          </div>
+          </section>
         </div>
       )}
 
@@ -1320,11 +1702,138 @@ export const SettingsView: React.FC = () => {
         Build: {__APP_BUILD__} ({__APP_BUILD_TIME__})
       </div>
 
-      <ImportAiNotesPatchModal
-        open={aiNotesModalOpen}
-        onClose={() => setAiNotesModalOpen(false)}
-        onApplied={(summary) => showNotice(summary)}
-      />
+      {/* Portaled Confirmation Modal: Restore Safety Snapshot */}
+      <ModalPortal
+        open={restoreSnapshotConfirmOpen && Boolean(safetySnapshotMeta)}
+        onClose={() => !isRestoringSnapshot && setRestoreSnapshotConfirmOpen(false)}
+        tier="primary"
+      >
+        {safetySnapshotMeta && (
+          <div className="w-full max-w-md rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-5 space-y-4 shadow-2xl">
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <RotateCcw className="w-5 h-5 text-orange-500 shrink-0" />
+                <h3 className="font-display font-bold text-base">Restore Safety Snapshot?</h3>
+              </div>
+              <button
+                type="button"
+                disabled={isRestoringSnapshot}
+                onClick={() => setRestoreSnapshotConfirmOpen(false)}
+                aria-label="Close restore confirmation"
+                className="p-1.5 rounded-xl text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+              This will restore your schedule ({safetySnapshotMeta.scheduleDaysCount} days), workout
+              logs ({safetySnapshotMeta.logsCount}), programs ({safetySnapshotMeta.programsCount}),
+              and mitigating factors ({safetySnapshotMeta.contextCount}) back to the automatic
+              snapshot saved on{' '}
+              <strong>{formatSnapshotTimestamp(safetySnapshotMeta.timestamp)}</strong> (before{' '}
+              <strong>{safetySnapshotMeta.reason}</strong>).
+            </p>
+
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                disabled={isRestoringSnapshot}
+                onClick={() => setRestoreSnapshotConfirmOpen(false)}
+                className="px-4 py-2 rounded-xl text-xs font-semibold bg-slate-100 dark:bg-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isRestoringSnapshot}
+                onClick={async () => {
+                  setIsRestoringSnapshot(true);
+                  const res = await restoreSafetySnapshot();
+                  setIsRestoringSnapshot(false);
+                  setRestoreSnapshotConfirmOpen(false);
+                  if (res.ok) {
+                    showNotice(
+                      `Restored safety snapshot from ${formatSnapshotTimestamp(
+                        res.timestamp || safetySnapshotMeta.timestamp
+                      )}`
+                    );
+                  } else {
+                    showNotice(res.error || 'Failed to restore safety snapshot');
+                  }
+                }}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-orange-500 hover:bg-orange-600 text-white shadow-sm disabled:opacity-50"
+              >
+                {isRestoringSnapshot ? 'Restoring...' : 'Restore Snapshot'}
+              </button>
+            </div>
+          </div>
+        )}
+      </ModalPortal>
+
+      {/* Portaled Confirmation Modal: Apply Coach Notes Patch */}
+      <ModalPortal
+        open={applyNotesConfirmOpen && Boolean(notesPatchDiff)}
+        onClose={() => !isApplyingNotes && setApplyNotesConfirmOpen(false)}
+        tier="primary"
+      >
+        {notesPatchDiff && (
+          <div className="w-full max-w-md rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-5 space-y-4 shadow-2xl">
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <ClipboardPaste className="w-5 h-5 text-emerald-500 shrink-0" />
+                <h3 className="font-display font-bold text-base">Apply Coach Notes Patch?</h3>
+              </div>
+              <button
+                type="button"
+                disabled={isApplyingNotes}
+                onClick={() => setApplyNotesConfirmOpen(false)}
+                aria-label="Close apply notes confirmation"
+                className="p-1.5 rounded-xl text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+              This will surgically update notes on{' '}
+              <strong>
+                {notesScheduledSessionsCount} scheduled session
+                {notesScheduledSessionsCount === 1 ? '' : 's'}
+              </strong>
+              {notesPatchDiff.programWeekDiffs.length > 0
+                ? `, ${notesPatchDiff.programWeekDiffs.length} week focus note(s)`
+                : ''}
+              {notesPatchDiff.presetNoteDiffs.length + notesPatchDiff.exerciseNoteDiffs.length > 0
+                ? `, and ${
+                    notesPatchDiff.presetNoteDiffs.length +
+                    notesPatchDiff.exerciseNoteDiffs.length
+                  } preset/exercise cue(s)`
+                : ''}
+              . Workout structure, exercise lists, and program cycles will remain untouched.
+            </p>
+
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                disabled={isApplyingNotes}
+                onClick={() => setApplyNotesConfirmOpen(false)}
+                className="px-4 py-2 rounded-xl text-xs font-semibold bg-slate-100 dark:bg-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isApplyingNotes}
+                onClick={() => void handleConfirmApplyNotesPatch()}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-orange-500 hover:bg-orange-600 text-white shadow-sm disabled:opacity-50"
+              >
+                {isApplyingNotes ? 'Applying...' : 'Confirm & Apply Notes'}
+              </button>
+            </div>
+          </div>
+        )}
+      </ModalPortal>
     </div>
   );
 };
