@@ -100,6 +100,8 @@ export const LogView: React.FC = () => {
     meta,
     setActiveDate,
     loadProgrammedForDate,
+    getProgramTemplatePreviewForDate,
+    resetDateToProgramTemplate,
     addWorkoutToSession,
     updateDraftWorkout,
     removeDraftWorkout,
@@ -137,6 +139,11 @@ export const LogView: React.FC = () => {
     initialDate?: string;
     initialCategory?: ContextCategory;
   }>({ open: false });
+  const [resetTemplateConfirm, setResetTemplateConfirm] = useState<{
+    programTitle: string;
+    cycleWeek: number;
+    workoutTitles: string[];
+  } | null>(null);
   const [openCueKey, setOpenCueKey] = useState<string | null>(null);
   const [visibleRirKeys, setVisibleRirKeys] = useState<Record<string, boolean>>({});
   const [editingCueKey, setEditingCueKey] = useState<string | null>(null);
@@ -892,27 +899,27 @@ export const LogView: React.FC = () => {
                     type="button"
                     onClick={() => {
                       setEditMenuOpen(false);
-                      const count = loadProgrammedForDate(activeDate);
-                      if (count > 0) {
-                        triggerToast(`Loaded ${count} scheduled workout(s)`);
-                      } else if (scheduledForActiveDate.length > 0) {
-                        triggerToast('Today’s scheduled workouts are already loaded');
-                      } else {
-                        triggerToast('No workouts scheduled on this date — pick a workout!');
-                        setPresetPickerModal({ open: true, mode: 'add' });
+                      const preview = getProgramTemplatePreviewForDate(activeDate);
+                      if (!preview) {
+                        triggerToast('No active program template covers this date.');
+                        return;
                       }
+                      const workoutTitles = preview.items.map(
+                        (ti) =>
+                          presets.find((p) => p.presetUuid === ti.presetUuid)?.title || ti.slotRole
+                      );
+                      setResetTemplateConfirm({
+                        programTitle: preview.program.title,
+                        cycleWeek: preview.cycleWeek,
+                        workoutTitles,
+                      });
                     }}
                     className="w-full px-3 py-2.5 rounded-xl text-left text-xs font-semibold text-slate-800 dark:text-slate-100 hover:bg-orange-500/10 hover:text-orange-600 dark:hover:text-orange-400 flex items-center justify-between gap-2 transition-colors"
                   >
-                    <span className="inline-flex items-center gap-2">
+                    <span className="inline-flex items-center gap-2 min-w-0">
                       <Sparkles className="w-4 h-4 text-orange-500 shrink-0" />
-                      Load Today&apos;s Plan
+                      <span className="truncate">Reset to Program Plan</span>
                     </span>
-                    {scheduledForActiveDate.length > 0 && (
-                      <span className="px-1.5 py-0.5 rounded-full bg-orange-500/15 text-orange-600 dark:text-orange-400 text-[10px] font-mono tabular-nums">
-                        {scheduledForActiveDate.length}
-                      </span>
-                    )}
                   </button>
 
                   <button
@@ -3841,6 +3848,70 @@ export const LogView: React.FC = () => {
         onClose={() => setContextModalState({ open: false })}
         onSaved={(msg) => triggerToast(msg)}
       />
+
+      {/* MODAL 6: Portaled Reset to Program Plan Confirmation (z-1100) */}
+      <ModalPortal
+        open={Boolean(resetTemplateConfirm)}
+        onClose={() => setResetTemplateConfirm(null)}
+        tier="nested"
+        backdropClassName="items-center p-4 bg-black/70 backdrop-blur-xs"
+      >
+        {resetTemplateConfirm && (
+          <div className="w-full max-w-sm bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-5 shadow-2xl text-[var(--text-primary)] space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="w-9 h-9 rounded-2xl bg-orange-500/15 text-orange-500 flex items-center justify-center shrink-0">
+                <Sparkles className="w-5 h-5" />
+              </div>
+              <div className="space-y-1.5 min-w-0">
+                <h3 className="font-display font-bold text-base">Reset to Program Plan?</h3>
+                <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
+                  Revert <strong>{formatReadableDate(activeDate)}</strong> back to the{' '}
+                  <strong>{resetTemplateConfirm.programTitle}</strong> template (Week{' '}
+                  {resetTemplateConfirm.cycleWeek})? Any one-off day edits or unsaved sets for this
+                  date will be replaced.
+                </p>
+                <div className="pt-1 text-[11px] font-semibold text-[var(--text-muted)]">
+                  {resetTemplateConfirm.workoutTitles.length > 0
+                    ? `Template: ${resetTemplateConfirm.workoutTitles.join(' + ')}`
+                    : 'Template: Rest Day (clears workouts for this date)'}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setResetTemplateConfirm(null)}
+                className="px-4 py-2 rounded-xl text-xs font-semibold bg-slate-100 dark:bg-slate-800"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  setResetTemplateConfirm(null);
+                  const res = await resetDateToProgramTemplate(activeDate);
+                  if (res.ok) {
+                    setActiveCardIdx(0);
+                    triggerToast(
+                      res.count > 0
+                        ? `Reverted to ${res.programTitle} (${res.count} workout${
+                            res.count === 1 ? '' : 's'
+                          })`
+                        : `Reverted to ${res.programTitle} (Rest Day)`
+                    );
+                  } else {
+                    triggerToast(res.error || 'No active program template covers this date.');
+                  }
+                }}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-orange-500 hover:bg-orange-600 text-white"
+              >
+                Reset Day
+              </button>
+            </div>
+          </div>
+        )}
+      </ModalPortal>
     </div>
   );
 };
