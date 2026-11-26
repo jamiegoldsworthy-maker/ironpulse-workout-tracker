@@ -587,13 +587,21 @@ export const HistoryView: React.FC = () => {
                       className="p-3.5 rounded-2xl bg-slate-50/70 dark:bg-slate-800/40 border border-slate-200/60 dark:border-slate-800 space-y-2.5"
                     >
                       <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
                           <span className="font-mono text-xs font-bold px-2 py-0.5 rounded-md bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 tabular-nums">
                             {log.displayId}
                           </span>
                           <span className="font-display font-bold text-sm text-slate-900 dark:text-slate-100">
                             {log.workoutTitleSnapshot}
                           </span>
+                          {(log.isBiteSize || log.slotRole === 'Bite-Size') && (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-lg bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/25">
+                              ⚡ BITE-SIZE ·{' '}
+                              {log.durationMinutes ||
+                                (log.durationSec ? Math.max(1, Math.round(log.durationSec / 60)) : 5)}
+                              m
+                            </span>
+                          )}
                           <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-orange-500/15 text-orange-600 dark:text-orange-400">
                             {log.workoutType}
                           </span>

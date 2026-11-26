@@ -30,6 +30,7 @@ import {
   Lightbulb,
   Clock,
   Edit3,
+  Zap,
 } from 'lucide-react';
 import { DraftWorkoutCard, useWorkoutStore } from '../store/useWorkoutStore';
 import {
@@ -64,6 +65,7 @@ import { ExerciseHistoryModal } from './ExerciseHistoryModal';
 import { ModalPortal } from './ModalPortal';
 import { StatusSelectorModal } from './StatusSelectorModal';
 import { ContextBlockModal } from './ContextBlockModal';
+import { BiteSizeDrawerModal } from './BiteSizeDrawerModal';
 import { filterNoteForWeek } from '../utils/aiCoachPatch';
 import {
   CONTEXT_CATEGORY_LIST,
@@ -127,6 +129,7 @@ export const LogView: React.FC = () => {
   >({});
   const [activeCardIdx, setActiveCardIdx] = useState<number>(0);
   const [editMenuOpen, setEditMenuOpen] = useState<boolean>(false);
+  const [biteSizeDrawerOpen, setBiteSizeDrawerOpen] = useState<boolean>(false);
   const [openExerciseMenuKey, setOpenExerciseMenuKey] = useState<string | null>(null);
   const [statusPickerDraft, setStatusPickerDraft] = useState<{
     logUuid: string;
@@ -857,6 +860,18 @@ export const LogView: React.FC = () => {
               </button>
             )}
 
+            {/* Fast 3-Tap Bite-Size Movement Snack Trigger */}
+            <button
+              type="button"
+              onClick={() => setBiteSizeDrawerOpen(true)}
+              data-tooltip="Quick-log a 3–10m Bite-Size Movement Snack"
+              title="Bite-Size Movement Snacks"
+              className="px-2 py-1.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-700 dark:text-amber-300 text-[11px] sm:text-xs font-bold inline-flex items-center gap-1 transition-colors shrink-0 whitespace-nowrap"
+            >
+              <Zap className="w-3.5 h-3.5 fill-current shrink-0" />
+              <span>Bite-Size</span>
+            </button>
+
             {/* Compact Edit Session Popover matching Today pill height */}
             <div className="relative shrink-0">
               <button
@@ -1213,9 +1228,18 @@ export const LogView: React.FC = () => {
                     <div className="p-3.5 sm:px-5 bg-slate-50/50 dark:bg-slate-800/30 space-y-1.5">
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex flex-wrap items-center gap-1.5 min-w-0">
-                          <span className="text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-lg bg-orange-500/12 text-orange-600 dark:text-orange-400">
-                            {draft.slotRole || `Workout #${cardIdx + 1}`}
-                          </span>
+                          {draft.isBiteSize || draft.slotRole === 'Bite-Size' ? (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-lg bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/25">
+                              ⚡ BITE-SIZE ·{' '}
+                              {draft.durationMinutes ||
+                                (draft.durationSec ? Math.max(1, Math.round(draft.durationSec / 60)) : preset?.durationMinutes || 5)}
+                              m
+                            </span>
+                          ) : (
+                            <span className="text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-lg bg-orange-500/12 text-orange-600 dark:text-orange-400">
+                              {draft.slotRole || `Workout #${cardIdx + 1}`}
+                            </span>
+                          )}
                           <span className="text-[11px] font-semibold px-2 py-0.5 rounded-lg bg-slate-200/60 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
                             {draft.workoutType}
                           </span>
@@ -1310,9 +1334,18 @@ export const LogView: React.FC = () => {
                   <div className="p-3.5 sm:px-5 bg-slate-50/50 dark:bg-slate-800/30 border-b border-slate-200/50 dark:border-slate-800/70 space-y-2">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="flex flex-wrap items-center gap-1.5 min-w-0">
-                        <span className="text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-lg bg-orange-500/12 text-orange-600 dark:text-orange-400">
-                          {draft.slotRole || `Workout #${cardIdx + 1}`}
-                        </span>
+                        {draft.isBiteSize || draft.slotRole === 'Bite-Size' ? (
+                          <span className="inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-lg bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/25">
+                            ⚡ BITE-SIZE ·{' '}
+                            {draft.durationMinutes ||
+                              (draft.durationSec ? Math.max(1, Math.round(draft.durationSec / 60)) : preset?.durationMinutes || 5)}
+                            m
+                          </span>
+                        ) : (
+                          <span className="text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-lg bg-orange-500/12 text-orange-600 dark:text-orange-400">
+                            {draft.slotRole || `Workout #${cardIdx + 1}`}
+                          </span>
+                        )}
                         <span className="text-[11px] font-semibold px-2 py-0.5 rounded-lg bg-slate-200/60 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
                           {draft.workoutType}
                         </span>
@@ -3912,6 +3945,13 @@ export const LogView: React.FC = () => {
           </div>
         )}
       </ModalPortal>
+
+      {/* MODAL 7: Portaled Bite-Size Workout Quick-Logger (z-1000) */}
+      <BiteSizeDrawerModal
+        open={biteSizeDrawerOpen}
+        onClose={() => setBiteSizeDrawerOpen(false)}
+        onLogged={(msg) => triggerToast(msg)}
+      />
     </div>
   );
 };

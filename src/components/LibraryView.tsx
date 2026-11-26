@@ -19,6 +19,8 @@ import {
   ChevronUp,
   Pencil,
   Check,
+  Clock,
+  Zap,
 } from 'lucide-react';
 import { useWorkoutStore } from '../store/useWorkoutStore';
 import {
@@ -72,6 +74,9 @@ export const LibraryView: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedProgramFilter, setSelectedProgramFilter] = useState<string>('ALL');
   const [selectedTypeFilter, setSelectedTypeFilter] = useState<'ALL' | WorkoutType>('ALL');
+  const [selectedDurationFilter, setSelectedDurationFilter] = useState<
+    'ALL' | 'le10' | '15_30' | 'gt30'
+  >('ALL');
   const [selectedTagFilter, setSelectedTagFilter] = useState<string>('ALL');
 
   const [editingPreset, setEditingPreset] = useState<WorkoutPreset | null>(null);
@@ -183,6 +188,22 @@ export const LibraryView: React.FC = () => {
       if (selectedTypeFilter !== 'ALL' && p.workoutType !== selectedTypeFilter) {
         return false;
       }
+      if (selectedDurationFilter !== 'ALL') {
+        const dur = p.durationMinutes;
+        if (selectedDurationFilter === 'le10') {
+          if (!(p.isBiteSize || (typeof dur === 'number' && dur > 0 && dur <= 10))) {
+            return false;
+          }
+        } else if (selectedDurationFilter === '15_30') {
+          if (!(typeof dur === 'number' && dur >= 15 && dur <= 30)) {
+            return false;
+          }
+        } else if (selectedDurationFilter === 'gt30') {
+          if (!(typeof dur === 'number' && dur > 30)) {
+            return false;
+          }
+        }
+      }
       if (selectedTagFilter !== 'ALL' && !p.tags?.includes(selectedTagFilter)) {
         return false;
       }
@@ -197,7 +218,14 @@ export const LibraryView: React.FC = () => {
       }
       return true;
     });
-  }, [presets, selectedProgramFilter, selectedTypeFilter, selectedTagFilter, searchQuery]);
+  }, [
+    presets,
+    selectedProgramFilter,
+    selectedTypeFilter,
+    selectedDurationFilter,
+    selectedTagFilter,
+    searchQuery,
+  ]);
 
   const handleCreateNewPreset = () => {
     const now = new Date().toISOString();
@@ -312,6 +340,35 @@ export const LibraryView: React.FC = () => {
           </select>
         </div>
 
+        {/* Compact Duration Filter Bar */}
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-[11px] font-bold text-slate-400 inline-flex items-center gap-1 mr-1">
+            <Clock className="w-3.5 h-3.5" />
+            Duration:
+          </span>
+          {(
+            [
+              { id: 'ALL', label: 'All' },
+              { id: 'le10', label: '≤10m' },
+              { id: '15_30', label: '15–30m' },
+              { id: 'gt30', label: '30m+' },
+            ] as const
+          ).map((opt) => (
+            <button
+              key={opt.id}
+              type="button"
+              onClick={() => setSelectedDurationFilter(opt.id)}
+              className={`px-2.5 py-1 rounded-xl text-[11px] font-bold transition-colors ${
+                selectedDurationFilter === opt.id
+                  ? 'bg-orange-500 text-white shadow-2xs'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+
         {/* Tag Filter Pills */}
         {allTags.length > 1 && (
           <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
@@ -346,6 +403,7 @@ export const LibraryView: React.FC = () => {
               setSearchQuery('');
               setSelectedProgramFilter('ALL');
               setSelectedTypeFilter('ALL');
+              setSelectedDurationFilter('ALL');
               setSelectedTagFilter('ALL');
             }}
             className="text-xs font-bold text-orange-500 hover:underline"
@@ -372,6 +430,17 @@ export const LibraryView: React.FC = () => {
                       <span className="px-2.5 py-0.5 rounded-lg text-[10px] font-bold uppercase tracking-wider bg-orange-500/15 text-orange-600 dark:text-orange-400">
                         {preset.workoutType}
                       </span>
+                      {preset.isBiteSize ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold uppercase tracking-wider bg-amber-500/15 text-amber-700 dark:text-amber-300">
+                          <Zap className="w-3 h-3 fill-current" />
+                          Bite-Size{preset.durationMinutes ? ` · ${preset.durationMinutes}m` : ''}
+                        </span>
+                      ) : preset.durationMinutes ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                          <Clock className="w-3 h-3 text-orange-500" />
+                          {preset.durationMinutes}m
+                        </span>
+                      ) : null}
                       {preset.legacyWorkoutId && (
                         <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded-lg bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
                           {preset.legacyWorkoutId}
@@ -779,6 +848,60 @@ export const LibraryView: React.FC = () => {
                   </div>
                 </div>
               )}
+
+              {/* Optional Target Duration & Bite-Size Movement Snack Toggle */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 rounded-2xl bg-slate-50/80 dark:bg-slate-800/50 border border-slate-200/70 dark:border-slate-700/70">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                    Target Duration (mins) — Optional
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={240}
+                    step={1}
+                    value={editingPreset.durationMinutes ?? ''}
+                    placeholder="e.g. 5, 10, 20, 45"
+                    onChange={(e) => {
+                      const raw = e.target.value.trim();
+                      const parsed = raw === '' ? undefined : Math.max(1, Math.round(Number(raw)));
+                      setEditingPreset({
+                        ...editingPreset,
+                        durationMinutes: Number.isFinite(parsed as number) ? parsed : undefined,
+                      });
+                    }}
+                    className="w-full px-3 py-1.5 text-xs font-mono font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 focus:outline-none focus:border-orange-500"
+                  />
+                </div>
+
+                <label className="flex items-center justify-between gap-2.5 px-3 py-2 rounded-xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-700/80 cursor-pointer">
+                  <div className="min-w-0">
+                    <div className="text-xs font-bold flex items-center gap-1 text-slate-800 dark:text-slate-100">
+                      <Zap className="w-3.5 h-3.5 text-amber-500 fill-current shrink-0" />
+                      <span className="truncate">Bite-Size / Movement Snack</span>
+                    </div>
+                    <div className="text-[10px] text-slate-500 truncate">
+                      Show in quick ⚡ Bite-Size drawer
+                    </div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(editingPreset.isBiteSize)}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      setEditingPreset({
+                        ...editingPreset,
+                        isBiteSize: checked,
+                        durationMinutes:
+                          checked && !editingPreset.durationMinutes
+                            ? 5
+                            : editingPreset.durationMinutes,
+                      });
+                    }}
+                    className="rounded accent-orange-500 w-4 h-4 shrink-0"
+                  />
+                </label>
+              </div>
 
               {/* Row 2: Always-Collapsed Summary Chips (Programs, Tags, Timer, Notes) */}
               {(() => {

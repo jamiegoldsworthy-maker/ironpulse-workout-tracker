@@ -548,6 +548,11 @@ export function buildCoachReviewExport(params: CoachReviewExportParams): {
       workoutId: log.presetUuid,
       workoutTitle: log.workoutTitleSnapshot,
       workoutType: log.workoutType,
+      ...(log.isBiteSize || log.slotRole === 'Bite-Size'
+        ? { isBiteSize: true, slot: 'Bite-Size' }
+        : log.slotRole
+        ? { slot: log.slotRole }
+        : {}),
       ...(durationMin !== undefined ? { durationMin } : {}),
       totalVolumeKg: Math.round((log.totalSessionVolumeKg || 0) * 10) / 10,
       ...(log.completedRounds !== undefined
@@ -676,6 +681,8 @@ export function buildCoachReviewExport(params: CoachReviewExportParams): {
         slug: p.slug,
         title: p.title,
         workoutType: p.workoutType,
+        ...(p.durationMinutes !== undefined ? { durationMinutes: p.durationMinutes } : {}),
+        ...(p.isBiteSize ? { isBiteSize: true } : {}),
       }));
   }
 

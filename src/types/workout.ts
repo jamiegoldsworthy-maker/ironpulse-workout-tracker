@@ -5,6 +5,7 @@ export const DEFAULT_WORKOUT_CATEGORIES: string[] = [
   'Cardio',
   'Conditioning',
   'Mobility',
+  'Physio',
   'Complex',
   'Circuit/HIIT',
   'Core',
@@ -103,6 +104,8 @@ export interface WorkoutPreset {
   workoutNotes?: string;
   programIds: string[];
   tags: string[];
+  durationMinutes?: number;
+  isBiteSize?: boolean;
   defaultTimer?: DefaultTimerConfig;
   exercises: PresetExercise[];
   isArchived?: boolean;
@@ -244,6 +247,8 @@ export interface WorkoutLog {
   extraRungs?: number;
   programUuid?: string;
   scheduleItemUuid?: string;
+  slotRole?: string;
+  isBiteSize?: boolean;
   status: LogStatus;
   sessionNotes?: string;
   totalSessionVolumeKg: number;

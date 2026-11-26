@@ -175,6 +175,27 @@ export function extractIronPulseEntryId(notes?: string): string | null {
   return match ? match[1].trim() : null;
 }
 
+/**
+ * Normalizes a Google Task or IronPulse workout title for resilient fallback matching:
+ * strips leading emojis/punctuation and trailing slot suffixes like "(Primary)", "(Secondary)", "(Chained)".
+ */
+export function normalizeTaskWorkoutTitle(raw?: string): string {
+  if (!raw) return '';
+  return raw
+    .replace(/^[^\p{L}\p{N}]+/u, '')
+    .replace(/\s*\((?:primary|secondary|chained|core|mobility|finisher|bite-size)\)\s*$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function titlesMatchResilient(taskTitle: string | undefined, targetWorkoutName: string | undefined): boolean {
+  const normTask = normalizeTaskWorkoutTitle(taskTitle);
+  const normTarget = normalizeTaskWorkoutTitle(targetWorkoutName);
+  if (!normTask || !normTarget) return false;
+  return normTask === normTarget || normTask.includes(normTarget) || normTarget.includes(normTask);
+}
+
 function buildTaskTitle(item: ScheduledItem, preset?: WorkoutPreset): string {
   const name = preset?.title || 'Workout';
   const slotLabel =
@@ -331,13 +352,25 @@ export async function syncGoogleTasksTwoWay(params: {
 
     const endDate = shiftIsoDate(params.todayIso, 6);
     const scheduleByEntryId = new Map<string, { date: string; item: ScheduledItem }>();
+    const completedDateTitles = new Map<string, string[]>();
     for (const [date, daySch] of Object.entries(params.schedules)) {
       for (const item of daySch?.items || []) {
         scheduleByEntryId.set(item.scheduleItemUuid, { date, item });
+        const st = normalizeScheduleStatus(item.status);
+        if (st === 'completed' || params.hasCompletedLogFor(date, item)) {
+          const preset = params.presets.find((p) => p.presetUuid === item.presetUuid);
+          const normTitle = normalizeTaskWorkoutTitle(preset?.title);
+          if (normTitle) {
+            const list = completedDateTitles.get(date) || [];
+            if (!list.includes(normTitle)) list.push(normTitle);
+            completedDateTitles.set(date, list);
+          }
+        }
       }
     }
 
     const taskByEntryId = new Map<string, GoogleTaskItem>();
+    const openTaskByDateTitle = new Map<string, GoogleTaskItem>();
     const pulledCompleted: PendingTaskCompletion[] = [];
     const pulledReschedules: TaskReschedulePatch[] = [];
     let deletedStaleCount = 0;
@@ -346,15 +379,38 @@ export async function syncGoogleTasksTwoWay(params: {
     const dismissedSet = new Set(params.dismissedTaskCompletionIds || []);
     const hasHydratedSchedules = scheduleByEntryId.size > 0;
 
-    // 1. Inbound: Check tasks in today..today+6 window for completions & reschedules
+    // 1. Inbound & Completion Sweep across all visible tasks
     for (const task of remoteTasks) {
       if (task.deleted || task.hidden) continue;
       const entryId = extractIronPulseEntryId(task.notes);
+      const taskDueDate = task.due ? task.due.slice(0, 10) : null;
+
+      // Sweep any open (needsAction) task whose date + normalized workout title matches a completed local schedule entry,
+      // even if its scheduleId changed after a reset/swap or tag was stripped.
+      if (task.status !== 'completed' && taskDueDate) {
+        const completedTitlesForDate = completedDateTitles.get(taskDueDate) || [];
+        const matchesCompletedByTitle = completedTitlesForDate.some((ct) =>
+          titlesMatchResilient(task.title, ct)
+        );
+        if (matchesCompletedByTitle) {
+          await tasksFetch(
+            `https://tasks.googleapis.com/tasks/v1/lists/${encodeURIComponent(
+              listId
+            )}/tasks/${encodeURIComponent(task.id)}`,
+            token,
+            {
+              method: 'PATCH',
+              body: JSON.stringify({ status: 'completed' }),
+            }
+          );
+          continue;
+        }
+      }
+
       if (!entryId) continue;
 
       const localEntry = scheduleByEntryId.get(entryId);
       const localStatus = localEntry ? normalizeScheduleStatus(localEntry.item.status) : null;
-      const taskDueDate = task.due ? task.due.slice(0, 10) : null;
 
       if (localEntry && !excludedSet.has(entryId) && localStatus !== 'skipped') {
         const isInWindow =
@@ -436,6 +492,10 @@ export async function syncGoogleTasksTwoWay(params: {
       // Only index active needsAction tasks so completed/archived tasks don't block pushing fresh tasks
       if (task.status !== 'completed') {
         taskByEntryId.set(entryId, task);
+        const normTaskTitle = normalizeTaskWorkoutTitle(task.title);
+        if (taskDueDate && normTaskTitle) {
+          openTaskByDateTitle.set(`${taskDueDate}::${normTaskTitle}`, task);
+        }
       }
     }
 
@@ -452,9 +512,11 @@ export async function syncGoogleTasksTwoWay(params: {
         const itemStatus = normalizeScheduleStatus(item.status);
         if (itemStatus !== 'pending' && itemStatus !== 'in_progress') continue;
         if (excludedSet.has(item.scheduleItemUuid)) continue;
-        const existingTask = taskByEntryId.get(item.scheduleItemUuid);
-
         const preset = params.presets.find((p) => p.presetUuid === item.presetUuid);
+        const normPresetTitle = normalizeTaskWorkoutTitle(preset?.title);
+        const existingTask =
+          taskByEntryId.get(item.scheduleItemUuid) ||
+          (normPresetTitle ? openTaskByDateTitle.get(`${date}::${normPresetTitle}`) : undefined);
         const payload = {
           title: buildTaskTitle(item, preset),
           due: `${date}T00:00:00.000Z`,
@@ -509,28 +571,49 @@ export interface TaskLookupInput {
   workoutName?: string;
 }
 
+function findMatchingTasks(
+  tasks: GoogleTaskItem[],
+  lookup: TaskLookupInput,
+  options?: { openOnly?: boolean }
+): GoogleTaskItem[] {
+  const candidates = tasks.filter(
+    (t) => !t.deleted && !t.hidden && (!options?.openOnly || t.status !== 'completed')
+  );
+  const matched = new Map<string, GoogleTaskItem>();
+
+  // 1. Primary match: exact [IronPulse:${scheduleId}] tag in task notes
+  if (lookup.scheduleId) {
+    for (const t of candidates) {
+      if (extractIronPulseEntryId(t.notes) === lookup.scheduleId) {
+        matched.set(t.id, t);
+      }
+    }
+  }
+
+  // 2. Resilient fallback: due date (YYYY-MM-DD) + normalized workout title (ignoring slot suffixes)
+  if (lookup.date && lookup.workoutName) {
+    for (const t of candidates) {
+      const dueDate = t.due ? t.due.slice(0, 10) : '';
+      if (dueDate === lookup.date && titlesMatchResilient(t.title, lookup.workoutName)) {
+        matched.set(t.id, t);
+      }
+    }
+  }
+
+  return Array.from(matched.values());
+}
+
 function findMatchingTask(
   tasks: GoogleTaskItem[],
   lookup: TaskLookupInput
 ): GoogleTaskItem | undefined {
-  if (lookup.scheduleId) {
-    const byTag = tasks.find(
-      (t) => !t.deleted && extractIronPulseEntryId(t.notes) === lookup.scheduleId
-    );
-    if (byTag) return byTag;
-  }
-  if (lookup.date && lookup.workoutName) {
-    const needle = lookup.workoutName.trim().toLowerCase();
-    return tasks.find((t) => {
-      if (t.deleted) return false;
-      const dueDate = t.due ? t.due.slice(0, 10) : '';
-      return dueDate === lookup.date && (t.title || '').toLowerCase().includes(needle);
-    });
-  }
-  return undefined;
+  const openMatches = findMatchingTasks(tasks, lookup, { openOnly: true });
+  if (openMatches.length > 0) return openMatches[0];
+  const anyMatches = findMatchingTasks(tasks, lookup);
+  return anyMatches[0];
 }
 
-export async function completeGoogleTaskForSchedule(
+export async function completeGoogleTaskForWorkout(
   scheduleIdOrLookup: string | TaskLookupInput
 ): Promise<TasksActionResult> {
   const lookup: TaskLookupInput =
@@ -545,27 +628,44 @@ export async function completeGoogleTaskForSchedule(
     }
     const listId = await resolveTasksListId(token);
     const tasks = await fetchAllTasksInList(listId, token);
-    const match = findMatchingTask(tasks, lookup);
-    if (!match) return { status: 'not-found' };
-    if (match.status === 'completed') return { status: 'synced' };
+    const openMatches = findMatchingTasks(tasks, lookup, { openOnly: true });
 
-    const res = await tasksFetch(
-      `https://tasks.googleapis.com/tasks/v1/lists/${encodeURIComponent(
-        listId
-      )}/tasks/${encodeURIComponent(match.id)}`,
-      token,
-      {
-        method: 'PATCH',
-        body: JSON.stringify({ status: 'completed' }),
+    if (openMatches.length === 0) {
+      const anyMatches = findMatchingTasks(tasks, lookup);
+      if (anyMatches.some((t) => t.status === 'completed')) {
+        return { status: 'synced' };
       }
-    );
-    return res.ok
+      return { status: 'not-found' };
+    }
+
+    let anySuccess = false;
+    let lastErrorStatus = 0;
+    for (const task of openMatches) {
+      const res = await tasksFetch(
+        `https://tasks.googleapis.com/tasks/v1/lists/${encodeURIComponent(
+          listId
+        )}/tasks/${encodeURIComponent(task.id)}`,
+        token,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({ status: 'completed' }),
+        }
+      );
+      if (res.ok) {
+        anySuccess = true;
+      } else {
+        lastErrorStatus = res.status;
+      }
+    }
+    return anySuccess
       ? { status: 'synced' }
-      : { status: 'error', detail: `HTTP ${res.status}` };
+      : { status: 'error', detail: `HTTP ${lastErrorStatus}` };
   } catch (err: unknown) {
     return { status: 'error', detail: getTasksErrorMessage(err, 'Network error') };
   }
 }
+
+export const completeGoogleTaskForSchedule = completeGoogleTaskForWorkout;
 
 export async function deleteGoogleTaskForSchedule(
   scheduleIdOrLookup: string | TaskLookupInput

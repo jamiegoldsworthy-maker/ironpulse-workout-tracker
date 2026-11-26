@@ -22,6 +22,7 @@ import {
   WorkoutProgram,
 } from '../types/workout';
 import {
+  DEFAULT_BITE_SIZE_PRESETS,
   SEED_EXERCISES,
   SEED_LOGS,
   SEED_META,
@@ -34,7 +35,7 @@ import {
   PendingTaskCompletion,
   TasksActionResult,
   checkCompletedTasksInbound as fetchCompletedTasksInbound,
-  completeGoogleTaskForSchedule,
+  completeGoogleTaskForWorkout,
   deleteGoogleTaskForSchedule,
   getCachedGoogleTasksToken,
   syncGoogleTasksTwoWay,
@@ -209,6 +210,7 @@ interface WorkoutStoreState {
   syncStatus: 'local' | 'syncing' | 'synced' | 'error';
   lastSyncError?: string;
   hasSeeded: boolean;
+  hasSeededBiteSizePresets: boolean;
   hasCompletedCloudBootstrap: boolean;
 
   // Active Navigation & Log Floor state
@@ -316,6 +318,15 @@ interface WorkoutStoreState {
   resetDraftWorkoutToNotStarted: (logUuid: string) => Promise<void>;
   syncDraftToFirestore: (logUuid: string) => Promise<{ ok: boolean; error?: string }>;
   saveAllDraftWorkouts: () => Promise<void>;
+  logBiteSizeWorkout: (
+    presetUuid: string,
+    options?: {
+      date?: string;
+      durationMinutes?: number;
+      elapsedSeconds?: number;
+      sessionNotes?: string;
+    }
+  ) => Promise<{ ok: boolean; log?: WorkoutLog }>;
 
   // Ghost Text & History Lookup
   getGhostExerciseData: (
@@ -731,10 +742,15 @@ function deduplicateLogs(
 
   // Pass 2: Deduplicate repeated copies of the same workout (date + presetUuid/title)
   // while respecting intentional multi-slot duplicates if a date's schedule literally lists
-  // the same presetUuid more than once.
+  // the same presetUuid more than once, and preserving all Bite-Size movement snacks.
   const groupedByDateWorkout = new Map<string, WorkoutLog[]>();
+  const keepIds = new Set<string>();
   for (const log of pass1List) {
     if (removed.has(log.logUuid)) continue;
+    if (log.isBiteSize || log.slotRole === 'Bite-Size') {
+      keepIds.add(log.logUuid);
+      continue;
+    }
     const workoutKey =
       log.presetUuid || (log.workoutTitleSnapshot || '').trim().toLowerCase() || log.logUuid;
     const key = `${log.date}::wkt::${workoutKey}`;
@@ -746,7 +762,6 @@ function deduplicateLogs(
     }
   }
 
-  const keepIds = new Set<string>();
   for (const [key, group] of groupedByDateWorkout.entries()) {
     if (group.length === 1) {
       keepIds.add(group[0].logUuid);
@@ -957,17 +972,19 @@ function buildInitialDraftsForDate(
 
     const drafts: DraftWorkoutCard[] = existingLogsForDate.map((l, idx) => {
       const normalizedStatus = normalizeLogStatus(l.status);
-      const linkedSched =
-        sortedScheduledItems.find(
-          (it) =>
-            !matchedSchedIds.has(it.scheduleItemUuid) &&
-            (it.linkedLogUuid === l.logUuid || it.scheduleItemUuid === l.scheduleItemUuid)
-        ) ||
-        sortedScheduledItems.find(
-          (it) =>
-            !matchedSchedIds.has(it.scheduleItemUuid) &&
-            (it.presetUuid === l.presetUuid || it.orderIndex === (l.chainOrderIndex ?? idx))
-        );
+      const isBiteSizeLog = Boolean(l.isBiteSize || l.slotRole === 'Bite-Size');
+      const linkedSched = isBiteSizeLog
+        ? undefined
+        : sortedScheduledItems.find(
+            (it) =>
+              !matchedSchedIds.has(it.scheduleItemUuid) &&
+              (it.linkedLogUuid === l.logUuid || it.scheduleItemUuid === l.scheduleItemUuid)
+          ) ||
+          sortedScheduledItems.find(
+            (it) =>
+              !matchedSchedIds.has(it.scheduleItemUuid) &&
+              (it.presetUuid === l.presetUuid || it.orderIndex === (l.chainOrderIndex ?? idx))
+          );
 
       if (linkedSched) {
         matchedSchedIds.add(linkedSched.scheduleItemUuid);
@@ -1028,7 +1045,9 @@ function buildInitialDraftsForDate(
         status: effectiveStatus,
         isSaved: effectiveStatus === 'completed' || effectiveStatus === 'skipped',
         coachNotes: linkedSched?.coachNotes,
-        slotRole: linkedSched?.slotRole || (idx === 0 ? 'Primary' : `Chained #${idx + 1}`),
+        slotRole:
+          l.slotRole || linkedSched?.slotRole || (idx === 0 ? 'Primary' : `Chained #${idx + 1}`),
+        isBiteSize: isBiteSizeLog || undefined,
         updatePresetOnSave: false,
       };
     });
@@ -1162,10 +1181,14 @@ function draftToWorkoutLog(
     extraRungs: draft.extraRungs,
     programUuid: draft.programUuid,
     scheduleItemUuid: draft.scheduleItemUuid,
+    slotRole: draft.slotRole,
+    isBiteSize: draft.isBiteSize,
     status: effectiveStatus,
     sessionNotes: draft.sessionNotes,
     totalSessionVolumeKg,
     durationSec: draft.durationSec,
+    durationMinutes: draft.durationMinutes,
+    elapsedSeconds: draft.elapsedSeconds,
     exerciseUuids: recalcedExercises.map((e) => e.exerciseUuid),
     exercises: recalcedExercises,
     createdAt: draft.createdAt || now,
@@ -1215,6 +1238,34 @@ function sortPresetsAlphabetically(presets: WorkoutPreset[]): WorkoutPreset[] {
   );
 }
 
+/**
+ * Ensures the 5 default Bite-Size / Movement Snack presets exist (matched by normalized title)
+ * without overwriting or duplicating any user-customized presets.
+ */
+function mergeDefaultBiteSizePresets(existingPresets: WorkoutPreset[]): {
+  presets: WorkoutPreset[];
+  added: WorkoutPreset[];
+} {
+  const existingTitles = new Set(
+    (existingPresets || []).map((p) => (p.title || '').trim().toLowerCase())
+  );
+  const existingIds = new Set((existingPresets || []).map((p) => p.presetUuid));
+  const added: WorkoutPreset[] = [];
+  for (const seed of DEFAULT_BITE_SIZE_PRESETS) {
+    const normTitle = seed.title.trim().toLowerCase();
+    if (!existingTitles.has(normTitle) && !existingIds.has(seed.presetUuid)) {
+      added.push(seed);
+    }
+  }
+  if (added.length === 0) {
+    return { presets: existingPresets, added: [] };
+  }
+  return {
+    presets: sortPresetsAlphabetically([...existingPresets, ...added]),
+    added,
+  };
+}
+
 export const useWorkoutStore = create<WorkoutStoreState>()(
   persist(
     (set, get) => ({
@@ -1230,6 +1281,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
       authUser: null,
       syncStatus: 'local',
       hasSeeded: false,
+      hasSeededBiteSizePresets: false,
       hasCompletedCloudBootstrap: false,
 
       activeTab: getInitialActiveTab(),
@@ -1318,9 +1370,6 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           if (tasksRes.ok) {
             flushedTasks = true;
           }
-        } else if (!getCachedGoogleTasksToken()) {
-          // Clear queued flag if no active session token exists so it doesn't spin endlessly
-          flushedTasks = true;
         }
 
         const stillNeedsFirestore = queue.firestoreSyncNeeded && !flushedFirestore;
@@ -2764,6 +2813,9 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         });
 
         const handleTasksFeedback = (res: TasksActionResult) => {
+          if (res.status === 'no-token' || res.status === 'error') {
+            get().queueOfflineSync('tasks');
+          }
           if (res.status === 'synced' || res.status === 'no-token') {
             const nowIso = new Date().toISOString();
             set({
@@ -2772,7 +2824,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
                   ? { status: 'synced', message: '✓ Synced to Tasks' }
                   : {
                       status: 'no-token',
-                      message: '⚠ Not synced (Tasks session expired — tap Master Sync)',
+                      message: '⚠ Queued for Tasks sync (tap Master Sync to authorize)',
                     },
               ...(res.status === 'synced'
                 ? {
@@ -2788,20 +2840,25 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           }
         };
 
-        if (isNavigatorOffline()) {
-          get().queueOfflineSync('both');
-        } else if (finalStatus === 'completed') {
-          void completeGoogleTaskForSchedule({
-            scheduleId: matchedScheduleIdForTasks,
-            date: draft.date,
-            workoutName: draft.workoutTitleSnapshot,
-          }).then(handleTasksFeedback);
-        } else if (finalStatus === 'skipped') {
-          void deleteGoogleTaskForSchedule({
-            scheduleId: matchedScheduleIdForTasks,
-            date: draft.date,
-            workoutName: draft.workoutTitleSnapshot,
-          }).then(handleTasksFeedback);
+        const isBiteSizeWorkout = Boolean(draft.isBiteSize || draft.slotRole === 'Bite-Size');
+        if (!isBiteSizeWorkout) {
+          if (isNavigatorOffline()) {
+            get().queueOfflineSync('both');
+          } else if (finalStatus === 'completed') {
+            void completeGoogleTaskForWorkout({
+              scheduleId: matchedScheduleIdForTasks,
+              date: draft.date,
+              workoutName: draft.workoutTitleSnapshot,
+            }).then(handleTasksFeedback);
+          } else if (finalStatus === 'skipped') {
+            void deleteGoogleTaskForSchedule({
+              scheduleId: matchedScheduleIdForTasks,
+              date: draft.date,
+              workoutName: draft.workoutTitleSnapshot,
+            }).then(handleTasksFeedback);
+          }
+        } else if (isNavigatorOffline()) {
+          get().queueOfflineSync('firestore');
         }
 
         if (state.authUser) {
@@ -3048,6 +3105,125 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
             normalizeLogStatus(d.status) === 'skipped' ? 'skipped' : 'completed'
           );
         }
+      },
+
+      logBiteSizeWorkout: async (presetUuid, options) => {
+        const state = get();
+        const preset = state.presets.find((p) => p.presetUuid === presetUuid);
+        if (!preset) return { ok: false };
+
+        const date = options?.date || state.activeDate;
+        const now = new Date().toISOString();
+        const uid = state.authUser?.uid || state.meta.uid;
+        const durationMin = Math.max(
+          1,
+          Math.round(options?.durationMinutes ?? preset.durationMinutes ?? 5)
+        );
+        const elapsedSec =
+          options?.elapsedSeconds !== undefined && options.elapsedSeconds > 0
+            ? Math.round(options.elapsedSeconds)
+            : durationMin * 60;
+
+        const seq = state.meta.nextLogSequenceNumber;
+        const displayId = formatDisplayId(seq);
+        const sessionGroupUuid = `ses-bite-${uuidv4()}`;
+
+        const built = createDraftFromPreset(
+          preset,
+          date,
+          sessionGroupUuid,
+          state.draftWorkouts.length,
+          seq,
+          state.meta.defaultDistanceUnit,
+          { slotRole: 'Bite-Size' }
+        );
+
+        const completedExercises: LoggedExercise[] = built.exercises.map((ex) => {
+          if (ex.trackingType === 'mobility') {
+            return { ...ex, isCompleted: true };
+          }
+          if (ex.trackingType === 'cardio') {
+            return {
+              ...ex,
+              durationSec: ex.durationSec || elapsedSec,
+              isCompleted: true,
+            };
+          }
+          const parsedRep = Number((ex.targetRepsLabel || '').match(/\d+/)?.[0] || 0);
+          const sets = (ex.sets || []).map((s) => ({
+            ...s,
+            reps: s.reps > 0 ? s.reps : parsedRep,
+          }));
+          return recalculateLoggedExercise({ ...ex, sets });
+        });
+
+        const totalSessionVolumeKg =
+          Math.round(
+            completedExercises.reduce((acc, e) => acc + (Number(e.totalLoadKg) || 0), 0) * 10
+          ) / 10;
+
+        const logRecord: WorkoutLog = {
+          logUuid: built.logUuid,
+          uid,
+          displayId,
+          sessionGroupUuid,
+          chainOrderIndex: state.draftWorkouts.length,
+          date,
+          presetUuid: preset.presetUuid,
+          workoutTitleSnapshot: preset.title,
+          workoutType: preset.workoutType,
+          formatMode: preset.formatMode,
+          slotRole: 'Bite-Size',
+          isBiteSize: true,
+          status: 'completed',
+          sessionNotes: options?.sessionNotes || '',
+          totalSessionVolumeKg,
+          durationMinutes: durationMin,
+          durationSec: elapsedSec,
+          elapsedSeconds: elapsedSec,
+          exerciseUuids: completedExercises.map((e) => e.exerciseUuid),
+          exercises: completedExercises,
+          createdAt: now,
+          updatedAt: now,
+        };
+
+        const draftCard: DraftWorkoutCard = {
+          ...logRecord,
+          isSaved: true,
+          slotRole: 'Bite-Size',
+          isBiteSize: true,
+          updatePresetOnSave: false,
+        };
+
+        const nextMeta: UserMeta = {
+          ...state.meta,
+          nextLogSequenceNumber: seq + 1,
+          updatedAt: now,
+        };
+
+        // Intentionally does NOT create a wt_schedule slot or push to Google Tasks
+        set((s) => ({
+          logs: [logRecord, ...s.logs],
+          meta: nextMeta,
+          ...(s.activeDate === date
+            ? { draftWorkouts: [...s.draftWorkouts, draftCard] }
+            : {}),
+        }));
+
+        if (isNavigatorOffline()) {
+          get().queueOfflineSync('firestore');
+        } else if (state.authUser) {
+          const authUid = state.authUser.uid;
+          await Promise.all([
+            upsertFirestoreDoc('wt_logs', logRecord.logUuid, logRecord, authUid),
+            upsertFirestoreDoc('wt_meta', authUid, nextMeta, authUid),
+          ]).catch((err) => {
+            console.error('[Sync] Failed to save bite-size log to Firestore:', err);
+            get().queueOfflineSync('firestore');
+          });
+        }
+
+        return { ok: true, log: logRecord };
       },
 
       getGhostExerciseData: (
@@ -3491,11 +3667,18 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         }
 
         const dismissedSet = new Set(get().dismissedTaskCompletionIds);
+        const prevQueue = get().offlineSyncQueue;
         set({
           schedules: nextSchedules,
           pendingTaskCompletions: res.pulledCompleted.filter(
             (p) => !dismissedSet.has(p.scheduleItemUuid)
           ),
+          offlineSyncQueue: {
+            ...prevQueue,
+            googleTasksSyncNeeded: false,
+            pendingCount: prevQueue.firestoreSyncNeeded ? prevQueue.pendingCount : 0,
+            queuedAt: prevQueue.firestoreSyncNeeded ? prevQueue.queuedAt : undefined,
+          },
           lastTasksSync: {
             timestamp: nowIso,
             status: 'success',
@@ -3678,6 +3861,20 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
             (p) => p.scheduleItemUuid !== pending.scheduleItemUuid
           ),
         }));
+
+        if (isNavigatorOffline()) {
+          get().queueOfflineSync('both');
+        } else {
+          void completeGoogleTaskForWorkout({
+            scheduleId: pending.scheduleItemUuid,
+            date: pending.date,
+            workoutName: preset?.title || pending.workoutTitle,
+          }).then((res) => {
+            if (res.status === 'no-token' || res.status === 'error') {
+              get().queueOfflineSync('tasks');
+            }
+          });
+        }
 
         if (state.authUser) {
           const uid = state.authUser.uid;
@@ -4299,6 +4496,9 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
 
         const matchedPreset = state.presets.find((p) => p.presetUuid === updatedItem.presetUuid);
         const handleTasksFeedback = (res: TasksActionResult, actionLabel: string) => {
+          if (res.status === 'no-token' || res.status === 'error') {
+            get().queueOfflineSync('tasks');
+          }
           if (res.status === 'synced' || res.status === 'no-token') {
             const ts = new Date().toISOString();
             set({
@@ -4307,7 +4507,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
                   ? { status: 'synced', message: '✓ Synced to Tasks' }
                   : {
                       status: 'no-token',
-                      message: '⚠ Not synced (Tasks session expired — tap Sync Tasks)',
+                      message: '⚠ Queued for Tasks sync (tap Master Sync to authorize)',
                     },
               ...(res.status === 'synced'
                 ? { lastTasksSync: { timestamp: ts, status: 'success', message: actionLabel } }
@@ -4320,7 +4520,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         if (isNavigatorOffline()) {
           get().queueOfflineSync('both');
         } else if (canonicalStatus === 'completed') {
-          void completeGoogleTaskForSchedule({
+          void completeGoogleTaskForWorkout({
             scheduleId: scheduleItemUuid,
             date,
             workoutName: matchedPreset?.title,
@@ -5816,7 +6016,21 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
                 )
               : state.contextBlocks;
           const nextExercises = remote.exercises.length > 0 ? remote.exercises : state.exercises;
-          const nextPresets = remote.presets.length > 0 ? remote.presets : state.presets;
+          const basePresets = remote.presets.length > 0 ? remote.presets : state.presets;
+          const biteSeed = state.hasSeededBiteSizePresets
+            ? { presets: basePresets, added: [] as WorkoutPreset[] }
+            : mergeDefaultBiteSizePresets(basePresets);
+          const nextPresets = biteSeed.presets;
+          if (biteSeed.added.length > 0 && state.authUser) {
+            const authUid = state.authUser.uid;
+            Promise.all(
+              biteSeed.added.map((pre) =>
+                upsertFirestoreDoc('wt_presets', pre.presetUuid, pre, authUid)
+              )
+            ).catch((err) => {
+              console.error('[Sync] Failed to seed default Bite-Size presets in Firestore:', err);
+            });
+          }
           const nextPrograms = remote.programs.length > 0 ? remote.programs : state.programs;
           // NEVER fall back to local/seed logs when the cloud account exists —
           // if cloud wt_logs is empty, all logs were deleted!
@@ -5876,6 +6090,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
             syncStatus: 'synced',
             lastSyncError: undefined,
             hasSeeded: true,
+            hasSeededBiteSizePresets: true,
             hasCompletedCloudBootstrap: true,
           });
 
@@ -6061,6 +6276,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         meta: state.meta,
         categories: state.categories,
         hasSeeded: state.hasSeeded,
+        hasSeededBiteSizePresets: state.hasSeededBiteSizePresets,
         viewportMode: state.viewportMode,
         logLayoutMode: state.logLayoutMode,
         logDensityMode: state.logDensityMode,
@@ -6077,11 +6293,16 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
       onRehydrateStorage: () => (rehydratedState, error) => {
         if (error || !rehydratedState) return;
 
+        const seededPresetsResult = rehydratedState.hasSeededBiteSizePresets
+          ? { presets: rehydratedState.presets || [], added: [] as WorkoutPreset[] }
+          : mergeDefaultBiteSizePresets(rehydratedState.presets || []);
+        const nextPresetsList = seededPresetsResult.presets;
+
         // Migrate any legacy 'did_not_complete' / 'incomplete' statuses and reconcile wt_schedule <-> wt_logs
         const reconciled = reconcileSchedulesAndLogs(
           rehydratedState.schedules || {},
           rehydratedState.logs || [],
-          rehydratedState.presets || [],
+          nextPresetsList,
           rehydratedState.meta?.defaultDistanceUnit || 'mi'
         );
         const normalizedSchedules = reconciled.schedules;
@@ -6090,7 +6311,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           rehydratedState.activeDate || getTodayIsoDate(),
           normalizedLogs,
           normalizedSchedules,
-          rehydratedState.presets || [],
+          nextPresetsList,
           rehydratedState.meta || SEED_META
         );
         const normalizedDrafts = refreshedFloor.drafts;
@@ -6098,10 +6319,18 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         if (rehydratedState.hasSeeded) {
           queueMicrotask(() => {
             useWorkoutStore.setState({
+              presets: nextPresetsList,
+              hasSeededBiteSizePresets: true,
               schedules: normalizedSchedules,
               logs: normalizedLogs,
               draftWorkouts: normalizedDrafts,
               contextBlocks: rehydratedState.contextBlocks || [],
+              categories: collectUsedCategories(
+                rehydratedState.categories,
+                nextPresetsList,
+                normalizedLogs,
+                rehydratedState.meta?.categories
+              ),
             });
           });
           return;
