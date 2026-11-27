@@ -90,6 +90,9 @@ export interface PresetExercise {
   groupId?: string;
   cardioMode?: CardioMode;
   defaultDistanceUnit?: DistanceUnit;
+  /** Canonical target duration in seconds for Mobility / Flow exercises (e.g. 30, 45, 60, 90) */
+  durationSeconds?: number;
+  /** Legacy minutes field retained only for automatic migration of older presets */
   defaultDurationMin?: number;
   baseNotes?: string;
 }

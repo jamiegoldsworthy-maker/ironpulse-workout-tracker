@@ -5,7 +5,11 @@ import {
 } from 'firebase/auth';
 import { initFirebaseServices } from '../services/firebase';
 import { DailySchedule, ScheduledItem, WorkoutPreset } from '../types/workout';
-import { shiftIsoDate } from '../utils/calculations';
+import {
+  formatMobilityDurationSeconds,
+  resolveMobilityDurationSeconds,
+  shiftIsoDate,
+} from '../utils/calculations';
 import { normalizeScheduleStatus } from '../utils/scheduleStatus';
 
 export const GOOGLE_TASKS_SCOPE = 'https://www.googleapis.com/auth/tasks';
@@ -214,9 +218,8 @@ function buildTaskNotes(item: ScheduledItem, preset?: WorkoutPreset): string {
       if (ex.trackingType === 'cardio') {
         lines.push(`• ${ex.exerciseName} (${ex.cardioMode || 'Cardio'})`);
       } else if (ex.trackingType === 'mobility') {
-        lines.push(
-          `• ${ex.exerciseName}${ex.defaultDurationMin ? ` (${ex.defaultDurationMin}m)` : ''}`
-        );
+        const mobLabel = formatMobilityDurationSeconds(resolveMobilityDurationSeconds(ex));
+        lines.push(`• ${ex.exerciseName}${mobLabel ? ` (${mobLabel})` : ''}`);
       } else {
         const load = ex.defaultWeight > 0 ? ` @ ${ex.defaultWeight}kg` : '';
         lines.push(`• ${ex.exerciseName}: ${ex.defaultSets}×${ex.defaultReps}${load}`);

@@ -578,3 +578,39 @@ export function formatReadableDate(isoDate: string): string {
     year: 'numeric',
   });
 }
+
+/**
+ * Resolves a Mobility / Flow exercise's target duration in seconds.
+ * Automatically migrates legacy small `defaultDurationMin` values (<= 15) by multiplying by 60
+ * so legacy 1-min entries become 60s cleanly.
+ */
+export function resolveMobilityDurationSeconds(ex: {
+  durationSeconds?: number;
+  durationSec?: number;
+  defaultDurationMin?: number;
+}): number {
+  if (typeof ex.durationSeconds === 'number' && Number.isFinite(ex.durationSeconds)) {
+    return Math.max(0, Math.round(ex.durationSeconds));
+  }
+  if (typeof ex.durationSec === 'number' && Number.isFinite(ex.durationSec)) {
+    return Math.max(0, Math.round(ex.durationSec));
+  }
+  if (typeof ex.defaultDurationMin === 'number' && Number.isFinite(ex.defaultDurationMin) && ex.defaultDurationMin > 0) {
+    return ex.defaultDurationMin <= 15
+      ? Math.round(ex.defaultDurationMin * 60)
+      : Math.round(ex.defaultDurationMin);
+  }
+  return 0;
+}
+
+/**
+ * Formats a Mobility / Flow duration in seconds for compact display (e.g. "45s", "60s", "1m 30s", "2m").
+ */
+export function formatMobilityDurationSeconds(seconds?: number): string {
+  if (!seconds || !Number.isFinite(seconds) || seconds <= 0) return '';
+  const rounded = Math.round(seconds);
+  if (rounded <= 60) return `${rounded}s`;
+  const mins = Math.floor(rounded / 60);
+  const rem = rounded % 60;
+  return rem === 0 ? `${mins}m` : `${mins}m ${rem}s`;
+}

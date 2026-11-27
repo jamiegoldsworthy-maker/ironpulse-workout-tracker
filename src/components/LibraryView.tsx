@@ -44,8 +44,10 @@ import {
 import {
   expandLadderSequence,
   formatLoadBadge,
+  formatMobilityDurationSeconds,
   groupConsecutiveExercises,
   inferDefaultMetricType,
+  resolveMobilityDurationSeconds,
   slugify,
   uuidv4,
 } from '../utils/calculations';
@@ -153,7 +155,9 @@ export const LibraryView: React.FC = () => {
 
   const addExerciseToPreset = () => {
     if (!editingPreset) return;
-    const isMobCategory = /^(mobility|yoga)$/i.test((editingPreset.workoutType || '').trim());
+    const isMobCategory = /^(mobility|yoga|physio|rehab|prehab|recovery)$/i.test(
+      (editingPreset.workoutType || '').trim()
+    );
     const newEx: PresetExercise = isMobCategory
       ? {
           exerciseUuid: `ex-${uuidv4()}`,
@@ -164,7 +168,7 @@ export const LibraryView: React.FC = () => {
           defaultWeight: 0,
           defaultSets: 1,
           defaultReps: '',
-          defaultDurationMin: 0,
+          durationSeconds: 60,
         }
       : {
           exerciseUuid: `ex-${uuidv4()}`,
@@ -651,9 +655,9 @@ export const LibraryView: React.FC = () => {
                             </div>
                             <span className="font-mono text-[11px] font-semibold text-orange-600 dark:text-orange-400 tabular-nums ml-auto">
                               {ex.trackingType === 'mobility'
-                                ? ex.defaultDurationMin
-                                  ? `${ex.defaultDurationMin} min`
-                                  : 'Flow'
+                                ? formatMobilityDurationSeconds(
+                                    resolveMobilityDurationSeconds(ex)
+                                  ) || 'Flow'
                                 : ex.trackingType === 'cardio'
                                 ? `${ex.cardioMode || 'Cardio'} (${ex.defaultDistanceUnit || 'mi'})`
                                 : `${ex.defaultSets} × ${ex.defaultReps}${
@@ -800,7 +804,7 @@ export const LibraryView: React.FC = () => {
                                 defaultWeight: 0,
                                 defaultSets: 1,
                                 defaultReps: '',
-                                defaultDurationMin: 0,
+                                durationSeconds: 60,
                                 baseNotes: ex0.baseNotes,
                               },
                             ];
@@ -2086,7 +2090,9 @@ export const LibraryView: React.FC = () => {
                                   ? {
                                       loadType: 'none',
                                       defaultWeight: 0,
-                                      defaultDurationMin: pe.defaultDurationMin ?? 0,
+                                      durationSeconds:
+                                        resolveMobilityDurationSeconds(pe) || 60,
+                                      defaultDurationMin: undefined,
                                     }
                                   : {}),
                               };
@@ -2163,24 +2169,37 @@ export const LibraryView: React.FC = () => {
                           <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-end">
                             <div className="sm:col-span-3">
                               <label className="block text-[10px] font-semibold text-slate-400 mb-0.5">
-                                Duration (min)
+                                Duration (sec)
                               </label>
                               <input
                                 type="number"
                                 min={0}
-                                value={pe.defaultDurationMin === undefined ? '' : pe.defaultDurationMin}
-                                placeholder="0 (un-timed)"
+                                step={5}
+                                value={
+                                  pe.durationSeconds !== undefined
+                                    ? pe.durationSeconds
+                                    : resolveMobilityDurationSeconds(pe) || ''
+                                }
+                                placeholder="60 (0=un-timed)"
                                 onChange={(e) => {
                                   const raw = e.target.value;
                                   const parsed = raw === '' ? undefined : Math.max(0, parseInt(raw, 10) || 0);
                                   const next = [...editingPreset.exercises];
-                                  next[idx] = { ...pe, defaultDurationMin: parsed };
+                                  next[idx] = {
+                                    ...pe,
+                                    durationSeconds: parsed,
+                                    defaultDurationMin: undefined,
+                                  };
                                   setEditingPreset({ ...editingPreset, exercises: next });
                                 }}
                                 onBlur={() => {
-                                  if (pe.defaultDurationMin === undefined) {
+                                  if (pe.durationSeconds === undefined) {
                                     const next = [...editingPreset.exercises];
-                                    next[idx] = { ...pe, defaultDurationMin: 0 };
+                                    next[idx] = {
+                                      ...pe,
+                                      durationSeconds: 0,
+                                      defaultDurationMin: undefined,
+                                    };
                                     setEditingPreset({ ...editingPreset, exercises: next });
                                   }
                                 }}

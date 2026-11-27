@@ -56,6 +56,7 @@ import {
   expandLadderSequence,
   formatExerciseMetricSummary,
   formatLoadBadge,
+  formatMobilityDurationSeconds,
   formatPace,
   formatReadableDate,
   formatSecondsAsMmSs,
@@ -64,6 +65,7 @@ import {
   inferDefaultMetricType,
   parseMmSsToSeconds,
   recalculateLoggedExercise,
+  resolveMobilityDurationSeconds,
   shiftIsoDate,
   slugify,
   uuidv4,
@@ -372,10 +374,11 @@ export const LogView: React.FC = () => {
         groupId: ex.groupId,
         cardioMode: ex.mode || existing?.cardioMode,
         defaultDistanceUnit: ex.distanceUnit || existing?.defaultDistanceUnit,
-        defaultDurationMin:
+        durationSeconds:
           ex.trackingType === 'mobility' && ex.durationSec
-            ? Math.round(ex.durationSec / 60)
-            : existing?.defaultDurationMin,
+            ? Math.round(ex.durationSec)
+            : existing?.durationSeconds,
+        defaultDurationMin: undefined,
         baseNotes: existing?.baseNotes,
       };
     });
@@ -2046,6 +2049,12 @@ export const LogView: React.FC = () => {
                               preset?.exercises?.[exIdx]?.baseNotes ||
                               '';
                             const cueNote = filterNoteForWeek(rawCueNote, activeWeekNumber);
+                            const mobDurationSec = resolveMobilityDurationSeconds({
+                              durationSec: ex.durationSec,
+                              durationSeconds: preset?.exercises?.[exIdx]?.durationSeconds,
+                              defaultDurationMin: preset?.exercises?.[exIdx]?.defaultDurationMin,
+                            });
+                            const mobDurationLabel = formatMobilityDurationSeconds(mobDurationSec);
                             const isActiveRotatingRow =
                               isRotatingEmomWorkout && activeRotatingMoveIdx === exIdx;
                             return (
@@ -2097,6 +2106,22 @@ export const LogView: React.FC = () => {
                                       <span className="px-1.5 py-0.5 rounded bg-orange-500/15 text-orange-600 dark:text-orange-400 text-[10px] font-bold shrink-0">
                                         {ex.side}
                                       </span>
+                                    )}
+                                    {mobDurationSec > 0 && (
+                                      <button
+                                        type="button"
+                                        title={`Start ${mobDurationLabel} countdown timer`}
+                                        onClick={() => {
+                                          startRestTimer(mobDurationSec);
+                                          triggerToast(
+                                            `Started ${mobDurationLabel} timer · ${ex.exerciseName}`
+                                          );
+                                        }}
+                                        className="px-1.5 py-0.5 rounded-md bg-orange-500/15 hover:bg-orange-500 text-orange-600 dark:text-orange-400 hover:text-white text-[10px] font-mono font-bold inline-flex items-center gap-0.5 transition-colors shrink-0 tabular-nums"
+                                      >
+                                        <Play className="w-2.5 h-2.5 fill-current" />
+                                        {mobDurationLabel}
+                                      </button>
                                     )}
                                   </div>
                                   {cueNote && (
@@ -2373,30 +2398,48 @@ export const LogView: React.FC = () => {
                                   <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">
                                     <div className="flex items-center gap-1.5 text-xs">
                                       <label className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                                        Duration (min)
+                                        Duration (sec)
                                       </label>
                                       <input
                                         type="number"
                                         min={0}
+                                        step={5}
                                         value={
                                           ex.durationSec !== undefined && ex.durationSec > 0
-                                            ? Math.round(ex.durationSec / 60)
+                                            ? Math.round(ex.durationSec)
                                             : ''
                                         }
-                                        placeholder="0"
+                                        placeholder="60"
                                         onChange={(e) => {
-                                          const mins = Math.max(0, parseInt(e.target.value, 10) || 0);
+                                          const secs = Math.max(0, parseInt(e.target.value, 10) || 0);
                                           updateDraftWorkout(draft.logUuid, (curr) => {
                                             const next = [...curr.exercises];
                                             next[exIdx] = {
                                               ...next[exIdx],
-                                              durationSec: mins * 60,
+                                              durationSec: secs,
                                             };
                                             return { ...curr, exercises: next };
                                           });
                                         }}
-                                        className="w-14 px-2 py-1 text-xs font-mono font-bold tabular-nums rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-center focus:outline-none focus:border-orange-500"
+                                        className="w-16 px-2 py-1 text-xs font-mono font-bold tabular-nums rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-center focus:outline-none focus:border-orange-500"
                                       />
+                                      {(ex.durationSec ?? 0) > 0 && (
+                                        <button
+                                          type="button"
+                                          title={`Start ${formatMobilityDurationSeconds(ex.durationSec)} countdown`}
+                                          onClick={() => {
+                                            const sec = Math.round(ex.durationSec || 0);
+                                            startRestTimer(sec);
+                                            triggerToast(
+                                              `Started ${formatMobilityDurationSeconds(sec)} timer`
+                                            );
+                                          }}
+                                          className="px-2 py-1 rounded-lg bg-orange-500/15 hover:bg-orange-500 text-orange-600 dark:text-orange-400 hover:text-white text-[11px] font-mono font-bold inline-flex items-center gap-1 transition-colors"
+                                        >
+                                          <Play className="w-3 h-3 fill-current" />
+                                          {formatMobilityDurationSeconds(ex.durationSec)}
+                                        </button>
+                                      )}
                                     </div>
                                     <button
                                       type="button"
@@ -2723,30 +2766,48 @@ export const LogView: React.FC = () => {
                                 <div className="p-3 rounded-2xl bg-slate-50/70 dark:bg-slate-800/35 border border-slate-200/70 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3">
                                   <div className="flex items-center gap-2">
                                     <label className="text-xs font-semibold text-slate-600 dark:text-slate-300">
-                                      Duration (min)
+                                      Duration (sec)
                                     </label>
                                     <input
                                       type="number"
                                       min={0}
+                                      step={5}
                                       value={
                                         ex.durationSec !== undefined && ex.durationSec > 0
-                                          ? Math.round(ex.durationSec / 60)
+                                          ? Math.round(ex.durationSec)
                                           : ''
                                       }
-                                      placeholder="0 (un-timed)"
+                                      placeholder="60 (0=un-timed)"
                                       onChange={(e) => {
-                                        const mins = Math.max(0, parseInt(e.target.value, 10) || 0);
+                                        const secs = Math.max(0, parseInt(e.target.value, 10) || 0);
                                         updateDraftWorkout(draft.logUuid, (curr) => {
                                           const next = [...curr.exercises];
                                           next[exIdx] = {
                                             ...next[exIdx],
-                                            durationSec: mins * 60,
+                                            durationSec: secs,
                                           };
                                           return { ...curr, exercises: next };
                                         });
                                       }}
                                       className="w-24 px-2.5 py-1.5 text-xs font-mono font-bold tabular-nums rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-center focus:outline-none focus:border-orange-500"
                                     />
+                                    {(ex.durationSec ?? 0) > 0 && (
+                                      <button
+                                        type="button"
+                                        title={`Start ${formatMobilityDurationSeconds(ex.durationSec)} countdown`}
+                                        onClick={() => {
+                                          const sec = Math.round(ex.durationSec || 0);
+                                          startRestTimer(sec);
+                                          triggerToast(
+                                            `Started ${formatMobilityDurationSeconds(sec)} timer`
+                                          );
+                                        }}
+                                        className="px-2.5 py-1.5 rounded-xl bg-orange-500/15 hover:bg-orange-500 text-orange-600 dark:text-orange-400 hover:text-white text-xs font-mono font-bold inline-flex items-center gap-1 transition-colors"
+                                      >
+                                        <Play className="w-3.5 h-3.5 fill-current" />
+                                        {formatMobilityDurationSeconds(ex.durationSec)}
+                                      </button>
+                                    )}
                                   </div>
 
                                   <button
@@ -3640,25 +3701,28 @@ export const LogView: React.FC = () => {
                           {isMobilityFlowWorkout && (
                             <div className="flex items-center gap-1.5 mr-auto">
                               <label className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">
-                                Flow Duration (min)
+                                Total Flow (min)
                               </label>
                               <input
                                 type="number"
                                 min={0}
                                 value={
-                                  draft.exercises[0]?.durationSec && draft.exercises[0].durationSec > 0
-                                    ? Math.round(draft.exercises[0].durationSec / 60)
+                                  draft.durationMinutes && draft.durationMinutes > 0
+                                    ? draft.durationMinutes
                                     : ''
                                 }
-                                placeholder="0"
+                                placeholder={
+                                  preset?.durationMinutes ? String(preset.durationMinutes) : '0'
+                                }
                                 onChange={(e) => {
-                                  const mins = Math.max(0, parseInt(e.target.value, 10) || 0);
-                                  updateDraftWorkout(draft.logUuid, (curr) => {
-                                    if (curr.exercises.length === 0) return curr;
-                                    const next = [...curr.exercises];
-                                    next[0] = { ...next[0], durationSec: mins * 60 };
-                                    return { ...curr, exercises: next };
-                                  });
+                                  const raw = e.target.value.trim();
+                                  const mins =
+                                    raw === '' ? undefined : Math.max(0, parseInt(raw, 10) || 0);
+                                  updateDraftWorkout(draft.logUuid, (curr) => ({
+                                    ...curr,
+                                    durationMinutes: mins,
+                                    durationSec: mins ? mins * 60 : curr.durationSec,
+                                  }));
                                 }}
                                 className="w-16 px-2.5 py-1.5 text-xs font-mono font-bold tabular-nums rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-center focus:outline-none focus:border-orange-500"
                               />

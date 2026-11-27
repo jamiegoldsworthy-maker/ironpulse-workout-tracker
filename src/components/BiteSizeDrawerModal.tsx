@@ -14,7 +14,13 @@ import {
 import { ModalPortal } from './ModalPortal';
 import { useWorkoutStore } from '../store/useWorkoutStore';
 import { WorkoutPreset } from '../types/workout';
-import { formatLoadBadge, formatReadableDate, formatSecondsAsMmSs } from '../utils/calculations';
+import {
+  formatLoadBadge,
+  formatMobilityDurationSeconds,
+  formatReadableDate,
+  formatSecondsAsMmSs,
+  resolveMobilityDurationSeconds,
+} from '../utils/calculations';
 
 interface BiteSizeDrawerModalProps {
   open: boolean;
@@ -168,8 +174,16 @@ export const BiteSizeDrawerModal: React.FC<BiteSizeDrawerModalProps> = ({
   }, [presets, typeFilter, durationFilter]);
 
   const handleStartGuidedTimer = (preset: WorkoutPreset) => {
-    const mins = Math.max(1, Math.round(preset.durationMinutes ?? 5));
-    const secs = mins * 60;
+    const sumExerciseSec = preset.exercises.reduce(
+      (sum, ex) => sum + (ex.trackingType === 'mobility' ? resolveMobilityDurationSeconds(ex) : 0),
+      0
+    );
+    const secs =
+      preset.durationMinutes && preset.durationMinutes > 0
+        ? Math.round(preset.durationMinutes * 60)
+        : sumExerciseSec > 0
+        ? sumExerciseSec
+        : 300;
     autoCompletedRef.current = false;
     setGuidedPreset(preset);
     setTotalSec(secs);
@@ -364,7 +378,15 @@ export const BiteSizeDrawerModal: React.FC<BiteSizeDrawerModalProps> = ({
                           </span>
                           <span className="font-mono text-[11px] font-semibold text-orange-600 dark:text-orange-400 shrink-0">
                             {ex.trackingType === 'mobility'
-                              ? ex.defaultReps || (ex.defaultDurationMin ? `${ex.defaultDurationMin}m` : 'Flow')
+                              ? (() => {
+                                  const durLabel = formatMobilityDurationSeconds(
+                                    resolveMobilityDurationSeconds(ex)
+                                  );
+                                  if (ex.defaultReps && durLabel && ex.defaultReps !== durLabel) {
+                                    return `${ex.defaultReps} · ${durLabel}`;
+                                  }
+                                  return durLabel || ex.defaultReps || 'Flow';
+                                })()
                               : `${ex.defaultSets}×${ex.defaultReps}${
                                   ex.loadType !== 'bodyweight' && ex.loadType !== 'none'
                                     ? ` @ ${formatLoadBadge(ex.loadType, ex.defaultWeight)}`

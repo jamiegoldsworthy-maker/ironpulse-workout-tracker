@@ -54,6 +54,7 @@ import {
   getTodayIsoDate,
   inferDefaultMetricType,
   recalculateLoggedExercise,
+  resolveMobilityDurationSeconds,
   shiftIsoDate,
   slugify,
   uuidv4,
@@ -564,8 +565,8 @@ function buildLoggedExerciseFromPreset(
     totalDurationSec: pe.trackingType === 'circuit' ? effectiveRounds * 60 : undefined,
     mode: pe.cardioMode || (pe.trackingType === 'cardio' ? 'Ruck' : undefined),
     durationSec:
-      pe.trackingType === 'mobility' && pe.defaultDurationMin
-        ? pe.defaultDurationMin * 60
+      pe.trackingType === 'mobility'
+        ? resolveMobilityDurationSeconds(pe) || undefined
         : undefined,
     isCompleted: pe.trackingType === 'mobility' ? false : undefined,
     distanceUnit: pe.defaultDistanceUnit || defaultDistanceUnit || 'mi',
@@ -1295,10 +1296,32 @@ function collectUsedCategories(
 
 const EMPTY_SESSION_UUID = 'ses-initial';
 
+function normalizePresetMobilityDurations(preset: WorkoutPreset): WorkoutPreset {
+  if (!Array.isArray(preset.exercises) || preset.exercises.length === 0) return preset;
+  let changed = false;
+  const normalizedExercises = preset.exercises.map((ex) => {
+    if (ex.trackingType !== 'mobility') return ex;
+    if (ex.durationSeconds === undefined && typeof ex.defaultDurationMin === 'number') {
+      changed = true;
+      const convertedSec = resolveMobilityDurationSeconds(ex);
+      const { defaultDurationMin: _legacyMin, ...rest } = ex;
+      void _legacyMin;
+      return {
+        ...rest,
+        durationSeconds: convertedSec,
+      };
+    }
+    return ex;
+  });
+  return changed ? { ...preset, exercises: normalizedExercises } : preset;
+}
+
 function sortPresetsAlphabetically(presets: WorkoutPreset[]): WorkoutPreset[] {
-  return [...presets].sort((a, b) =>
-    (a.title || '').localeCompare(b.title || '', undefined, { sensitivity: 'base' })
-  );
+  return [...presets]
+    .map((p) => normalizePresetMobilityDurations(p))
+    .sort((a, b) =>
+      (a.title || '').localeCompare(b.title || '', undefined, { sensitivity: 'base' })
+    );
 }
 
 /**
@@ -3981,12 +4004,12 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         const state = get();
         const exists = state.presets.some((p) => p.presetUuid === preset.presetUuid);
         const now = new Date().toISOString();
-        const cleanPreset: WorkoutPreset = {
+        const cleanPreset: WorkoutPreset = normalizePresetMobilityDurations({
           ...preset,
           slug: preset.slug || slugify(preset.title, 'wkt'),
           updatedAt: now,
           createdAt: preset.createdAt || now,
-        };
+        });
 
         // Ensure all exercises in the preset also exist in the global exercises dictionary
         const nextExercises = [...state.exercises];
@@ -6379,9 +6402,12 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
       onRehydrateStorage: () => (rehydratedState, error) => {
         if (error || !rehydratedState) return;
 
+        const migratedRehydratedPresets = (rehydratedState.presets || []).map((p) =>
+          normalizePresetMobilityDurations(p)
+        );
         const seededPresetsResult = rehydratedState.hasSeededBiteSizePresets
-          ? { presets: rehydratedState.presets || [], added: [] as WorkoutPreset[] }
-          : mergeDefaultBiteSizePresets(rehydratedState.presets || []);
+          ? { presets: migratedRehydratedPresets, added: [] as WorkoutPreset[] }
+          : mergeDefaultBiteSizePresets(migratedRehydratedPresets);
         const nextPresetsList = seededPresetsResult.presets;
 
         // Migrate any legacy 'did_not_complete' / 'incomplete' statuses and reconcile wt_schedule <-> wt_logs
