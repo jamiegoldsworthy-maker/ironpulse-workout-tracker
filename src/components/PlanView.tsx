@@ -170,8 +170,11 @@ export const PlanView: React.FC = () => {
     clearFutureScheduledWorkoutsForProgram,
     autoFillSchedule,
     lastTasksSync,
+    googleSyncStatus,
+    pendingGoogleTasksCount,
     tasksActionToast,
     runGoogleTasksSync,
+    reconnectAndFlushGoogleTasks,
   } = useWorkoutStore();
 
   const [isSyncingTasks, setIsSyncingTasks] = useState(false);
@@ -338,7 +341,10 @@ export const PlanView: React.FC = () => {
 
   const handleRunTasksSync = async () => {
     setIsSyncingTasks(true);
-    const res = await runGoogleTasksSync(true);
+    const res =
+      googleSyncStatus === 'needs_reauth'
+        ? await reconnectAndFlushGoogleTasks()
+        : await runGoogleTasksSync(true);
     setIsSyncingTasks(false);
     if (res.ok) {
       triggerNotice(
@@ -562,40 +568,95 @@ export const PlanView: React.FC = () => {
               <span className="hidden sm:inline">Flag / Note</span>
             </button>
 
-            <button
-              type="button"
-              disabled={isSyncingTasks}
-              onClick={handleRunTasksSync}
-              aria-label="Sync Google Tasks"
-              title={
-                isSyncingTasks
-                  ? 'Syncing Google Tasks...'
-                  : lastTasksSync?.status === 'success'
-                  ? 'Google Tasks synced — tap to sync again'
-                  : lastTasksSync?.status === 'failed'
-                  ? 'Google Tasks sync failed — tap to retry'
-                  : 'Sync upcoming workouts with Google Tasks'
+            {(() => {
+              const isBusy = isSyncingTasks || googleSyncStatus === 'syncing';
+              const needsReauth = googleSyncStatus === 'needs_reauth';
+              const hasQueued = pendingGoogleTasksCount > 0;
+              const isSyncedClean =
+                !needsReauth &&
+                !hasQueued &&
+                (googleSyncStatus === 'synced' || lastTasksSync?.status === 'success');
+
+              if (needsReauth) {
+                return (
+                  <button
+                    type="button"
+                    disabled={isBusy}
+                    onClick={handleRunTasksSync}
+                    aria-label="Reconnect Google Tasks and flush queued updates"
+                    title="Google Tasks session expired — tap to reconnect & flush queued updates"
+                    className="tactile-btn px-2.5 py-1.5 rounded-xl bg-rose-500/15 border border-rose-500/45 text-rose-600 dark:text-rose-400 hover:bg-rose-500 hover:text-white text-[11px] font-bold inline-flex items-center gap-1.5 transition-colors shrink-0 disabled:opacity-60 whitespace-nowrap"
+                  >
+                    <RefreshCw className={`w-3 h-3 shrink-0 ${isBusy ? 'animate-spin' : ''}`} />
+                    <span>Reconnect</span>
+                    {hasQueued && (
+                      <span className="px-1.5 py-0.2 rounded-full bg-rose-500/20 text-[10px] font-mono tabular-nums">
+                        {pendingGoogleTasksCount}
+                      </span>
+                    )}
+                  </button>
+                );
               }
-              style={{
-                borderColor: isSyncingTasks
-                  ? 'var(--accent-orange)'
-                  : lastTasksSync?.status === 'success'
-                  ? 'var(--accent-sage)'
-                  : lastTasksSync?.status === 'failed'
-                  ? 'var(--accent-rust)'
-                  : 'var(--border-card)',
-                color: isSyncingTasks
-                  ? 'var(--accent-orange)'
-                  : lastTasksSync?.status === 'success'
-                  ? 'var(--accent-sage)'
-                  : lastTasksSync?.status === 'failed'
-                  ? 'var(--accent-rust)'
-                  : 'var(--text-muted)',
-              }}
-              className="tactile-btn p-2 rounded-xl bg-[var(--bg-inset)] border transition-colors shrink-0 disabled:opacity-60"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${isSyncingTasks ? 'animate-spin' : ''}`} />
-            </button>
+
+              if (hasQueued) {
+                return (
+                  <button
+                    type="button"
+                    disabled={isBusy}
+                    onClick={handleRunTasksSync}
+                    aria-label={`${pendingGoogleTasksCount} Google Tasks updates queued — tap to sync`}
+                    title={`${pendingGoogleTasksCount} Google Tasks update(s) queued — tap to flush & sync`}
+                    className="tactile-btn px-2.5 py-1.5 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-700 dark:text-amber-300 hover:bg-amber-500 hover:text-white text-[11px] font-bold inline-flex items-center gap-1.5 transition-colors shrink-0 disabled:opacity-60 whitespace-nowrap"
+                  >
+                    <RefreshCw className={`w-3 h-3 shrink-0 ${isBusy ? 'animate-spin' : ''}`} />
+                    <span className="tabular-nums">{pendingGoogleTasksCount} queued</span>
+                  </button>
+                );
+              }
+
+              return (
+                <button
+                  type="button"
+                  disabled={isBusy}
+                  onClick={handleRunTasksSync}
+                  aria-label="Sync Google Tasks"
+                  title={
+                    isBusy
+                      ? 'Syncing Google Tasks...'
+                      : isSyncedClean
+                      ? 'Google Tasks synced (queue empty) — tap to sync again'
+                      : lastTasksSync?.status === 'failed'
+                      ? 'Google Tasks sync failed — tap to retry'
+                      : 'Sync scheduled workouts with Google Tasks'
+                  }
+                  style={{
+                    borderColor: isBusy
+                      ? 'var(--accent-orange)'
+                      : isSyncedClean
+                      ? 'var(--accent-sage)'
+                      : lastTasksSync?.status === 'failed'
+                      ? 'var(--accent-rust)'
+                      : 'var(--border-card)',
+                    color: isBusy
+                      ? 'var(--accent-orange)'
+                      : isSyncedClean
+                      ? 'var(--accent-sage)'
+                      : lastTasksSync?.status === 'failed'
+                      ? 'var(--accent-rust)'
+                      : 'var(--text-muted)',
+                  }}
+                  className="tactile-btn relative p-2 rounded-xl bg-[var(--bg-inset)] border transition-colors shrink-0 disabled:opacity-60"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isBusy ? 'animate-spin' : ''}`} />
+                  {isSyncedClean && (
+                    <span
+                      aria-hidden="true"
+                      className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-emerald-500 ring-2 ring-[var(--bg-card)]"
+                    />
+                  )}
+                </button>
+              );
+            })()}
           </div>
         )}
       </div>
@@ -694,17 +755,46 @@ export const PlanView: React.FC = () => {
 
                 <button
                   type="button"
-                  disabled={isSyncingTasks}
+                  disabled={isSyncingTasks || googleSyncStatus === 'syncing'}
                   onClick={handleRunTasksSync}
-                  title="Two-way sync upcoming 7 days with Google Tasks"
-                  className="tactile-btn px-3 py-1.5 rounded-xl bg-[var(--bg-inset)] border border-[var(--border-card)] text-[var(--text-primary)] hover:border-[var(--accent-orange)] text-xs font-bold inline-flex items-center gap-1.5 transition-colors disabled:opacity-50 shrink-0"
+                  title={
+                    googleSyncStatus === 'needs_reauth'
+                      ? 'Reconnect Google Tasks and flush queued updates'
+                      : pendingGoogleTasksCount > 0
+                      ? `${pendingGoogleTasksCount} queued updates waiting to sync`
+                      : 'Two-way sync through upcoming Sunday with Google Tasks'
+                  }
+                  className={`tactile-btn px-3 py-1.5 rounded-xl border text-xs font-bold inline-flex items-center gap-1.5 transition-colors disabled:opacity-50 shrink-0 ${
+                    googleSyncStatus === 'needs_reauth'
+                      ? 'bg-rose-500/15 border-rose-500/45 text-rose-600 dark:text-rose-400 hover:bg-rose-500 hover:text-white'
+                      : pendingGoogleTasksCount > 0
+                      ? 'bg-amber-500/15 border-amber-500/40 text-amber-700 dark:text-amber-300 hover:bg-amber-500 hover:text-white'
+                      : 'bg-[var(--bg-inset)] border-[var(--border-card)] text-[var(--text-primary)] hover:border-[var(--accent-orange)]'
+                  }`}
                 >
+                  {googleSyncStatus !== 'needs_reauth' &&
+                    pendingGoogleTasksCount === 0 &&
+                    (googleSyncStatus === 'synced' || lastTasksSync?.status === 'success') && (
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
+                    )}
                   <RefreshCw
-                    className={`w-3.5 h-3.5 text-[var(--accent-sage)] ${
-                      isSyncingTasks ? 'animate-spin' : ''
-                    }`}
+                    className={`w-3.5 h-3.5 ${
+                      googleSyncStatus === 'needs_reauth'
+                        ? ''
+                        : pendingGoogleTasksCount > 0
+                        ? ''
+                        : 'text-[var(--accent-sage)]'
+                    } ${isSyncingTasks || googleSyncStatus === 'syncing' ? 'animate-spin' : ''}`}
                   />
-                  <span>{isSyncingTasks ? 'Syncing...' : 'Sync Tasks'}</span>
+                  <span>
+                    {isSyncingTasks || googleSyncStatus === 'syncing'
+                      ? 'Syncing...'
+                      : googleSyncStatus === 'needs_reauth'
+                      ? 'Reconnect'
+                      : pendingGoogleTasksCount > 0
+                      ? `${pendingGoogleTasksCount} queued`
+                      : 'Sync Tasks'}
+                  </span>
                 </button>
               </div>
             </>

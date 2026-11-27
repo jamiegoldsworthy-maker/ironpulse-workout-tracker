@@ -131,7 +131,13 @@ export const LogView: React.FC = () => {
     sessionStopwatchStartMs,
     startSessionStopwatch,
     tasksActionToast,
+    lastTasksSync,
+    googleSyncStatus,
+    pendingGoogleTasksCount,
+    reconnectAndFlushGoogleTasks,
   } = useWorkoutStore();
+
+  const [isSyncingTasks, setIsSyncingTasks] = useState(false);
 
   const [collapsedCards, setCollapsedCards] = useState<Record<string, boolean>>({});
   const [collapsedGuidance, setCollapsedGuidance] = useState<Record<string, boolean>>({});
@@ -906,6 +912,90 @@ export const LogView: React.FC = () => {
                 Today
               </button>
             )}
+
+            {/* Compact Google Tasks Sync & Queue State Indicator */}
+            {(() => {
+              const isBusy = isSyncingTasks || googleSyncStatus === 'syncing';
+              const needsReauth = googleSyncStatus === 'needs_reauth';
+              const hasQueued = pendingGoogleTasksCount > 0;
+              const isSyncedClean =
+                !needsReauth &&
+                !hasQueued &&
+                (googleSyncStatus === 'synced' || lastTasksSync?.status === 'success');
+
+              const handleLogTasksSync = async () => {
+                setIsSyncingTasks(true);
+                const res = await reconnectAndFlushGoogleTasks();
+                setIsSyncingTasks(false);
+                if (res.ok) {
+                  triggerToast(
+                    `Tasks synced (${res.pushed} pushed, ${res.pulled} completed)`
+                  );
+                } else if (res.error) {
+                  triggerToast(res.error, true);
+                }
+              };
+
+              if (needsReauth) {
+                return (
+                  <button
+                    type="button"
+                    disabled={isBusy}
+                    onClick={handleLogTasksSync}
+                    aria-label="Reconnect Google Tasks and flush queued updates"
+                    title="Google Tasks session expired — tap to reconnect & flush queued updates"
+                    className="px-2 py-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500 border border-rose-500/45 text-rose-600 dark:text-rose-400 hover:text-white text-[11px] font-bold inline-flex items-center gap-1 transition-colors shrink-0 whitespace-nowrap disabled:opacity-60"
+                  >
+                    <RefreshCw className={`w-3 h-3 shrink-0 ${isBusy ? 'animate-spin' : ''}`} />
+                    <span>Reconnect</span>
+                    {hasQueued && (
+                      <span className="px-1 rounded-full bg-rose-500/20 text-[10px] font-mono tabular-nums">
+                        {pendingGoogleTasksCount}
+                      </span>
+                    )}
+                  </button>
+                );
+              }
+
+              if (hasQueued) {
+                return (
+                  <button
+                    type="button"
+                    disabled={isBusy}
+                    onClick={handleLogTasksSync}
+                    aria-label={`${pendingGoogleTasksCount} Google Tasks updates queued`}
+                    title={`${pendingGoogleTasksCount} Google Tasks update(s) queued — tap to flush`}
+                    className="px-2 py-1.5 rounded-xl bg-amber-500/15 hover:bg-amber-500 border border-amber-500/40 text-amber-700 dark:text-amber-300 hover:text-white text-[11px] font-bold inline-flex items-center gap-1 transition-colors shrink-0 whitespace-nowrap disabled:opacity-60"
+                  >
+                    <RefreshCw className={`w-3 h-3 shrink-0 ${isBusy ? 'animate-spin' : ''}`} />
+                    <span className="tabular-nums">{pendingGoogleTasksCount} queued</span>
+                  </button>
+                );
+              }
+
+              return (
+                <button
+                  type="button"
+                  disabled={isBusy}
+                  onClick={handleLogTasksSync}
+                  aria-label="Sync Google Tasks"
+                  title={
+                    isSyncedClean
+                      ? 'Google Tasks synced (queue empty) — tap to sync'
+                      : 'Sync workouts with Google Tasks'
+                  }
+                  className="relative p-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 border border-slate-200/60 dark:border-slate-700/60 text-slate-600 dark:text-slate-300 transition-colors shrink-0 disabled:opacity-60"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isBusy ? 'animate-spin' : ''}`} />
+                  {isSyncedClean && (
+                    <span
+                      aria-hidden="true"
+                      className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-slate-900"
+                    />
+                  )}
+                </button>
+              );
+            })()}
 
             {/* Fast 3-Tap Bite-Size Movement Snack Trigger */}
             <button

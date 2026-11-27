@@ -175,14 +175,19 @@ export async function signInWithGoogle(): Promise<User | null> {
   const result = await signInWithPopup(auth, provider);
   const credential = GoogleAuthProvider.credentialFromResult(result);
   if (credential?.accessToken) {
+    const expiresAt = Date.now() + 3500 * 1000;
     try {
       sessionStorage.setItem('ironpulse_google_tasks_token', credential.accessToken);
-      sessionStorage.setItem(
-        'ironpulse_google_tasks_token_exp',
-        String(Date.now() + 3300 * 1000)
-      );
+      sessionStorage.setItem('ironpulse_google_tasks_token_exp', String(expiresAt));
     } catch {
       // ignore
+    }
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('ironpulse:google-token-acquired', {
+          detail: { token: credential.accessToken, ttlSeconds: 3500 },
+        })
+      );
     }
   }
   return result.user;

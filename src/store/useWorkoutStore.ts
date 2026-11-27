@@ -33,6 +33,8 @@ import {
 } from '../data/seedData';
 import { AiNotesPatchPayload, ParsedProgramCycleImport } from '../utils/aiCoachPatch';
 import {
+  GoogleSyncStatus,
+  GoogleTasksRuntimeState,
   PendingTaskCompletion,
   SingleScheduleTaskInput,
   SingleTaskSyncAction,
@@ -40,6 +42,7 @@ import {
   checkCompletedTasksInbound as fetchCompletedTasksInbound,
   flushQueuedSingleTaskOps,
   getCachedGoogleTasksToken,
+  getGoogleTasksRuntimeState,
   getPendingSingleTaskOpsCount,
   isDateWithinGoogleTasksSyncWindow,
   syncGoogleTasksTwoWay,
@@ -294,6 +297,9 @@ interface WorkoutStoreState {
   sessionStopwatchAccumulatedMs: number;
 
   // Google Tasks Sync
+  googleSyncStatus: GoogleSyncStatus;
+  googleTokenExpiresAt: number | null;
+  pendingGoogleTasksCount: number;
   pendingTaskCompletions: PendingTaskCompletion[];
   excludedFromTasksIds: string[];
   dismissedTaskCompletionIds: string[];
@@ -440,6 +446,15 @@ interface WorkoutStoreState {
   resetSessionStopwatch: () => void;
 
   // Google Tasks Sync Actions
+  syncGoogleTasksRuntimeState: (runtime: GoogleTasksRuntimeState) => void;
+  flushGoogleTasksQueue: () => Promise<number>;
+  reconnectAndFlushGoogleTasks: () => Promise<{
+    ok: boolean;
+    pulled: number;
+    pushed: number;
+    rescheduled: number;
+    error?: string;
+  }>;
   checkCompletedTasksInbound: () => Promise<void>;
   runGoogleTasksSync: (interactive: boolean) => Promise<{
     ok: boolean;
@@ -1463,6 +1478,9 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
       },
       sessionStopwatchStartMs: null,
       sessionStopwatchAccumulatedMs: 0,
+      googleSyncStatus: getGoogleTasksRuntimeState().googleSyncStatus,
+      googleTokenExpiresAt: getGoogleTasksRuntimeState().googleTokenExpiresAt,
+      pendingGoogleTasksCount: getGoogleTasksRuntimeState().pendingOpsCount,
       pendingTaskCompletions: [],
       excludedFromTasksIds: [],
       dismissedTaskCompletionIds: [],
@@ -1525,10 +1543,14 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           flushedFirestore = true;
         }
 
-        if ((queue.googleTasksSyncNeeded || hasPendingTaskOps) && getCachedGoogleTasksToken()) {
-          await flushQueuedSingleTaskOps();
-          const tasksRes = await get().runGoogleTasksSync(false);
-          if (tasksRes.ok) {
+        if (queue.googleTasksSyncNeeded || hasPendingTaskOps) {
+          const flushedOpsCount = await flushQueuedSingleTaskOps();
+          if (getCachedGoogleTasksToken()) {
+            const tasksRes = await get().runGoogleTasksSync(false);
+            if (tasksRes.ok) {
+              flushedTasks = true;
+            }
+          } else if (flushedOpsCount > 0 && getPendingSingleTaskOpsCount() === 0) {
             flushedTasks = true;
           }
         }
@@ -3834,6 +3856,46 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
 
       resetSessionStopwatch: () => {
         set({ sessionStopwatchStartMs: null, sessionStopwatchAccumulatedMs: 0 });
+      },
+
+      syncGoogleTasksRuntimeState: (runtime) => {
+        set({
+          googleSyncStatus: runtime.googleSyncStatus,
+          googleTokenExpiresAt: runtime.googleTokenExpiresAt,
+          pendingGoogleTasksCount: runtime.pendingOpsCount,
+        });
+      },
+
+      flushGoogleTasksQueue: async () => {
+        if (isNavigatorOffline()) return 0;
+        const flushed = await flushQueuedSingleTaskOps();
+        if (flushed > 0) {
+          const remaining = getPendingSingleTaskOpsCount();
+          const prevQueue = get().offlineSyncQueue;
+          set({
+            pendingGoogleTasksCount: remaining,
+            offlineSyncQueue: {
+              ...prevQueue,
+              googleTasksSyncNeeded: remaining > 0 ? prevQueue.googleTasksSyncNeeded : false,
+              pendingCount:
+                remaining > 0 || prevQueue.firestoreSyncNeeded ? prevQueue.pendingCount : 0,
+              queuedAt:
+                remaining > 0 || prevQueue.firestoreSyncNeeded ? prevQueue.queuedAt : undefined,
+            },
+            lastTasksSync: {
+              timestamp: new Date().toISOString(),
+              status: 'success',
+              message: `Flushed ${flushed} queued task${flushed === 1 ? '' : 's'}`,
+            },
+          });
+        }
+        return flushed;
+      },
+
+      reconnectAndFlushGoogleTasks: async () => {
+        // Trigger interactive OAuth login (which caches fresh token + clears needs_reauth),
+        // drains all queued wt_gtasks_pending_ops, and runs full Master Sync.
+        return get().runGoogleTasksSync(true);
       },
 
       checkCompletedTasksInbound: async () => {
@@ -6327,6 +6389,10 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         });
         if (user) {
           get().syncWithFirestore();
+          // Flush any pending wt_gtasks_pending_ops automatically upon Google sign-in
+          if (getPendingSingleTaskOpsCount() > 0 && getCachedGoogleTasksToken()) {
+            void get().flushGoogleTasksQueue();
+          }
         }
       },
 

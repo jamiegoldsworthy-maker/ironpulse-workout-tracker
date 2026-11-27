@@ -27,6 +27,10 @@ import {
   persistActiveTab,
   useWorkoutStore,
 } from '../store/useWorkoutStore';
+import {
+  cacheGoogleTasksToken,
+  subscribeGoogleTasksState,
+} from '../lib/googleTasks';
 import { LiveTimerBar } from './LiveTimerBar';
 
 interface LayoutProps {
@@ -101,6 +105,8 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
     offlineSyncQueue,
     setOnlineStatus,
     flushOfflineSyncQueue,
+    syncGoogleTasksRuntimeState,
+    flushGoogleTasksQueue,
   } = useWorkoutStore();
 
   const [cogOpen, setCogOpen] = useState(false);
@@ -124,7 +130,18 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
   }
   const slideDirection = tabTransitionRef.current.direction;
 
-  // Track online/offline state and automatically flush queued mutations when reconnecting
+  // Keep store reactively synced with googleTasks.ts runtime status, token expiry, and wt_gtasks_pending_ops count
+  useEffect(() => {
+    const unsubscribe = subscribeGoogleTasksState((runtime) => {
+      syncGoogleTasksRuntimeState(runtime);
+    });
+    return unsubscribe;
+  }, [syncGoogleTasksRuntimeState]);
+
+  // Flush queued Google Tasks ops automatically on:
+  // 1. window 'online' event
+  // 2. document 'visibilitychange' (returning to foreground)
+  // 3. fresh Google OAuth token acquisition (sign-in / reconnect)
   useEffect(() => {
     const handleOnline = () => {
       setOnlineStatus(true);
@@ -133,18 +150,45 @@ export const Layout: React.FC<LayoutProps> = ({ children }) => {
     const handleOffline = () => {
       setOnlineStatus(false);
     };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && navigator.onLine !== false) {
+        const st = useWorkoutStore.getState();
+        if (st.pendingGoogleTasksCount > 0) {
+          void flushGoogleTasksQueue();
+        } else if (st.offlineSyncQueue.pendingCount > 0) {
+          void flushOfflineSyncQueue();
+        }
+      }
+    };
+    const handleGoogleTokenAcquired = (ev: Event) => {
+      const detail = (ev as CustomEvent<{ token?: string; ttlSeconds?: number }>).detail;
+      if (detail?.token) {
+        cacheGoogleTasksToken(detail.token, detail.ttlSeconds || 3500);
+        void flushGoogleTasksQueue();
+      }
+    };
+
     const currentlyOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
     setOnlineStatus(currentlyOnline);
-    if (currentlyOnline && useWorkoutStore.getState().offlineSyncQueue.pendingCount > 0) {
+    if (
+      currentlyOnline &&
+      (useWorkoutStore.getState().offlineSyncQueue.pendingCount > 0 ||
+        useWorkoutStore.getState().pendingGoogleTasksCount > 0)
+    ) {
       void flushOfflineSyncQueue();
     }
+
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('ironpulse:google-token-acquired', handleGoogleTokenAcquired);
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('ironpulse:google-token-acquired', handleGoogleTokenAcquired);
     };
-  }, [setOnlineStatus, flushOfflineSyncQueue, authUser?.uid]);
+  }, [setOnlineStatus, flushOfflineSyncQueue, flushGoogleTasksQueue, authUser?.uid]);
 
   // Mirror activeTab to hash/localStorage on mount & respond to browser hashchange
   useEffect(() => {
