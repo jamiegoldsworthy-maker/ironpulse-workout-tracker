@@ -33,7 +33,9 @@ import {
 } from '../utils/aiCoachPatch';
 import {
   GOOGLE_TASKS_TARGET_LIST_ID,
+  formatSyncWindowEndDate,
   getCachedGoogleTasksToken,
+  getGoogleTasksMaxSyncDate,
 } from '../lib/googleTasks';
 import { useWorkoutStore } from '../store/useWorkoutStore';
 import { DistanceUnit, ThemeMode, WorkoutPreset } from '../types/workout';
@@ -673,7 +675,7 @@ export const SettingsView: React.FC = () => {
                 <div>
                   <h3 className="font-display font-bold text-base">Google Tasks Sync</h3>
                   <p className="text-xs text-slate-500">
-                    Two-way sync for today &amp; upcoming 6 days with stale-task cleanup.
+                    Two-way sync through upcoming Sunday with out-of-window &amp; stale-task cleanup.
                   </p>
                 </div>
                 <button
@@ -727,28 +729,36 @@ export const SettingsView: React.FC = () => {
                 </div>
               </div>
 
-              <div className="text-xs text-[var(--text-secondary)]">
-                {lastTasksSync ? (
-                  <span
-                    style={{
-                      color:
-                        lastTasksSync.status === 'success'
-                          ? 'var(--accent-sage)'
-                          : 'var(--accent-rust)',
-                    }}
-                    className="font-semibold"
-                  >
-                    Last sync:{' '}
-                    {new Date(lastTasksSync.timestamp).toLocaleTimeString([], {
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })}{' '}
-                    · {lastTasksSync.status === 'success' ? 'Success' : 'Failed'}
-                    {lastTasksSync.message ? ` (${lastTasksSync.message})` : ''}
-                  </span>
-                ) : (
-                  <span className="text-[var(--text-muted)]">Not synced yet this session.</span>
-                )}
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--text-secondary)]">
+                <div>
+                  {lastTasksSync ? (
+                    <span
+                      style={{
+                        color:
+                          lastTasksSync.status === 'success'
+                            ? 'var(--accent-sage)'
+                            : 'var(--accent-rust)',
+                      }}
+                      className="font-semibold"
+                    >
+                      Last sync:{' '}
+                      {new Date(lastTasksSync.timestamp).toLocaleTimeString([], {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}{' '}
+                      · {lastTasksSync.status === 'success' ? 'Success' : 'Failed'}
+                      {lastTasksSync.message ? ` (${lastTasksSync.message})` : ''}
+                    </span>
+                  ) : (
+                    <span className="text-[var(--text-muted)]">Not synced yet this session.</span>
+                  )}
+                </div>
+                <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                  Syncing scheduled workouts through{' '}
+                  <strong className="font-semibold text-slate-700 dark:text-slate-200">
+                    {formatSyncWindowEndDate(getGoogleTasksMaxSyncDate(getTodayIsoDate()))}
+                  </strong>
+                </span>
               </div>
             </div>
           </div>

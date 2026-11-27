@@ -39,6 +39,7 @@ import {
   completeGoogleTaskForWorkout,
   deleteGoogleTaskForSchedule,
   getCachedGoogleTasksToken,
+  isDateWithinGoogleTasksSyncWindow,
   syncGoogleTasksTwoWay,
   upsertGoogleTaskForSchedule,
 } from '../lib/googleTasks';
@@ -2234,9 +2235,11 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           ),
         });
 
-        // Sync Google Tasks (delete replaced tasks, upsert fresh pending template tasks)
+        // Sync Google Tasks (delete replaced tasks, upsert fresh pending template tasks only within [today, maxSyncDate])
+        const todayIsoForTasks = getTodayIsoDate();
+        const isInTasksWindow = isDateWithinGoogleTasksSyncWindow(date, todayIsoForTasks);
         if (isNavigatorOffline()) {
-          get().queueOfflineSync('both');
+          get().queueOfflineSync(isInTasksWindow ? 'both' : 'firestore');
         } else {
           for (const oldItem of oldSchedItems) {
             const oldPreset = state.presets.find((p) => p.presetUuid === oldItem.presetUuid);
@@ -2246,13 +2249,16 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
               workoutName: oldPreset?.title,
             });
           }
-          for (const freshItem of newScheduledItems) {
-            const freshPreset = state.presets.find((p) => p.presetUuid === freshItem.presetUuid);
-            void upsertGoogleTaskForSchedule({
-              date,
-              item: freshItem,
-              preset: freshPreset,
-            });
+          if (isInTasksWindow) {
+            for (const freshItem of newScheduledItems) {
+              const freshPreset = state.presets.find((p) => p.presetUuid === freshItem.presetUuid);
+              void upsertGoogleTaskForSchedule({
+                date,
+                item: freshItem,
+                preset: freshPreset,
+                todayIso: todayIsoForTasks,
+              });
+            }
           }
         }
 
@@ -4806,6 +4812,50 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
             : {}),
         });
 
+        // Sync single-day schedule edits to Google Tasks strictly within [today, maxSyncDate]
+        const todayIsoForEdit = getTodayIsoDate();
+        const isEditInTasksWindow = isDateWithinGoogleTasksSyncWindow(date, todayIsoForEdit);
+        if (isNavigatorOffline()) {
+          if (isEditInTasksWindow) {
+            get().queueOfflineSync('tasks');
+          }
+        } else {
+          for (const removedItem of prevItems.filter((it) => !nextItemIds.has(it.scheduleItemUuid))) {
+            const removedPreset = state.presets.find(
+              (p) => p.presetUuid === removedItem.presetUuid
+            );
+            void deleteGoogleTaskForSchedule({
+              scheduleId: removedItem.scheduleItemUuid,
+              date,
+              workoutName: removedPreset?.title,
+            });
+          }
+          if (isEditInTasksWindow) {
+            const excludedSet = new Set(get().excludedFromTasksIds);
+            for (const item of normalizedItems) {
+              const st = normalizeScheduleStatus(item.status);
+              const preset = state.presets.find((p) => p.presetUuid === item.presetUuid);
+              if (st === 'skipped') {
+                void deleteGoogleTaskForSchedule({
+                  scheduleId: item.scheduleItemUuid,
+                  date,
+                  workoutName: preset?.title,
+                });
+              } else if (
+                (st === 'pending' || st === 'in_progress') &&
+                !excludedSet.has(item.scheduleItemUuid)
+              ) {
+                void upsertGoogleTaskForSchedule({
+                  date,
+                  item,
+                  preset,
+                  todayIso: todayIsoForEdit,
+                });
+              }
+            }
+          }
+        }
+
         if (state.authUser) {
           const uid = state.authUser.uid;
           const ops: Promise<void>[] = [
@@ -4941,8 +4991,19 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           }
         };
 
+        const todayIsoForStatus = getTodayIsoDate();
+        const isStatusDateInTasksWindow = isDateWithinGoogleTasksSyncWindow(
+          date,
+          todayIsoForStatus
+        );
         if (isNavigatorOffline()) {
-          get().queueOfflineSync('both');
+          get().queueOfflineSync(
+            canonicalStatus === 'completed' ||
+              canonicalStatus === 'skipped' ||
+              isStatusDateInTasksWindow
+              ? 'both'
+              : 'firestore'
+          );
         } else if (canonicalStatus === 'completed') {
           void completeGoogleTaskForWorkout({
             scheduleId: scheduleItemUuid,
@@ -4955,11 +5016,12 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
             date,
             workoutName: matchedPreset?.title,
           }).then((res) => handleTasksFeedback(res, 'Task removed'));
-        } else {
+        } else if (isStatusDateInTasksWindow) {
           void upsertGoogleTaskForSchedule({
             date,
             item: updatedItem,
             preset: matchedPreset,
+            todayIso: todayIsoForStatus,
           }).then((res) => handleTasksFeedback(res, 'Task active'));
         }
 

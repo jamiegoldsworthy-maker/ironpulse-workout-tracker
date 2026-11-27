@@ -7,6 +7,7 @@ import { initFirebaseServices } from '../services/firebase';
 import { DailySchedule, ScheduledItem, WorkoutPreset } from '../types/workout';
 import {
   formatMobilityDurationSeconds,
+  getTodayIsoDate,
   resolveMobilityDurationSeconds,
   shiftIsoDate,
 } from '../utils/calculations';
@@ -19,8 +20,45 @@ const TOKEN_STORAGE_KEY = 'ironpulse_google_tasks_token';
 const TOKEN_EXPIRY_KEY = 'ironpulse_google_tasks_token_exp';
 
 export interface TasksActionResult {
-  status: 'synced' | 'no-token' | 'not-found' | 'error';
+  status: 'synced' | 'no-token' | 'not-found' | 'out-of-window' | 'error';
   detail?: string;
+}
+
+/**
+ * Computes the inclusive Google Tasks sync cutoff date (`maxSyncDate`, YYYY-MM-DD in local time):
+ * - Monday–Saturday (`dayOfWeek` 1..6): upcoming Sunday (`today + (7 - dayOfWeek)` days)
+ * - Sunday (`dayOfWeek === 0`): next Sunday (`today + 7` days) so Sunday planning populates the new week ahead
+ */
+export function getGoogleTasksMaxSyncDate(todayIso: string = getTodayIsoDate()): string {
+  const [y, m, d] = todayIso.split('-').map(Number);
+  const localDate = new Date(y, (m || 1) - 1, d || 1);
+  const dayOfWeek = localDate.getDay(); // 0 = Sun, 1 = Mon, ..., 6 = Sat
+  const daysUntilSunday = dayOfWeek === 0 ? 7 : 7 - dayOfWeek;
+  return shiftIsoDate(todayIso, daysUntilSunday);
+}
+
+/**
+ * Returns true if `dateIso` falls within the inclusive `[todayIso, maxSyncDate]` Google Tasks window.
+ */
+export function isDateWithinGoogleTasksSyncWindow(
+  dateIso: string,
+  todayIso: string = getTodayIsoDate()
+): boolean {
+  const maxSyncDate = getGoogleTasksMaxSyncDate(todayIso);
+  return dateIso >= todayIso && dateIso <= maxSyncDate;
+}
+
+/**
+ * Formats an ISO date (`YYYY-MM-DD`) as a compact human horizon label, e.g. `"Sun, Dec 6"`.
+ */
+export function formatSyncWindowEndDate(dateIso: string): string {
+  const [y, m, d] = dateIso.split('-').map(Number);
+  const localDate = new Date(y, (m || 1) - 1, d || 1);
+  return localDate.toLocaleDateString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+  });
 }
 
 let resolvedListIdCache: string | null = null;
@@ -264,7 +302,7 @@ export async function checkCompletedTasksInbound(params: {
   try {
     const listId = await resolveTasksListId(token);
     const remoteTasks = await fetchAllTasksInList(listId, token);
-    const endDate = shiftIsoDate(params.todayIso, 6);
+    const maxSyncDate = getGoogleTasksMaxSyncDate(params.todayIso);
     const excludedSet = new Set(params.excludedFromTasksIds || []);
     const pulledCompleted: PendingTaskCompletion[] = [];
 
@@ -277,8 +315,8 @@ export async function checkCompletedTasksInbound(params: {
 
       const taskDueDate = task.due ? task.due.slice(0, 10) : null;
       const isInWindow =
-        (localEntry.date >= params.todayIso && localEntry.date <= endDate) ||
-        (taskDueDate !== null && taskDueDate >= params.todayIso && taskDueDate <= endDate);
+        (localEntry.date >= params.todayIso && localEntry.date <= maxSyncDate) ||
+        (taskDueDate !== null && taskDueDate >= params.todayIso && taskDueDate <= maxSyncDate);
 
       const localStatus = normalizeScheduleStatus(localEntry.item.status);
       if (
@@ -353,7 +391,7 @@ export async function syncGoogleTasksTwoWay(params: {
     const listId = await resolveTasksListId(token);
     const remoteTasks = await fetchAllTasksInList(listId, token);
 
-    const endDate = shiftIsoDate(params.todayIso, 6);
+    const maxSyncDate = getGoogleTasksMaxSyncDate(params.todayIso);
     const scheduleByEntryId = new Map<string, { date: string; item: ScheduledItem }>();
     const completedDateTitles = new Map<string, string[]>();
     for (const [date, daySch] of Object.entries(params.schedules)) {
@@ -417,8 +455,8 @@ export async function syncGoogleTasksTwoWay(params: {
 
       if (localEntry && !excludedSet.has(entryId) && localStatus !== 'skipped') {
         const isInWindow =
-          (localEntry.date >= params.todayIso && localEntry.date <= endDate) ||
-          (taskDueDate !== null && taskDueDate >= params.todayIso && taskDueDate <= endDate);
+          (localEntry.date >= params.todayIso && localEntry.date <= maxSyncDate) ||
+          (taskDueDate !== null && taskDueDate >= params.todayIso && taskDueDate <= maxSyncDate);
 
         if (isInWindow) {
           if (
@@ -456,9 +494,12 @@ export async function syncGoogleTasksTwoWay(params: {
       // 2. Deterministic status alignment on Master Sync:
       // - Skipped / excluded / past-due tasks -> DELETE
       // - Completed locally while still needsAction in Google Tasks -> PATCH to 'completed'
+      // - Open (needsAction) [IronPulse:...] tasks due after maxSyncDate -> DELETE (prune out-of-window future weeks)
       const isExcluded = excludedSet.has(entryId);
       const isSkippedLocally = localStatus === 'skipped';
       const isPastDue = taskDueDate !== null && taskDueDate < params.todayIso;
+      const isBeyondSyncWindowOpen =
+        task.status !== 'completed' && taskDueDate !== null && taskDueDate > maxSyncDate;
       const isCompletedLocally =
         localEntry !== undefined &&
         (localStatus === 'completed' ||
@@ -492,6 +533,20 @@ export async function syncGoogleTasksTwoWay(params: {
         continue;
       }
 
+      if (isBeyondSyncWindowOpen) {
+        const delRes = await tasksFetch(
+          `https://tasks.googleapis.com/tasks/v1/lists/${encodeURIComponent(
+            listId
+          )}/tasks/${encodeURIComponent(task.id)}`,
+          token,
+          { method: 'DELETE' }
+        );
+        if (delRes.ok) {
+          deletedStaleCount += 1;
+        }
+        continue;
+      }
+
       // Only index active needsAction tasks so completed/archived tasks don't block pushing fresh tasks
       if (task.status !== 'completed') {
         taskByEntryId.set(entryId, task);
@@ -502,11 +557,11 @@ export async function syncGoogleTasksTwoWay(params: {
       }
     }
 
-    // 3. Outbound: Push/update all Pending & In Progress schedule entries from today through today + 6 days
+    // 3. Outbound: Push/update all Pending & In Progress schedule entries within [todayIso, maxSyncDate]
     let pushedCount = 0;
 
     const targetDates = Object.keys(params.schedules)
-      .filter((d) => d >= params.todayIso && d <= endDate)
+      .filter((d) => d >= params.todayIso && d <= maxSyncDate)
       .sort();
 
     for (const date of targetDates) {
@@ -707,8 +762,13 @@ export async function upsertGoogleTaskForSchedule(params: {
   date: string;
   item: ScheduledItem;
   preset?: WorkoutPreset;
+  todayIso?: string;
 }): Promise<TasksActionResult> {
   try {
+    const todayIso = params.todayIso || getTodayIsoDate();
+    if (!isDateWithinGoogleTasksSyncWindow(params.date, todayIso)) {
+      return { status: 'out-of-window' };
+    }
     const token = getCachedGoogleTasksToken();
     if (!token) return { status: 'no-token' };
     const listId = await resolveTasksListId(token);
