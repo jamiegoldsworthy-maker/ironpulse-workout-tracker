@@ -1063,6 +1063,20 @@ export const PlanView: React.FC = () => {
                         >
                           + Custom Slot
                         </button>
+                        {items.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              updateDailySchedule(date, []);
+                              triggerNotice(`Cleared ${items.length} workout(s) on ${formatReadableDate(date)}`);
+                            }}
+                            title="Remove all scheduled workouts on this day"
+                            className="px-3 py-1.5 rounded-xl bg-rose-500/10 text-rose-600 dark:text-rose-400 text-xs font-bold hover:bg-rose-500 hover:text-white inline-flex items-center gap-1 transition-colors"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            Clear Day
+                          </button>
+                        )}
                       </div>
 
                       {inlinePresetSearch.trim() && (
@@ -1354,7 +1368,24 @@ export const PlanView: React.FC = () => {
                 </h3>
               </div>
 
-              <div className="flex items-center gap-1.5">
+              <div className="flex flex-wrap items-center gap-1.5">
+                {selectedDayItems.length > 0 && (
+                  <button
+                    type="button"
+                    data-tooltip="Clear all scheduled workouts on this date"
+                    title="Clear all scheduled workouts on this date"
+                    onClick={() => {
+                      updateDailySchedule(selectedDate, []);
+                      triggerNotice(
+                        `Cleared ${selectedDayItems.length} workout(s) on ${formatReadableDate(selectedDate)}`
+                      );
+                    }}
+                    className="px-2.5 py-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500 hover:text-white text-rose-600 dark:text-rose-400 text-xs font-bold inline-flex items-center gap-1 transition-colors"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" /> Clear Day
+                  </button>
+                )}
+
                 <button
                   type="button"
                   data-tooltip="Add a workout to this date"
