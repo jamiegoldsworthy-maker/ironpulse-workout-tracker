@@ -583,6 +583,8 @@ function buildLoggedExerciseFromPreset(
       pe.secondaryWeightKg !== undefined ? Number(pe.secondaryWeightKg) || 0 : undefined,
     side: pe.side,
     isPerSide: pe.isPerSide,
+    targetRir: pe.targetRir,
+    restSecOverride: pe.restSecOverride,
     groupId: pe.groupId,
     repScheme: pe.repScheme,
     repsPerRound: parsedDefaultRep || 1,
@@ -4367,6 +4369,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         const copy: WorkoutPreset = {
           ...JSON.parse(JSON.stringify(orig)),
           presetUuid: `pre-${uuidv4()}`,
+          legacyWorkoutId: undefined,
           title: `${orig.title} (Copy)`,
           slug: `${orig.slug}_copy_${Math.floor(Math.random() * 900 + 100)}`,
           createdAt: now,

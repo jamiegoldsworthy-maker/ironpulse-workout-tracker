@@ -71,6 +71,7 @@ import {
   loadSavedLibraryFilters,
   matchesLibraryFilters,
   persistSavedLibraryFilters,
+  resolvePresetEffectiveFormat,
   sortLibraryPresets,
 } from '../utils/libraryFilters';
 import { useIsMobileView } from '../utils/useIsMobileView';
@@ -78,6 +79,64 @@ import { ModalPortal } from './ModalPortal';
 import { BulkEditWorkoutsModal } from './BulkEditWorkoutsModal';
 
 const CARDIO_MODES: CardioMode[] = ['Ruck', 'Cycle', 'Run', 'Row', 'Swim', 'Other'];
+
+interface StructurePillMeta {
+  filterId: StructureFilterId;
+  label: string;
+  idleClass: string;
+  activeClass: string;
+}
+
+function getPresetStructureBadgeMeta(preset: WorkoutPreset): StructurePillMeta {
+  const effectiveFormat = resolvePresetEffectiveFormat(preset);
+  if (effectiveFormat === 'amrap') {
+    return {
+      filterId: 'amrap',
+      label: 'AMRAP',
+      idleClass:
+        'bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 border-indigo-500/25 hover:bg-indigo-500/25',
+      activeClass:
+        'bg-indigo-600 text-white border-indigo-600 ring-1 ring-indigo-400/60 shadow-2xs',
+    };
+  }
+  if (effectiveFormat === 'circuit') {
+    return {
+      filterId: 'circuit',
+      label: 'CIRCUIT',
+      idleClass:
+        'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/25 hover:bg-emerald-500/25',
+      activeClass:
+        'bg-emerald-600 text-white border-emerald-600 ring-1 ring-emerald-400/60 shadow-2xs',
+    };
+  }
+  if (effectiveFormat === 'emom_complex') {
+    if (preset.defaultTimer?.emomMode === 'rotating') {
+      return {
+        filterId: 'emom_rotating',
+        label: 'ROTATING EMOM',
+        idleClass:
+          'bg-sky-500/15 text-sky-700 dark:text-sky-300 border-sky-500/25 hover:bg-sky-500/25',
+        activeClass: 'bg-sky-600 text-white border-sky-600 ring-1 ring-sky-400/60 shadow-2xs',
+      };
+    }
+    return {
+      filterId: 'emom_complex',
+      label: 'COMPLEX',
+      idleClass:
+        'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/25 hover:bg-amber-500/25',
+      activeClass:
+        'bg-amber-500 text-white border-amber-500 ring-1 ring-amber-400/60 shadow-2xs',
+    };
+  }
+  return {
+    filterId: 'standard',
+    label: 'STANDARD',
+    idleClass:
+      'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200/90 dark:border-slate-700 hover:bg-slate-200/80 dark:hover:bg-slate-700/80',
+    activeClass:
+      'bg-slate-700 dark:bg-slate-200 text-white dark:text-slate-900 border-slate-700 dark:border-slate-200 ring-1 ring-slate-400/60 shadow-2xs',
+  };
+}
 
 export const LibraryView: React.FC = () => {
   const {
@@ -249,6 +308,20 @@ export const LibraryView: React.FC = () => {
       const curr = prev[key] as T[];
       const next = curr.includes(val) ? curr.filter((x) => x !== val) : [...curr, val];
       return { ...prev, [key]: next };
+    });
+  };
+
+  const toggleCategoryFilter = (categoryName: string) => {
+    const normalized = categoryName.trim();
+    if (!normalized) return;
+    const canonical =
+      categories.find((c) => c.toLowerCase() === normalized.toLowerCase()) || normalized;
+    setFilters((prev) => {
+      const exists = prev.categories.some((c) => c.toLowerCase() === canonical.toLowerCase());
+      const next = exists
+        ? prev.categories.filter((c) => c.toLowerCase() !== canonical.toLowerCase())
+        : [...prev.categories, canonical];
+      return { ...prev, categories: next };
     });
   };
 
@@ -943,6 +1016,11 @@ export const LibraryView: React.FC = () => {
             );
             const isExpanded = Boolean(expandedPresetIds[preset.presetUuid]);
             const isSelected = selectedPresetIds.includes(preset.presetUuid);
+            const structureMeta = getPresetStructureBadgeMeta(preset);
+            const isCategoryFiltered = filters.categories.some(
+              (c) => c.toLowerCase() === (preset.workoutType || '').toLowerCase()
+            );
+            const isStructureFiltered = filters.structureModes.includes(structureMeta.filterId);
 
             return (
               <div
@@ -974,15 +1052,26 @@ export const LibraryView: React.FC = () => {
                     </button>
                   )}
 
-                  <button
-                    type="button"
+                  <div
+                    role="button"
+                    tabIndex={0}
                     onClick={() =>
                       selectionMode
                         ? toggleSelectPreset(preset.presetUuid)
                         : togglePresetCardExpanded(preset.presetUuid)
                     }
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        if (selectionMode) {
+                          toggleSelectPreset(preset.presetUuid);
+                        } else {
+                          togglePresetCardExpanded(preset.presetUuid);
+                        }
+                      }
+                    }}
                     aria-expanded={isExpanded}
-                    className="min-w-0 flex-1 text-left space-y-1"
+                    className="min-w-0 flex-1 text-left space-y-1.5 cursor-pointer focus:outline-none"
                   >
                     <div className="flex items-center gap-2 min-w-0">
                       <h3 className="font-display font-bold text-sm sm:text-[15px] text-slate-900 dark:text-slate-100 truncate">
@@ -990,46 +1079,136 @@ export const LibraryView: React.FC = () => {
                       </h3>
                     </div>
                     <div className="flex flex-wrap items-center gap-1.5">
-                      <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold uppercase tracking-wider bg-orange-500/15 text-orange-600 dark:text-orange-400">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleCategoryFilter(preset.workoutType);
+                        }}
+                        title={
+                          isCategoryFiltered
+                            ? `Remove "${preset.workoutType}" category filter`
+                            : `Filter by "${preset.workoutType}" category`
+                        }
+                        className={`px-2 py-0.5 rounded-lg text-[10px] font-bold uppercase tracking-wider border transition-all ${
+                          isCategoryFiltered
+                            ? 'bg-orange-500 text-white border-orange-500 ring-1 ring-orange-400/60 shadow-2xs'
+                            : 'bg-orange-500/15 text-orange-600 dark:text-orange-400 border-orange-500/20 hover:bg-orange-500/25'
+                        }`}
+                      >
                         {preset.workoutType}
-                      </span>
-                      {preset.formatMode === 'amrap' && (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold uppercase tracking-wider bg-violet-500/15 text-violet-600 dark:text-violet-300">
-                          AMRAP
-                        </span>
-                      )}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleArrayFilter('structureModes', structureMeta.filterId);
+                        }}
+                        title={
+                          isStructureFiltered
+                            ? `Remove ${structureMeta.label} filter`
+                            : `Filter by ${structureMeta.label}`
+                        }
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold uppercase tracking-wider border transition-all ${
+                          isStructureFiltered
+                            ? structureMeta.activeClass
+                            : structureMeta.idleClass
+                        }`}
+                      >
+                        {structureMeta.label}
+                      </button>
+
                       {preset.isBiteSize ? (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold uppercase tracking-wider bg-amber-500/15 text-amber-700 dark:text-amber-300">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setFilters((prev) => ({
+                              ...prev,
+                              biteSizeOnly: !prev.biteSizeOnly,
+                            }));
+                          }}
+                          title={
+                            filters.biteSizeOnly
+                              ? 'Remove Bite-Size filter'
+                              : 'Filter by Bite-Size workouts'
+                          }
+                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold uppercase tracking-wider border transition-all ${
+                            filters.biteSizeOnly
+                              ? 'bg-amber-500 text-white border-amber-500 ring-1 ring-amber-400/60 shadow-2xs'
+                              : 'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/25 hover:bg-amber-500/25'
+                          }`}
+                        >
                           <Zap className="w-2.5 h-2.5 fill-current" />
                           Bite-Size{preset.durationMinutes ? ` · ${preset.durationMinutes}m` : ''}
-                        </span>
+                        </button>
                       ) : preset.durationMinutes ? (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
                           <Clock className="w-2.5 h-2.5 text-orange-500" />
                           {preset.durationMinutes}m
                         </span>
                       ) : null}
+
                       {preset.videoUrl && (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold bg-rose-500/12 text-rose-600 dark:text-rose-400">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setFilters((prev) => ({
+                              ...prev,
+                              hasVideoOnly: !prev.hasVideoOnly,
+                            }));
+                          }}
+                          title={
+                            filters.hasVideoOnly
+                              ? 'Remove Video filter'
+                              : 'Filter by Follow-Along Video workouts'
+                          }
+                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold border transition-all ${
+                            filters.hasVideoOnly
+                              ? 'bg-rose-600 text-white border-rose-600 ring-1 ring-rose-400/60 shadow-2xs'
+                              : 'bg-rose-500/12 text-rose-600 dark:text-rose-400 border-rose-500/20 hover:bg-rose-500/25'
+                          }`}
+                        >
                           <Play className="w-2.5 h-2.5 fill-current" />
                           Video
-                        </span>
+                        </button>
                       )}
                     </div>
-                  </button>
+                  </div>
 
-                  <button
-                    type="button"
-                    onClick={() => togglePresetCardExpanded(preset.presetUuid)}
-                    aria-label={isExpanded ? 'Collapse workout card' : 'Expand workout card'}
-                    className="p-1.5 rounded-xl bg-slate-100/80 dark:bg-slate-800 text-slate-500 dark:text-slate-400 hover:text-orange-500 shrink-0 transition-colors"
-                  >
-                    {isExpanded ? (
-                      <ChevronUp className="w-4 h-4" />
-                    ) : (
-                      <ChevronDown className="w-4 h-4" />
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {!selectionMode && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          addWorkoutToSession(preset.presetUuid);
+                          setActiveTab('log');
+                        }}
+                        data-tooltip="Quick start in Log"
+                        title="Quick start in Log"
+                        aria-label={`Start ${preset.title} in Log`}
+                        className="p-1.5 rounded-xl bg-orange-500/12 text-orange-600 dark:text-orange-400 hover:bg-orange-500 hover:text-white shrink-0 transition-colors"
+                      >
+                        <Play className="w-3.5 h-3.5 fill-current" />
+                      </button>
                     )}
-                  </button>
+
+                    <button
+                      type="button"
+                      onClick={() => togglePresetCardExpanded(preset.presetUuid)}
+                      aria-label={isExpanded ? 'Collapse workout card' : 'Expand workout card'}
+                      className="p-1.5 rounded-xl bg-slate-100/80 dark:bg-slate-800 text-slate-500 dark:text-slate-400 hover:text-orange-500 shrink-0 transition-colors"
+                    >
+                      {isExpanded ? (
+                        <ChevronUp className="w-4 h-4" />
+                      ) : (
+                        <ChevronDown className="w-4 h-4" />
+                      )}
+                    </button>
+                  </div>
                 </div>
 
                 {/* Expanded Body: Actions, Coaching Notes, Exercises & Tags */}
@@ -1063,7 +1242,7 @@ export const LibraryView: React.FC = () => {
                           )}
                       </div>
 
-                      <div className="flex items-center gap-1 ml-auto">
+                      <div className="flex flex-wrap items-center gap-1.5 ml-auto">
                         <button
                           type="button"
                           data-tooltip="Start workout on Gym Floor"
@@ -1083,22 +1262,27 @@ export const LibraryView: React.FC = () => {
                           data-tooltip="Edit workout"
                           title="Edit workout"
                           onClick={() => setEditingPreset(JSON.parse(JSON.stringify(preset)))}
-                          className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-orange-500 transition-colors"
+                          className="px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:text-orange-500 text-xs font-semibold inline-flex items-center gap-1 transition-colors"
                         >
                           <Edit3 className="w-3.5 h-3.5" />
+                          Edit
                         </button>
 
                         <button
                           type="button"
-                          data-tooltip="Duplicate workout"
-                          title="Duplicate workout"
+                          data-tooltip="Clone preset and open in editor"
+                          title="Clone preset and open in editor"
                           onClick={() => {
-                            duplicatePreset(preset.presetUuid);
-                            showToast(`Duplicated "${preset.title}"`);
+                            const cloned = duplicatePreset(preset.presetUuid);
+                            if (cloned) {
+                              setEditingPreset(JSON.parse(JSON.stringify(cloned)));
+                              showToast(`Duplicated "${preset.title}" — editing copy`);
+                            }
                           }}
-                          className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-orange-500 transition-colors"
+                          className="px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:text-orange-500 text-xs font-semibold inline-flex items-center gap-1 transition-colors"
                         >
                           <Copy className="w-3.5 h-3.5" />
+                          Duplicate
                         </button>
 
                         <button
@@ -1109,7 +1293,7 @@ export const LibraryView: React.FC = () => {
                             deletePreset(preset.presetUuid);
                             showToast(`Deleted "${preset.title}"`);
                           }}
-                          className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-400 hover:text-rose-500 transition-colors"
+                          className="p-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-400 hover:text-rose-500 transition-colors"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
@@ -1163,6 +1347,10 @@ export const LibraryView: React.FC = () => {
                                   ) || 'Flow'
                                 : ex.trackingType === 'cardio'
                                 ? `${ex.cardioMode || 'Cardio'} (${ex.defaultDistanceUnit || 'mi'})`
+                                : preset.formatMode === 'amrap'
+                                ? `${ex.defaultReps}/rd${
+                                    ex.isPerSide ? ' · /side' : ''
+                                  } @ ${formatLoadBadge(ex.loadType, ex.defaultWeight, undefined, ex.secondaryWeightKg)}`
                                 : `${ex.defaultSets} × ${ex.defaultReps}${
                                     ex.isPerSide ? '/side' : ''
                                   } @ ${formatLoadBadge(ex.loadType, ex.defaultWeight, undefined, ex.secondaryWeightKg)}`}
@@ -2566,7 +2754,9 @@ export const LibraryView: React.FC = () => {
                     const hasNonDefaultMore = Boolean(
                       (pe.repScheme && pe.repScheme.schemeType !== 'fixed') ||
                         pe.side ||
-                        pe.isPerSide
+                        pe.isPerSide ||
+                        pe.targetRir !== undefined ||
+                        pe.restSecOverride !== undefined
                     );
                     const isMoreOpen =
                       expandedExerciseMore[idx] !== undefined
@@ -2881,7 +3071,13 @@ export const LibraryView: React.FC = () => {
                             </div>
                           </div>
                         ) : (
-                          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                          <div
+                            className={
+                              isAmrapFormat
+                                ? 'grid grid-cols-2 sm:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,0.9fr)_minmax(0,1fr)] gap-2'
+                                : 'grid grid-cols-2 sm:grid-cols-5 gap-2'
+                            }
+                          >
                             <div>
                               <label className="block text-[10px] font-semibold text-slate-400 mb-0.5">
                                 Load Style
@@ -3208,13 +3404,20 @@ export const LibraryView: React.FC = () => {
                               </button>
 
                               {isMoreOpen && (
-                                <div className="mt-2 space-y-2.5 pt-2 border-t border-slate-200/50 dark:border-slate-700/50">
-                                  {/* Rep Scheme Selector */}
-                                  <div className="flex flex-wrap items-center justify-between gap-2">
-                                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                                      Rep Scheme:
-                                    </span>
-                                    <div className="inline-flex flex-wrap rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 p-0.5 gap-0.5">
+                                <div className="mt-1.5 pt-2 border-t border-slate-200/60 dark:border-slate-700/60 grid grid-cols-1 sm:grid-cols-2 gap-2.5 items-start">
+                                  {/* Left Column: Rep Scheme (+ compact ladder inputs when non-fixed) */}
+                                  <div className="space-y-1.5 min-w-0">
+                                    <div className="flex items-center justify-between gap-1.5">
+                                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 shrink-0">
+                                        Rep Scheme
+                                      </span>
+                                      {schemeType !== 'fixed' && (
+                                        <span className="px-1.5 py-0.5 rounded-md bg-orange-500/15 text-orange-600 dark:text-orange-400 text-[10px] font-mono font-bold tabular-nums truncate">
+                                          {expandedSeq.length} rungs · {totalLadderReps} reps
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="inline-flex flex-wrap rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 p-0.5 gap-0.5 w-full">
                                       {(
                                         [
                                           { id: 'fixed', label: 'Fixed' },
@@ -3227,7 +3430,7 @@ export const LibraryView: React.FC = () => {
                                           key={opt.id}
                                           type="button"
                                           onClick={() => updateScheme(opt.id)}
-                                          className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition-colors ${
+                                          className={`flex-1 px-2 py-1 rounded-lg text-[10px] font-bold transition-colors ${
                                             schemeType === opt.id
                                               ? 'bg-orange-500 text-white'
                                               : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
@@ -3237,129 +3440,188 @@ export const LibraryView: React.FC = () => {
                                         </button>
                                       ))}
                                     </div>
+
+                                    {schemeType !== 'fixed' && (
+                                      <div className="p-2 rounded-xl bg-orange-500/[0.06] border border-orange-500/20 grid grid-cols-3 gap-1.5">
+                                        <div>
+                                          <label className="block text-[9px] font-semibold text-slate-500 mb-0.5">
+                                            Start
+                                          </label>
+                                          <input
+                                            type="number"
+                                            min={1}
+                                            value={lStart}
+                                            onChange={(e) =>
+                                              updateScheme(
+                                                schemeType,
+                                                Math.max(1, parseInt(e.target.value, 10) || 1),
+                                                lEnd,
+                                                lStep
+                                              )
+                                            }
+                                            className="w-full px-1.5 py-1 text-xs font-mono font-bold rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-center"
+                                          />
+                                        </div>
+
+                                        <div>
+                                          <label className="block text-[9px] font-semibold text-slate-500 mb-0.5">
+                                            End
+                                          </label>
+                                          <input
+                                            type="number"
+                                            min={1}
+                                            value={lEnd}
+                                            onChange={(e) =>
+                                              updateScheme(
+                                                schemeType,
+                                                lStart,
+                                                Math.max(1, parseInt(e.target.value, 10) || 1),
+                                                lStep
+                                              )
+                                            }
+                                            className="w-full px-1.5 py-1 text-xs font-mono font-bold rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-center"
+                                          />
+                                        </div>
+
+                                        <div>
+                                          <label className="block text-[9px] font-semibold text-slate-500 mb-0.5">
+                                            Step
+                                          </label>
+                                          <input
+                                            type="number"
+                                            min={1}
+                                            value={lStep}
+                                            onChange={(e) =>
+                                              updateScheme(
+                                                schemeType,
+                                                lStart,
+                                                lEnd,
+                                                Math.max(1, parseInt(e.target.value, 10) || 1)
+                                              )
+                                            }
+                                            className="w-full px-1.5 py-1 text-xs font-mono font-bold rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-center"
+                                          />
+                                        </div>
+                                      </div>
+                                    )}
                                   </div>
 
-                                  {/* Ladder Start / End / Step + Live Preview */}
-                                  {schemeType !== 'fixed' && (
-                                    <div className="p-2.5 rounded-xl bg-orange-500/[0.06] border border-orange-500/20 flex flex-wrap items-end gap-2.5">
-                                      <div className="w-16">
-                                        <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
-                                          Start
-                                        </label>
-                                        <input
-                                          type="number"
-                                          min={1}
-                                          value={lStart}
-                                          onChange={(e) =>
-                                            updateScheme(
-                                              schemeType,
-                                              Math.max(1, parseInt(e.target.value, 10) || 1),
-                                              lEnd,
-                                              lStep
-                                            )
-                                          }
-                                          className="w-full px-2 py-1 text-xs font-mono font-bold rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-center"
-                                        />
-                                      </div>
-
-                                      <div className="w-16">
-                                        <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
-                                          End
-                                        </label>
-                                        <input
-                                          type="number"
-                                          min={1}
-                                          value={lEnd}
-                                          onChange={(e) =>
-                                            updateScheme(
-                                              schemeType,
-                                              lStart,
-                                              Math.max(1, parseInt(e.target.value, 10) || 1),
-                                              lStep
-                                            )
-                                          }
-                                          className="w-full px-2 py-1 text-xs font-mono font-bold rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-center"
-                                        />
-                                      </div>
-
-                                      <div className="w-14">
-                                        <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
-                                          Step
-                                        </label>
-                                        <input
-                                          type="number"
-                                          min={1}
-                                          value={lStep}
-                                          onChange={(e) =>
-                                            updateScheme(
-                                              schemeType,
-                                              lStart,
-                                              lEnd,
-                                              Math.max(1, parseInt(e.target.value, 10) || 1)
-                                            )
-                                          }
-                                          className="w-full px-2 py-1 text-xs font-mono font-bold rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-center"
-                                        />
-                                      </div>
-
-                                      <div className="ml-auto text-right">
-                                        <span className="inline-block px-2.5 py-1 rounded-lg bg-orange-500/15 text-orange-600 dark:text-orange-400 text-[11px] font-mono font-bold tabular-nums">
-                                          {expandedSeq.length} rungs • {totalLadderReps} total reps
+                                  {/* Right Column: Side + Per Side (×2 L+R) + Compact Target RIR & Rest Override */}
+                                  <div className="space-y-2 min-w-0">
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                      <div className="flex items-center gap-1">
+                                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mr-0.5">
+                                          Side
                                         </span>
+                                        {(['', 'L', 'R', 'L/R'] as Array<'' | ExerciseSide>).map(
+                                          (sOpt) => (
+                                            <button
+                                              key={sOpt || 'none'}
+                                              type="button"
+                                              onClick={() => {
+                                                const next = [...editingPreset.exercises];
+                                                next[idx] = {
+                                                  ...pe,
+                                                  side: sOpt ? sOpt : undefined,
+                                                };
+                                                setEditingPreset({
+                                                  ...editingPreset,
+                                                  exercises: next,
+                                                });
+                                              }}
+                                              className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition-colors ${
+                                                (pe.side || '') === sOpt
+                                                  ? 'bg-orange-500 text-white'
+                                                  : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-500'
+                                              }`}
+                                            >
+                                              {sOpt || 'None'}
+                                            </button>
+                                          )
+                                        )}
+                                      </div>
+
+                                      <label
+                                        title="Multiply reps by 2 (Left + Right) when calculating total reps & volume"
+                                        className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-600 dark:text-slate-300 cursor-pointer shrink-0"
+                                      >
+                                        <input
+                                          type="checkbox"
+                                          checked={Boolean(pe.isPerSide)}
+                                          onChange={(e) => {
+                                            const next = [...editingPreset.exercises];
+                                            next[idx] = { ...pe, isPerSide: e.target.checked };
+                                            setEditingPreset({ ...editingPreset, exercises: next });
+                                          }}
+                                          className="rounded text-orange-500 focus:ring-orange-500"
+                                        />
+                                        Per Side (×2 L+R)
+                                      </label>
+                                    </div>
+
+                                    <div className="grid grid-cols-2 gap-2">
+                                      <div>
+                                        <label className="block text-[10px] font-semibold text-slate-400 mb-0.5">
+                                          Target RIR
+                                        </label>
+                                        <input
+                                          type="number"
+                                          min={0}
+                                          max={5}
+                                          step={0.5}
+                                          value={pe.targetRir ?? ''}
+                                          placeholder="e.g. 2"
+                                          onChange={(e) => {
+                                            const raw = e.target.value.trim();
+                                            const parsed =
+                                              raw === ''
+                                                ? undefined
+                                                : Math.min(5, Math.max(0, parseFloat(raw)));
+                                            const next = [...editingPreset.exercises];
+                                            next[idx] = {
+                                              ...pe,
+                                              targetRir:
+                                                parsed !== undefined && Number.isFinite(parsed)
+                                                  ? parsed
+                                                  : undefined,
+                                            };
+                                            setEditingPreset({ ...editingPreset, exercises: next });
+                                          }}
+                                          className="w-full px-2 py-1 text-xs font-mono font-bold rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 focus:outline-none focus:border-orange-500"
+                                        />
+                                      </div>
+
+                                      <div>
+                                        <label className="block text-[10px] font-semibold text-slate-400 mb-0.5">
+                                          Exercise Rest (s)
+                                        </label>
+                                        <input
+                                          type="number"
+                                          min={0}
+                                          max={600}
+                                          step={5}
+                                          value={pe.restSecOverride ?? ''}
+                                          placeholder="Default"
+                                          onChange={(e) => {
+                                            const raw = e.target.value.trim();
+                                            const parsed =
+                                              raw === ''
+                                                ? undefined
+                                                : Math.max(0, parseInt(raw, 10));
+                                            const next = [...editingPreset.exercises];
+                                            next[idx] = {
+                                              ...pe,
+                                              restSecOverride:
+                                                parsed !== undefined && Number.isFinite(parsed)
+                                                  ? parsed
+                                                  : undefined,
+                                            };
+                                            setEditingPreset({ ...editingPreset, exercises: next });
+                                          }}
+                                          className="w-full px-2 py-1 text-xs font-mono font-bold rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 focus:outline-none focus:border-orange-500"
+                                        />
                                       </div>
                                     </div>
-                                  )}
-
-                                  {/* Side Badge & Per Side (x2) */}
-                                  <div className="flex flex-wrap items-center justify-between gap-2">
-                                    <div className="flex items-center gap-1.5">
-                                      <span className="text-[10px] font-semibold text-slate-400">
-                                        Side:
-                                      </span>
-                                      {(['', 'L', 'R', 'L/R'] as Array<'' | ExerciseSide>).map(
-                                        (sOpt) => (
-                                          <button
-                                            key={sOpt || 'none'}
-                                            type="button"
-                                            onClick={() => {
-                                              const next = [...editingPreset.exercises];
-                                              next[idx] = {
-                                                ...pe,
-                                                side: sOpt ? sOpt : undefined,
-                                              };
-                                              setEditingPreset({
-                                                ...editingPreset,
-                                                exercises: next,
-                                              });
-                                            }}
-                                            className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition-colors ${
-                                              (pe.side || '') === sOpt
-                                                ? 'bg-orange-500 text-white'
-                                                : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-500'
-                                            }`}
-                                          >
-                                            {sOpt || 'None'}
-                                          </button>
-                                        )
-                                      )}
-                                    </div>
-
-                                    <label
-                                      title="Multiply reps by 2 (Left + Right) when calculating total reps & volume"
-                                      className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-600 dark:text-slate-300 cursor-pointer"
-                                    >
-                                      <input
-                                        type="checkbox"
-                                        checked={Boolean(pe.isPerSide)}
-                                        onChange={(e) => {
-                                          const next = [...editingPreset.exercises];
-                                          next[idx] = { ...pe, isPerSide: e.target.checked };
-                                          setEditingPreset({ ...editingPreset, exercises: next });
-                                        }}
-                                        className="rounded text-orange-500 focus:ring-orange-500"
-                                      />
-                                      Per Side (×2 L+R)
-                                    </label>
                                   </div>
                                 </div>
                               )}

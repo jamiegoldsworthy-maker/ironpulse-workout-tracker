@@ -88,6 +88,8 @@ export interface PresetExercise {
   repScheme?: RepSchemeConfig;
   side?: ExerciseSide;
   isPerSide?: boolean;
+  targetRir?: number;
+  restSecOverride?: number;
   groupId?: string;
   cardioMode?: CardioMode;
   defaultDistanceUnit?: DistanceUnit;
@@ -209,6 +211,8 @@ export interface LoggedExercise {
   // Strength / Complex fields
   sets: SetEntry[];
   rir?: number; // Reps in Reserve at end of final set
+  targetRir?: number; // Optional preset target RIR guidance
+  restSecOverride?: number; // Optional per-exercise rest timer override in seconds
   totalSets: number;
   totalReps: number;
   totalLoadKg: number;
