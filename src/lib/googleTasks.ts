@@ -3,7 +3,12 @@ import {
   reauthenticateWithPopup,
   signInWithPopup,
 } from 'firebase/auth';
-import { initFirebaseServices } from '../services/firebase';
+import {
+  ACCESS_DENIED_MESSAGE,
+  initFirebaseServices,
+  isAllowedUserEmail,
+  signOutFirebase,
+} from '../services/firebase';
 import { DailySchedule, ScheduledItem, WorkoutPreset } from '../types/workout';
 import {
   formatMobilityDurationSeconds,
@@ -580,6 +585,12 @@ export async function acquireGoogleTasksToken(
     const result = auth.currentUser
       ? await reauthenticateWithPopup(auth.currentUser, provider)
       : await signInWithPopup(auth, provider);
+
+    if (!isAllowedUserEmail(result.user?.email)) {
+      await signOutFirebase();
+      clearCachedGoogleTasksToken();
+      throw new Error(ACCESS_DENIED_MESSAGE);
+    }
 
     const credential = GoogleAuthProvider.credentialFromResult(result);
     const token = credential?.accessToken || null;

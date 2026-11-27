@@ -120,6 +120,7 @@ export const SettingsView: React.FC = () => {
   // Top 2-Tab Segmented Switcher (Sync & Preferences default on open)
   const [activeSettingsTab, setActiveSettingsTab] = useState<SettingsTab>('sync_prefs');
   const [isSyncingTasks, setIsSyncingTasks] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
 
   // Collapsible bottom accordions inside Sync & Preferences (collapsed by default)
   const [backupAccordionOpen, setBackupAccordionOpen] = useState(false);
@@ -597,13 +598,15 @@ export const SettingsView: React.FC = () => {
                   <button
                     type="button"
                     onClick={async () => {
+                      setAuthError(null);
                       try {
                         await signInWithGoogle();
                         showNotice('Signed in with Google!');
                       } catch (e: unknown) {
-                        showNotice(
-                          e instanceof Error ? e.message : 'Configure Firebase project below first'
-                        );
+                        const msg =
+                          e instanceof Error ? e.message : 'Configure Firebase project below first';
+                        setAuthError(msg);
+                        showNotice(msg);
                       }
                     }}
                     className="w-full py-2.5 px-4 rounded-2xl bg-orange-500 hover:bg-orange-600 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-sm"
@@ -611,6 +614,15 @@ export const SettingsView: React.FC = () => {
                     <LogIn className="w-4 h-4" />
                     Sign In with Google
                   </button>
+
+                  {authError && (
+                    <div
+                      role="alert"
+                      className="text-xs font-semibold text-rose-600 dark:text-rose-400 bg-rose-500/10 border border-rose-500/25 p-2.5 rounded-xl"
+                    >
+                      {authError}
+                    </div>
+                  )}
 
                   <div className="pt-2 border-t border-slate-100 dark:border-slate-800 space-y-2">
                     <label className="block text-[11px] font-semibold text-slate-500">

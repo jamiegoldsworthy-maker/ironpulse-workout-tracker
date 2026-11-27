@@ -167,12 +167,31 @@ export function initFirebaseServices(): {
   }
 }
 
+export const ALLOWED_EMAIL: string =
+  import.meta.env.VITE_ALLOWED_EMAIL || 'jamiegoldsworthy@gmail.com';
+export const ACCESS_DENIED_MESSAGE =
+  "Access denied: this app is restricted to the owner's account.";
+
+export function isAllowedUserEmail(email?: string | null): boolean {
+  return (email || '').trim().toLowerCase() === ALLOWED_EMAIL.trim().toLowerCase();
+}
+
 export async function signInWithGoogle(): Promise<User | null> {
   const { auth } = initFirebaseServices();
   if (!auth) throw new Error('Firebase is not configured yet. Add your Firebase config in Settings.');
   const provider = new GoogleAuthProvider();
   provider.addScope('https://www.googleapis.com/auth/tasks');
   const result = await signInWithPopup(auth, provider);
+  if (!isAllowedUserEmail(result.user?.email)) {
+    await fbSignOut(auth);
+    try {
+      sessionStorage.removeItem('ironpulse_google_tasks_token');
+      sessionStorage.removeItem('ironpulse_google_tasks_token_exp');
+    } catch {
+      // ignore
+    }
+    throw new Error(ACCESS_DENIED_MESSAGE);
+  }
   const credential = GoogleAuthProvider.credentialFromResult(result);
   if (credential?.accessToken) {
     const expiresAt = Date.now() + 3500 * 1000;
@@ -200,13 +219,30 @@ export async function signOutFirebase(): Promise<void> {
   }
 }
 
-export function subscribeToAuthChanges(callback: (user: User | null) => void): () => void {
+export function subscribeToAuthChanges(
+  callback: (user: User | null) => void,
+  onUnauthorized?: (message: string) => void
+): () => void {
   const { auth } = initFirebaseServices();
   if (!auth) {
     callback(null);
     return () => {};
   }
-  return onAuthStateChanged(auth, callback);
+  return onAuthStateChanged(auth, async (user) => {
+    if (user && !isAllowedUserEmail(user.email)) {
+      await fbSignOut(auth);
+      try {
+        sessionStorage.removeItem('ironpulse_google_tasks_token');
+        sessionStorage.removeItem('ironpulse_google_tasks_token_exp');
+      } catch {
+        // ignore
+      }
+      callback(null);
+      onUnauthorized?.(ACCESS_DENIED_MESSAGE);
+      return;
+    }
+    callback(user);
+  });
 }
 
 export async function upsertFirestoreDoc<T extends Record<string, any>>(

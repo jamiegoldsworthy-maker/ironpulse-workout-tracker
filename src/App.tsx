@@ -6,7 +6,13 @@ import { LibraryView } from './components/LibraryView';
 import { HistoryView } from './components/HistoryView';
 import { SettingsView } from './components/SettingsView';
 import { useWorkoutStore } from './store/useWorkoutStore';
-import { initFirebaseServices, subscribeToAuthChanges } from './services/firebase';
+import {
+  ACCESS_DENIED_MESSAGE,
+  initFirebaseServices,
+  isAllowedUserEmail,
+  signOutFirebase,
+  subscribeToAuthChanges,
+} from './services/firebase';
 import { getCachedGoogleTasksToken } from './lib/googleTasks';
 
 export const App: React.FC = () => {
@@ -79,18 +85,30 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     initFirebaseServices();
-    const unsubscribe = subscribeToAuthChanges((user) => {
-      if (user) {
-        setAuthUser({
-          uid: user.uid,
-          email: user.email,
-          displayName: user.displayName,
-          photoURL: user.photoURL,
-        });
-      } else {
+    const unsubscribe = subscribeToAuthChanges(
+      (user) => {
+        if (user) {
+          if (!isAllowedUserEmail(user.email)) {
+            void signOutFirebase();
+            setAuthUser(null);
+            useWorkoutStore.setState({ lastSyncError: ACCESS_DENIED_MESSAGE });
+            return;
+          }
+          setAuthUser({
+            uid: user.uid,
+            email: user.email,
+            displayName: user.displayName,
+            photoURL: user.photoURL,
+          });
+        } else {
+          setAuthUser(null);
+        }
+      },
+      (deniedMessage) => {
         setAuthUser(null);
+        useWorkoutStore.setState({ lastSyncError: deniedMessage });
       }
-    });
+    );
     return () => unsubscribe();
   }, [setAuthUser]);
 
