@@ -23,6 +23,9 @@ import {
   Zap,
   ExternalLink,
   Video,
+  Lock,
+  Unlock,
+  RefreshCw,
 } from 'lucide-react';
 import { useWorkoutStore } from '../store/useWorkoutStore';
 import {
@@ -85,8 +88,10 @@ export const LibraryView: React.FC = () => {
   const [editingPreset, setEditingPreset] = useState<WorkoutPreset | null>(null);
   const [tagInput, setTagInput] = useState('');
   const [activeMetaPanel, setActiveMetaPanel] = useState<
-    'programs' | 'tags' | 'timer' | 'notes' | null
+    'programs' | 'tags' | 'timer' | 'video' | 'notes' | null
   >(null);
+  const [syncRoundsLocked, setSyncRoundsLocked] = useState(false);
+  const [untouchedStarterExUuid, setUntouchedStarterExUuid] = useState<string | null>(null);
   const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
   const [newCategoryInput, setNewCategoryInput] = useState('');
   const [renamingCategory, setRenamingCategory] = useState<{
@@ -126,6 +131,7 @@ export const LibraryView: React.FC = () => {
     setRenamingCategory(null);
     setExpandedExerciseMore({});
     setTimerDraftInputs({});
+    setSyncRoundsLocked(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editingPreset?.presetUuid]);
 
@@ -137,6 +143,8 @@ export const LibraryView: React.FC = () => {
   const closePresetEditorModal = () => {
     const returnTab = presetEditorReturnTab;
     setEditingPreset(null);
+    setUntouchedStarterExUuid(null);
+    setSyncRoundsLocked(false);
     clearPresetEditor();
     if (returnTab && returnTab !== 'library') {
       setActiveTab(returnTab);
@@ -255,6 +263,9 @@ export const LibraryView: React.FC = () => {
 
   const handleCreateNewPreset = () => {
     const now = new Date().toISOString();
+    const starterExUuid = globalExercises[0]?.exerciseUuid || `ex-${uuidv4()}`;
+    setUntouchedStarterExUuid(starterExUuid);
+    setSyncRoundsLocked(false);
     setEditingPreset({
       presetUuid: `pre-${uuidv4()}`,
       slug: 'wkt_custom_workout',
@@ -265,7 +276,7 @@ export const LibraryView: React.FC = () => {
       defaultTimer: { mode: 'rest', restSec: 60 },
       exercises: [
         {
-          exerciseUuid: globalExercises[0]?.exerciseUuid || `ex-${uuidv4()}`,
+          exerciseUuid: starterExUuid,
           exerciseName: globalExercises[0]?.exerciseName || 'KB Clean & Press',
           category: 'Strength',
           trackingType: 'strength',
@@ -750,23 +761,90 @@ export const LibraryView: React.FC = () => {
                           return;
                         }
                         const nextCategory = e.target.value as WorkoutType;
-                        const isMobCat = /^(mobility|yoga)$/i.test(nextCategory.trim());
+                        const normCat = nextCategory.trim().toLowerCase();
+                        const isMobilityLike = /^(mobility|yoga|physio|rehab|prehab|recovery)$/.test(
+                          normCat
+                        );
+                        const isCardioLike = /^(cardio|conditioning|endurance|ruck|run|cycle)$/.test(
+                          normCat
+                        );
+
+                        const starterName = (
+                          globalExercises[0]?.exerciseName || 'KB Clean & Press'
+                        ).toLowerCase();
+                        const hasOnlyUntouchedPlaceholder =
+                          editingPreset.exercises.length === 1 &&
+                          (() => {
+                            const ex0 = editingPreset.exercises[0];
+                            const ex0Name = (ex0.exerciseName || '').trim().toLowerCase();
+                            return (
+                              (untouchedStarterExUuid !== null &&
+                                ex0.exerciseUuid === untouchedStarterExUuid) ||
+                              ex0Name === '' ||
+                              ex0Name === 'new exercise' ||
+                              ex0Name === starterName
+                            );
+                          })();
+
+                        let nextExercises = editingPreset.exercises;
+                        if (hasOnlyUntouchedPlaceholder) {
+                          const ex0 = editingPreset.exercises[0];
+                          if (isMobilityLike) {
+                            nextExercises = [
+                              {
+                                exerciseUuid: ex0.exerciseUuid,
+                                exerciseName: '',
+                                category: nextCategory,
+                                trackingType: 'mobility',
+                                loadType: 'none',
+                                defaultWeight: 0,
+                                defaultSets: 1,
+                                defaultReps: '',
+                                defaultDurationMin: 0,
+                                baseNotes: ex0.baseNotes,
+                              },
+                            ];
+                          } else if (isCardioLike) {
+                            nextExercises = [
+                              {
+                                exerciseUuid: ex0.exerciseUuid,
+                                exerciseName: '',
+                                category: nextCategory,
+                                trackingType: 'cardio',
+                                loadType: 'none',
+                                defaultWeight: 0,
+                                defaultSets: 1,
+                                defaultReps: '1',
+                                cardioMode: 'Ruck',
+                                defaultDistanceUnit: meta.defaultDistanceUnit || 'mi',
+                                baseNotes: ex0.baseNotes,
+                              },
+                            ];
+                          } else {
+                            nextExercises = [
+                              {
+                                exerciseUuid: ex0.exerciseUuid,
+                                exerciseName:
+                                  ex0.exerciseName &&
+                                  ex0.exerciseName.toLowerCase() !== starterName
+                                    ? ex0.exerciseName
+                                    : '',
+                                category: nextCategory,
+                                trackingType: 'strength',
+                                loadType: 'single_kg',
+                                defaultWeight: 16,
+                                defaultSets: 3,
+                                defaultReps: '10',
+                                baseNotes: ex0.baseNotes,
+                              },
+                            ];
+                          }
+                        }
+
                         setEditingPreset({
                           ...editingPreset,
                           workoutType: nextCategory,
-                          exercises: isMobCat
-                            ? editingPreset.exercises.map((ex) =>
-                                ex.exerciseName === 'New Exercise' && ex.trackingType === 'strength'
-                                  ? {
-                                      ...ex,
-                                      trackingType: 'mobility',
-                                      loadType: 'none',
-                                      defaultWeight: 0,
-                                      defaultDurationMin: ex.defaultDurationMin ?? 0,
-                                    }
-                                  : ex
-                              )
-                            : editingPreset.exercises,
+                          exercises: nextExercises,
                         });
                       }}
                       className="flex-1 min-w-0 px-3 py-2 text-sm font-semibold rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:border-orange-500"
@@ -951,97 +1029,7 @@ export const LibraryView: React.FC = () => {
                 </div>
               )}
 
-              {/* Optional Target Duration & Bite-Size Movement Snack Toggle */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 rounded-2xl bg-slate-50/80 dark:bg-slate-800/50 border border-slate-200/70 dark:border-slate-700/70">
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
-                    Target Duration (mins) — Optional
-                  </label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={240}
-                    step={1}
-                    value={editingPreset.durationMinutes ?? ''}
-                    placeholder="e.g. 5, 10, 20, 45"
-                    onChange={(e) => {
-                      const raw = e.target.value.trim();
-                      const parsed = raw === '' ? undefined : Math.max(1, Math.round(Number(raw)));
-                      setEditingPreset({
-                        ...editingPreset,
-                        durationMinutes: Number.isFinite(parsed as number) ? parsed : undefined,
-                      });
-                    }}
-                    className="w-full px-3 py-1.5 text-xs font-mono font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 focus:outline-none focus:border-orange-500"
-                  />
-                </div>
-
-                <label className="flex items-center justify-between gap-2.5 px-3 py-2 rounded-xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-700/80 cursor-pointer">
-                  <div className="min-w-0">
-                    <div className="text-xs font-bold flex items-center gap-1 text-slate-800 dark:text-slate-100">
-                      <Zap className="w-3.5 h-3.5 text-amber-500 fill-current shrink-0" />
-                      <span className="truncate">Bite-Size / Movement Snack</span>
-                    </div>
-                    <div className="text-[10px] text-slate-500 truncate">
-                      Show in quick ⚡ Bite-Size drawer
-                    </div>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={Boolean(editingPreset.isBiteSize)}
-                    onChange={(e) => {
-                      const checked = e.target.checked;
-                      setEditingPreset({
-                        ...editingPreset,
-                        isBiteSize: checked,
-                        durationMinutes:
-                          checked && !editingPreset.durationMinutes
-                            ? 5
-                            : editingPreset.durationMinutes,
-                      });
-                    }}
-                    className="rounded accent-orange-500 w-4 h-4 shrink-0"
-                  />
-                </label>
-
-                <div className="sm:col-span-2">
-                  <label className="flex items-center gap-1.5 text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
-                    <Video className="w-3.5 h-3.5 text-rose-500 shrink-0" />
-                    <span>Follow-Along Video URL (YouTube) — Optional</span>
-                  </label>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="url"
-                      value={editingPreset.videoUrl || ''}
-                      placeholder="https://youtube.com/watch?v=... or https://youtu.be/..."
-                      onChange={(e) =>
-                        setEditingPreset({
-                          ...editingPreset,
-                          videoUrl: e.target.value,
-                        })
-                      }
-                      className="flex-1 min-w-0 px-3 py-1.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 focus:outline-none focus:border-orange-500"
-                    />
-                    {editingPreset.videoUrl?.trim() && editingPreset.exercises.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setEditingPreset({
-                            ...editingPreset,
-                            exercises: [],
-                          })
-                        }
-                        title="Clear exercises for a video-only follow-along routine"
-                        className="px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:text-rose-500 text-[11px] font-semibold shrink-0"
-                      >
-                        Video-Only
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {/* Row 2: Always-Collapsed Summary Chips (Programs, Tags, Timer, Notes) */}
+              {/* Row 2: Always-Collapsed Summary Chips (Programs, Tags, Timer, ⚡ Bite-Size, ▶ Video, Notes) */}
               {(() => {
                 const selectedProgNames = programs
                   .filter((p) => editingPreset.programIds?.includes(p.programUuid))
@@ -1060,23 +1048,48 @@ export const LibraryView: React.FC = () => {
                       ? 'emom_complex'
                       : 'circuit'
                     : 'standard');
-                const rndVal = editingPreset.defaultTimer?.rounds ?? (activeFormat === 'emom_complex' ? 15 : 12);
-                const wrkVal = editingPreset.defaultTimer?.workSec ?? (activeFormat === 'emom_complex' ? 60 : 40);
-                const rstVal = editingPreset.defaultTimer?.restSec ?? (activeFormat === 'circuit' ? 20 : activeFormat === 'emom_complex' ? 0 : 60);
-                const formatPrefix = activeFormat === 'emom_complex' ? 'EMOM' : 'Circuit';
+                const activeEmomMode: 'rotating' | 'complex' =
+                  editingPreset.defaultTimer?.emomMode || 'complex';
+                const isRotatingEmom =
+                  activeFormat === 'emom_complex' && activeEmomMode === 'rotating';
+                const rndVal =
+                  editingPreset.defaultTimer?.rounds ??
+                  (isRotatingEmom
+                    ? Math.max(1, editingPreset.exercises.length)
+                    : activeFormat === 'emom_complex'
+                    ? 15
+                    : 12);
+                const wrkVal =
+                  editingPreset.defaultTimer?.workSec ??
+                  (activeFormat === 'emom_complex' ? 60 : 40);
+                const rstVal =
+                  editingPreset.defaultTimer?.restSec ??
+                  (activeFormat === 'circuit' ? 20 : activeFormat === 'emom_complex' ? 0 : 60);
+                const formatPrefix = isRotatingEmom
+                  ? 'Rotating EMOM'
+                  : activeFormat === 'emom_complex'
+                  ? 'EMOM'
+                  : 'Circuit';
+
+                const durationTag = editingPreset.durationMinutes
+                  ? ` · ${editingPreset.durationMinutes}m`
+                  : '';
 
                 const timerSummary =
                   activeFormat === 'standard'
-                    ? `Standard · ${rstVal === 0 ? 'No Rest' : `${rstVal}s`}`
+                    ? `Standard · ${rstVal === 0 ? 'No Rest' : `${rstVal}s`}${durationTag}`
+                    : isRotatingEmom
+                    ? `${formatPrefix} · ${rndVal}m (${wrkVal}s/move)`
                     : wrkVal === 0 && rstVal > 0
-                    ? `${formatPrefix} · ${rndVal} rnds · ${rstVal}s rest`
+                    ? `${formatPrefix} · ${rndVal} rnds · ${rstVal}s rest${durationTag}`
                     : wrkVal === 0 && rstVal === 0
-                    ? `${formatPrefix} · ${rndVal} rnds · No Rest`
+                    ? `${formatPrefix} · ${rndVal} rnds · No Rest${durationTag}`
                     : rstVal === 0
-                    ? `${formatPrefix} · ${rndVal}×${wrkVal}s · No Rest`
-                    : `${formatPrefix} · ${rndVal}×${wrkVal}s/${rstVal}s`;
+                    ? `${formatPrefix} · ${rndVal}×${wrkVal}s · No Rest${durationTag}`
+                    : `${formatPrefix} · ${rndVal}×${wrkVal}s/${rstVal}s${durationTag}`;
 
                 const hasNotes = Boolean(editingPreset.workoutNotes?.trim());
+                const hasVideo = Boolean(editingPreset.videoUrl?.trim());
                 const isIntervalFormat =
                   activeFormat === 'circuit' || activeFormat === 'emom_complex';
 
@@ -1113,12 +1126,18 @@ export const LibraryView: React.FC = () => {
                       },
                     });
                   } else {
-                    const rounds = editingPreset.defaultTimer?.rounds || 15;
+                    const nextEmomMode = editingPreset.defaultTimer?.emomMode || 'complex';
+                    const rounds =
+                      editingPreset.defaultTimer?.rounds ||
+                      (nextEmomMode === 'rotating'
+                        ? Math.max(3, editingPreset.exercises.length)
+                        : 15);
                     setEditingPreset({
                       ...editingPreset,
                       formatMode: 'emom_complex',
                       defaultTimer: {
                         mode: 'circuit',
+                        emomMode: nextEmomMode,
                         rounds,
                         workSec: 60,
                         restSec: 0,
@@ -1182,9 +1201,70 @@ export const LibraryView: React.FC = () => {
                             : 'bg-slate-100 dark:bg-slate-800 border-slate-200/70 dark:border-slate-700/70 text-slate-700 dark:text-slate-200 hover:border-orange-500'
                         }`}
                       >
-                        <Timer className="w-3 h-3 text-orange-500 shrink-0" />
+                        <Timer
+                          className={`w-3 h-3 shrink-0 ${
+                            activeMetaPanel === 'timer' ? 'text-white' : 'text-orange-500'
+                          }`}
+                        />
                         <span className="truncate">Timer: {timerSummary}</span>
                         {activeMetaPanel === 'timer' ? (
+                          <ChevronUp className="w-3 h-3 shrink-0" />
+                        ) : (
+                          <ChevronDown className="w-3 h-3 shrink-0" />
+                        )}
+                      </button>
+
+                      {/* Bite-Size Direct Toggle Pill */}
+                      <button
+                        type="button"
+                        title={
+                          editingPreset.isBiteSize
+                            ? 'Bite-Size / Movement Snack enabled (click to disable)'
+                            : 'Mark as Bite-Size / Movement Snack'
+                        }
+                        onClick={() => {
+                          const nextBite = !editingPreset.isBiteSize;
+                          setEditingPreset({
+                            ...editingPreset,
+                            isBiteSize: nextBite,
+                            durationMinutes:
+                              nextBite && !editingPreset.durationMinutes
+                                ? 5
+                                : editingPreset.durationMinutes,
+                          });
+                        }}
+                        className={`px-2.5 py-1 rounded-xl text-[11px] font-bold inline-flex items-center gap-1 border transition-colors ${
+                          editingPreset.isBiteSize
+                            ? 'bg-orange-500 text-white border-orange-500 shadow-2xs'
+                            : 'bg-slate-100 dark:bg-slate-800 border-slate-200/70 dark:border-slate-700/70 text-slate-700 dark:text-slate-200 hover:border-orange-500'
+                        }`}
+                      >
+                        <Zap className="w-3 h-3 fill-current shrink-0" />
+                        <span>Bite-Size</span>
+                      </button>
+
+                      {/* Video URL Inline Drawer Pill */}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setActiveMetaPanel((p) => (p === 'video' ? null : 'video'))
+                        }
+                        className={`px-2.5 py-1 rounded-xl text-[11px] font-semibold inline-flex items-center gap-1 border transition-colors ${
+                          activeMetaPanel === 'video'
+                            ? 'bg-orange-500 text-white border-orange-500'
+                            : 'bg-slate-100 dark:bg-slate-800 border-slate-200/70 dark:border-slate-700/70 text-slate-700 dark:text-slate-200 hover:border-orange-500'
+                        }`}
+                      >
+                        <Play
+                          className={`w-3 h-3 fill-current shrink-0 ${
+                            activeMetaPanel === 'video' ? 'text-white' : 'text-rose-500'
+                          }`}
+                        />
+                        <span>Video</span>
+                        {hasVideo && activeMetaPanel !== 'video' && (
+                          <span className="w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0" />
+                        )}
+                        {activeMetaPanel === 'video' ? (
                           <ChevronUp className="w-3 h-3 shrink-0" />
                         ) : (
                           <ChevronDown className="w-3 h-3 shrink-0" />
@@ -1213,6 +1293,53 @@ export const LibraryView: React.FC = () => {
                         )}
                       </button>
                     </div>
+
+                    {activeMetaPanel === 'video' && (
+                      <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/70 dark:border-slate-800 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <label className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-600 dark:text-slate-300">
+                            <Video className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                            <span>Follow-Along Video URL (YouTube)</span>
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => setActiveMetaPanel(null)}
+                            className="text-[11px] font-bold text-orange-500 hover:underline"
+                          >
+                            Done
+                          </button>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="url"
+                            value={editingPreset.videoUrl || ''}
+                            placeholder="https://youtube.com/watch?v=... or https://youtu.be/..."
+                            onChange={(e) =>
+                              setEditingPreset({
+                                ...editingPreset,
+                                videoUrl: e.target.value,
+                              })
+                            }
+                            className="flex-1 min-w-0 px-3 py-1.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 focus:outline-none focus:border-orange-500"
+                          />
+                          {editingPreset.videoUrl?.trim() && editingPreset.exercises.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setEditingPreset({
+                                  ...editingPreset,
+                                  exercises: [],
+                                })
+                              }
+                              title="Clear exercises for a video-only follow-along routine"
+                              className="px-2.5 py-1.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 hover:text-rose-500 text-[11px] font-semibold shrink-0"
+                            >
+                              Video-Only
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )}
 
                     {activeMetaPanel === 'programs' && (
                       <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/70 dark:border-slate-800 space-y-2">
@@ -1407,11 +1534,93 @@ export const LibraryView: React.FC = () => {
                           </div>
                         </div>
 
+                        {activeFormat === 'emom_complex' && (
+                          <div className="p-2.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-700/80 space-y-2">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const suggestedMins = Math.max(
+                                    1,
+                                    editingPreset.exercises.length || 3
+                                  );
+                                  setEditingPreset({
+                                    ...editingPreset,
+                                    durationMinutes:
+                                      editingPreset.durationMinutes || suggestedMins,
+                                    defaultTimer: {
+                                      ...(editingPreset.defaultTimer || {
+                                        mode: 'circuit',
+                                        workSec: 60,
+                                        restSec: 0,
+                                      }),
+                                      mode: 'circuit',
+                                      emomMode: 'rotating',
+                                      workSec: editingPreset.defaultTimer?.workSec || 60,
+                                      restSec: 0,
+                                      rounds:
+                                        editingPreset.defaultTimer?.emomMode === 'rotating'
+                                          ? editingPreset.defaultTimer?.rounds || suggestedMins
+                                          : suggestedMins,
+                                    },
+                                  });
+                                  setTimerDraftInputs((prev) => ({ ...prev, rounds: undefined }));
+                                }}
+                                className={`px-3 py-2 rounded-xl text-left border transition-all ${
+                                  isRotatingEmom
+                                    ? 'bg-orange-500/12 border-orange-500 text-slate-900 dark:text-slate-100'
+                                    : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
+                                }`}
+                              >
+                                <div className="text-[11px] font-bold flex items-center gap-1">
+                                  <RefreshCw className="w-3 h-3 text-orange-500 shrink-0" />
+                                  <span>Rotating EMOM (1 Move / Min)</span>
+                                </div>
+                                <div className="text-[10px] text-slate-500 mt-0.5">
+                                  Cycles Min 1 → Move 1, Min 2 → Move 2, etc.
+                                </div>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingPreset({
+                                    ...editingPreset,
+                                    defaultTimer: {
+                                      ...(editingPreset.defaultTimer || {
+                                        mode: 'circuit',
+                                        workSec: 60,
+                                        restSec: 0,
+                                        rounds: 15,
+                                      }),
+                                      mode: 'circuit',
+                                      emomMode: 'complex',
+                                    },
+                                  });
+                                }}
+                                className={`px-3 py-2 rounded-xl text-left border transition-all ${
+                                  !isRotatingEmom
+                                    ? 'bg-orange-500/12 border-orange-500 text-slate-900 dark:text-slate-100'
+                                    : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
+                                }`}
+                              >
+                                <div className="text-[11px] font-bold flex items-center gap-1">
+                                  <Flame className="w-3 h-3 text-orange-500 shrink-0" />
+                                  <span>Complex / Multi-Round</span>
+                                </div>
+                                <div className="text-[10px] text-slate-500 mt-0.5">
+                                  Perform all listed exercises every round.
+                                </div>
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
                         {isIntervalFormat ? (
-                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
                             <div>
                               <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
-                                Default Rounds
+                                {isRotatingEmom ? 'Total Minutes' : 'Default Rounds'}
                               </label>
                               <input
                                 type="number"
@@ -1420,7 +1629,12 @@ export const LibraryView: React.FC = () => {
                                 value={
                                   timerDraftInputs.rounds !== undefined
                                     ? timerDraftInputs.rounds
-                                    : String(editingPreset.defaultTimer?.rounds ?? 15)
+                                    : String(
+                                        editingPreset.defaultTimer?.rounds ??
+                                          (isRotatingEmom
+                                            ? Math.max(1, editingPreset.exercises.length)
+                                            : 15)
+                                      )
                                 }
                                 onChange={(e) => {
                                   const raw = e.target.value;
@@ -1430,6 +1644,9 @@ export const LibraryView: React.FC = () => {
                                     const rounds = Number.isNaN(parsed) ? 0 : Math.max(0, parsed);
                                     setEditingPreset({
                                       ...editingPreset,
+                                      ...(isRotatingEmom && rounds > 0
+                                        ? { durationMinutes: rounds }
+                                        : {}),
                                       defaultTimer: {
                                         ...(editingPreset.defaultTimer || {
                                           mode: 'circuit',
@@ -1439,10 +1656,14 @@ export const LibraryView: React.FC = () => {
                                         mode: 'circuit',
                                         rounds,
                                       },
-                                      exercises: editingPreset.exercises.map((ex) => ({
-                                        ...ex,
-                                        defaultSets: Math.max(1, rounds),
-                                      })),
+                                      ...(syncRoundsLocked
+                                        ? {
+                                            exercises: editingPreset.exercises.map((ex) => ({
+                                              ...ex,
+                                              defaultSets: Math.max(1, rounds),
+                                            })),
+                                          }
+                                        : {}),
                                     });
                                   }
                                 }}
@@ -1471,7 +1692,7 @@ export const LibraryView: React.FC = () => {
 
                             <div>
                               <label className="block text-[10px] font-semibold text-orange-600 dark:text-orange-400 mb-0.5">
-                                Work (sec, 0=Reps)
+                                {isRotatingEmom ? 'Interval (sec)' : 'Work (sec, 0=Reps)'}
                               </label>
                               <input
                                 type="number"
@@ -1583,6 +1804,31 @@ export const LibraryView: React.FC = () => {
 
                             <div>
                               <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
+                                Target Duration (mins)
+                              </label>
+                              <input
+                                type="number"
+                                min={1}
+                                max={240}
+                                value={editingPreset.durationMinutes ?? ''}
+                                placeholder="e.g. 15"
+                                onChange={(e) => {
+                                  const raw = e.target.value.trim();
+                                  const parsed =
+                                    raw === '' ? undefined : Math.max(1, Math.round(Number(raw)));
+                                  setEditingPreset({
+                                    ...editingPreset,
+                                    durationMinutes: Number.isFinite(parsed as number)
+                                      ? parsed
+                                      : undefined,
+                                  });
+                                }}
+                                className="w-full px-2.5 py-1.5 text-xs font-mono font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
                                 Target Range
                               </label>
                               <input
@@ -1609,8 +1855,8 @@ export const LibraryView: React.FC = () => {
                             </div>
                           </div>
                         ) : (
-                          <div className="flex flex-wrap items-center gap-3">
-                            <div className="w-36">
+                          <div className="flex flex-wrap items-end gap-3">
+                            <div className="w-32">
                               <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
                                 Default Rest (sec)
                               </label>
@@ -1638,6 +1884,31 @@ export const LibraryView: React.FC = () => {
                               />
                             </div>
 
+                            <div className="w-36">
+                              <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
+                                Target Duration (mins)
+                              </label>
+                              <input
+                                type="number"
+                                min={1}
+                                max={240}
+                                value={editingPreset.durationMinutes ?? ''}
+                                placeholder="e.g. 5, 20, 45"
+                                onChange={(e) => {
+                                  const raw = e.target.value.trim();
+                                  const parsed =
+                                    raw === '' ? undefined : Math.max(1, Math.round(Number(raw)));
+                                  setEditingPreset({
+                                    ...editingPreset,
+                                    durationMinutes: Number.isFinite(parsed as number)
+                                      ? parsed
+                                      : undefined,
+                                  });
+                                }}
+                                className="w-full px-2.5 py-1.5 text-xs font-mono font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
+                              />
+                            </div>
+
                             <button
                               type="button"
                               onClick={() => {
@@ -1650,7 +1921,7 @@ export const LibraryView: React.FC = () => {
                                   },
                                 });
                               }}
-                              className={`mt-4 px-2.5 py-1.5 rounded-xl text-[11px] font-bold border transition-colors ${
+                              className={`px-2.5 py-1.5 rounded-xl text-[11px] font-bold border transition-colors ${
                                 (editingPreset.defaultTimer?.restSec ?? 60) === 0
                                   ? 'bg-orange-500 text-white border-orange-500'
                                   : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-orange-500'
@@ -1658,12 +1929,6 @@ export const LibraryView: React.FC = () => {
                             >
                               No Rest (0s)
                             </button>
-
-                            <span className="text-[11px] text-slate-400 pt-3">
-                              {(editingPreset.defaultTimer?.restSec ?? 60) === 0
-                                ? 'Rest timer pill & auto-countdown disabled.'
-                                : 'Standard straight-set logging with rest countdown between sets.'}
-                            </span>
                           </div>
                         )}
                       </div>
@@ -1762,6 +2027,9 @@ export const LibraryView: React.FC = () => {
                               value={pe.exerciseName}
                               placeholder="Flow / Movement Sequence (e.g. 90/90 Hip Switch → Shin Box Reach)"
                               onChange={(e) => {
+                                if (untouchedStarterExUuid === pe.exerciseUuid) {
+                                  setUntouchedStarterExUuid(null);
+                                }
                                 const name = e.target.value;
                                 const next = [...editingPreset.exercises];
                                 next[idx] = {
@@ -1779,6 +2047,9 @@ export const LibraryView: React.FC = () => {
                               value={pe.exerciseName}
                               placeholder="Exercise Name"
                               onChange={(e) => {
+                                if (untouchedStarterExUuid === pe.exerciseUuid) {
+                                  setUntouchedStarterExUuid(null);
+                                }
                                 const name = e.target.value;
                                 const matchedGlobal = globalExercises.find(
                                   (ge) => ge.exerciseName.toLowerCase() === name.toLowerCase()
@@ -2140,12 +2411,63 @@ export const LibraryView: React.FC = () => {
 
                             {isSequenceMode ? (
                               <div>
-                                <label className="block text-[10px] font-semibold text-slate-400 mb-0.5">
-                                  Rounds (Synced)
-                                </label>
-                                <div className="px-2 py-1.5 text-xs font-mono font-bold rounded-xl border border-orange-500/30 bg-orange-500/10 text-orange-600 dark:text-orange-400 text-center">
-                                  {syncedRounds} rds
+                                <div className="flex items-center justify-between gap-1 mb-0.5">
+                                  <label className="block text-[10px] font-semibold text-slate-400">
+                                    {syncRoundsLocked ? 'Rounds (Synced)' : 'Rounds / Sets'}
+                                  </label>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const nextLocked = !syncRoundsLocked;
+                                      setSyncRoundsLocked(nextLocked);
+                                      if (nextLocked) {
+                                        setEditingPreset({
+                                          ...editingPreset,
+                                          exercises: editingPreset.exercises.map((ex) => ({
+                                            ...ex,
+                                            defaultSets: Math.max(1, syncedRounds),
+                                          })),
+                                        });
+                                      }
+                                    }}
+                                    title={
+                                      syncRoundsLocked
+                                        ? 'Unlock individual exercise rounds'
+                                        : 'Sync all exercises to default rounds'
+                                    }
+                                    className={`p-0.5 rounded transition-colors ${
+                                      syncRoundsLocked
+                                        ? 'text-orange-500'
+                                        : 'text-slate-400 hover:text-orange-500'
+                                    }`}
+                                  >
+                                    {syncRoundsLocked ? (
+                                      <Lock className="w-3 h-3" />
+                                    ) : (
+                                      <Unlock className="w-3 h-3" />
+                                    )}
+                                  </button>
                                 </div>
+                                {syncRoundsLocked ? (
+                                  <div className="px-2 py-1.5 text-xs font-mono font-bold rounded-xl border border-orange-500/30 bg-orange-500/10 text-orange-600 dark:text-orange-400 text-center">
+                                    {syncedRounds} rds
+                                  </div>
+                                ) : (
+                                  <input
+                                    type="number"
+                                    min={1}
+                                    value={pe.defaultSets}
+                                    onChange={(e) => {
+                                      const next = [...editingPreset.exercises];
+                                      next[idx] = {
+                                        ...pe,
+                                        defaultSets: Math.max(1, parseInt(e.target.value, 10) || 1),
+                                      };
+                                      setEditingPreset({ ...editingPreset, exercises: next });
+                                    }}
+                                    className="w-full px-2 py-1.5 text-xs font-mono font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
+                                  />
+                                )}
                               </div>
                             ) : (
                               <div>
@@ -2199,6 +2521,26 @@ export const LibraryView: React.FC = () => {
                                 className="w-full px-2 py-1.5 text-xs font-mono font-bold rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
                               />
                             </div>
+                          </div>
+                        )}
+
+                        {/* Universal Form Cues / Guidance Field (shown on Strength, Circuit & Cardio; Mobility has Flow Cues inline) */}
+                        {pe.trackingType !== 'mobility' && (
+                          <div>
+                            <label className="block text-[10px] font-semibold text-slate-400 mb-0.5">
+                              Form Cues / Guidance
+                            </label>
+                            <input
+                              type="text"
+                              value={pe.baseNotes || ''}
+                              placeholder="e.g. Keep back straight, brace core, control the eccentric..."
+                              onChange={(e) => {
+                                const next = [...editingPreset.exercises];
+                                next[idx] = { ...pe, baseNotes: e.target.value };
+                                setEditingPreset({ ...editingPreset, exercises: next });
+                              }}
+                              className="w-full px-2.5 py-1.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 focus:outline-none focus:border-orange-500"
+                            />
                           </div>
                         )}
 

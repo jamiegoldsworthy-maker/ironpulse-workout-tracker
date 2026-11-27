@@ -34,6 +34,7 @@ export type PresetFormatMode = 'standard' | 'circuit' | 'emom_complex';
 
 export interface DefaultTimerConfig {
   mode: 'rest' | 'circuit';
+  emomMode?: 'rotating' | 'complex';
   workSec?: number;
   restSec: number;
   rounds?: number;
@@ -242,6 +243,7 @@ export interface WorkoutLog {
   workoutTitleSnapshot: string;
   workoutType: WorkoutType;
   formatMode?: PresetFormatMode;
+  emomMode?: 'rotating' | 'complex';
   targetRounds?: number;
   completedRounds?: number;
   laddersCompleted?: number;

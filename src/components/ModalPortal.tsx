@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 
 let openPortalModalCount = 0;
@@ -41,6 +41,8 @@ export const ModalPortal: React.FC<ModalPortalProps> = ({
   backdropClassName,
   children,
 }) => {
+  const pointerDownOnBackdropRef = useRef(false);
+
   useEffect(() => {
     if (!open) return;
     lockBodyScroll();
@@ -71,8 +73,18 @@ export const ModalPortal: React.FC<ModalPortalProps> = ({
       data-no-swipe="true"
       role="dialog"
       aria-modal="true"
+      onPointerDown={(e) => {
+        pointerDownOnBackdropRef.current = e.target === e.currentTarget;
+      }}
+      onMouseDown={(e) => {
+        if (e.target !== e.currentTarget) {
+          pointerDownOnBackdropRef.current = false;
+        }
+      }}
       onClick={(e) => {
-        if (e.target === e.currentTarget && onClose) {
+        const startedOnBackdrop = pointerDownOnBackdropRef.current;
+        pointerDownOnBackdropRef.current = false;
+        if (startedOnBackdrop && e.target === e.currentTarget && onClose) {
           onClose();
         }
       }}

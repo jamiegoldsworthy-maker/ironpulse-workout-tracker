@@ -516,15 +516,19 @@ function buildLoggedExerciseFromPreset(
   pe: PresetExercise,
   defaultDistanceUnit: DistanceUnit,
   presetFormatMode?: 'standard' | 'circuit' | 'emom_complex',
-  presetRounds?: number
+  presetRounds?: number,
+  emomMode?: 'rotating' | 'complex'
 ): LoggedExercise {
   const effectiveRounds = presetRounds || Number(pe.defaultSets) || 3;
-  const numSets =
-    presetFormatMode === 'circuit'
-      ? effectiveRounds
-      : presetFormatMode === 'emom_complex'
-      ? 0
-      : Math.max(1, Number(pe.defaultSets) || 3);
+  const isComplexAllMovesPerRound =
+    presetFormatMode === 'emom_complex' && emomMode !== 'rotating';
+  const numSets = isComplexAllMovesPerRound
+    ? 0
+    : presetFormatMode === 'circuit'
+    ? Math.max(1, Number(pe.defaultSets) || effectiveRounds)
+    : presetFormatMode === 'emom_complex' && emomMode === 'rotating'
+    ? Math.max(1, Number(pe.defaultSets) || 1)
+    : Math.max(1, Number(pe.defaultSets) || 3);
   const parsedDefaultRep = parseInt(String(pe.defaultReps).replace(/[^0-9]/g, ''), 10) || 0;
   const sets: SetEntry[] =
     pe.trackingType === 'cardio' || pe.trackingType === 'mobility' || numSets === 0
@@ -614,13 +618,26 @@ function createDraftFromPreset(
       ).length
     : undefined;
 
+  const emomMode =
+    formatMode === 'emom_complex'
+      ? preset.defaultTimer?.emomMode || 'complex'
+      : undefined;
+
   const targetRounds =
     formatMode !== 'standard'
-      ? preset.defaultTimer?.rounds || ladderRungCount || preset.exercises[0]?.defaultSets || 10
+      ? preset.defaultTimer?.rounds ||
+        ladderRungCount ||
+        (emomMode === 'rotating' ? Math.max(1, preset.exercises.length) : preset.exercises[0]?.defaultSets || 10)
       : ladderRungCount;
 
   const exercises = preset.exercises.map((pe, idx) => {
-    const built = buildLoggedExerciseFromPreset(pe, defaultDistanceUnit, formatMode, targetRounds);
+    const built = buildLoggedExerciseFromPreset(
+      pe,
+      defaultDistanceUnit,
+      formatMode,
+      targetRounds,
+      emomMode
+    );
     const sessionExNote =
       options?.exerciseNotesByUid?.[pe.exerciseUuid] ??
       options?.exerciseNotesByIndex?.[String(idx)];
@@ -636,8 +653,9 @@ function createDraftFromPreset(
     workoutTitleSnapshot: preset.title,
     workoutType: preset.workoutType,
     formatMode,
+    emomMode,
     targetRounds,
-    completedRounds: formatMode === 'emom_complex' ? 0 : undefined,
+    completedRounds: formatMode === 'emom_complex' && emomMode !== 'rotating' ? 0 : undefined,
     programUuid: options?.programUuid || preset.programIds?.[0],
     scheduleItemUuid: options?.scheduleItemUuid,
     videoUrl: preset.videoUrl,
@@ -1088,6 +1106,7 @@ function buildInitialDraftsForDate(
         slotRole:
           l.slotRole || linkedSched?.slotRole || (idx === 0 ? 'Primary' : `Chained #${idx + 1}`),
         isBiteSize: isBiteSizeLog || undefined,
+        emomMode: l.emomMode || matchedPresetForDraft?.defaultTimer?.emomMode,
         videoUrl: l.videoUrl || matchedPresetForDraft?.videoUrl,
         durationMinutes: l.durationMinutes ?? matchedPresetForDraft?.durationMinutes,
         updatePresetOnSave: false,
@@ -1217,6 +1236,7 @@ function draftToWorkoutLog(
     workoutTitleSnapshot: draft.workoutTitleSnapshot,
     workoutType: draft.workoutType,
     formatMode: draft.formatMode,
+    emomMode: draft.emomMode,
     targetRounds: draft.targetRounds,
     completedRounds: draft.completedRounds,
     laddersCompleted: draft.laddersCompleted,
@@ -2738,6 +2758,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           workoutTitleSnapshot: draft.workoutTitleSnapshot,
           workoutType: draft.workoutType,
           formatMode: draft.formatMode,
+          emomMode: draft.emomMode || matchedPresetForSave?.defaultTimer?.emomMode,
           targetRounds: draft.targetRounds,
           completedRounds: draft.completedRounds,
           laddersCompleted: draft.laddersCompleted,

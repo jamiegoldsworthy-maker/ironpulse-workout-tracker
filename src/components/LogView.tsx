@@ -1232,6 +1232,21 @@ export const LogView: React.FC = () => {
                 activeWeekNumber
               );
               const activeVideoUrl = draft.videoUrl || preset?.videoUrl;
+              const isRotatingEmomWorkout =
+                (draft.emomMode || preset?.defaultTimer?.emomMode) === 'rotating' &&
+                draft.exercises.length > 0;
+              const rotatingTotalMinutes = Math.max(
+                1,
+                draft.targetRounds || preset?.defaultTimer?.rounds || draft.exercises.length
+              );
+              const rotatingWorkSec = preset?.defaultTimer?.workSec || 60;
+              const isRotatingTimerLive =
+                isRotatingEmomWorkout &&
+                timer.mode === 'circuit' &&
+                (timer.isRunning || timer.currentRound > 1);
+              const activeRotatingMoveIdx = isRotatingTimerLive
+                ? ((Math.max(1, timer.currentRound) - 1) % draft.exercises.length)
+                : -1;
 
               if (isCollapsed) {
                 return (
@@ -1641,8 +1656,81 @@ export const LogView: React.FC = () => {
                         </div>
                       )}
 
-                      {/* WORKOUT-LEVEL ROUNDS / LADDER BAR */}
+                      {/* WORKOUT-LEVEL ROUNDS / LADDER / ROTATING EMOM BAR */}
                       {(() => {
+                        if (isRotatingEmomWorkout) {
+                          const activeMove =
+                            activeRotatingMoveIdx >= 0
+                              ? draft.exercises[activeRotatingMoveIdx]
+                              : null;
+                          const nextMoveIdx =
+                            activeRotatingMoveIdx >= 0
+                              ? (activeRotatingMoveIdx + 1) % draft.exercises.length
+                              : 0;
+                          const nextMove =
+                            isRotatingTimerLive && timer.currentRound < timer.totalRounds
+                              ? draft.exercises[nextMoveIdx]
+                              : null;
+
+                          return (
+                            <div className="p-3.5 rounded-2xl bg-[var(--bg-inset)] border border-orange-500/30 space-y-2.5">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <span className="px-2 py-0.5 rounded-lg bg-orange-500 text-white text-[10px] font-bold uppercase tracking-wider shrink-0">
+                                    Rotating EMOM
+                                  </span>
+                                  <span className="text-xs font-bold text-[var(--text-primary)] truncate">
+                                    1 Move / {rotatingWorkSec === 60 ? 'Min' : `${rotatingWorkSec}s`} ·{' '}
+                                    {rotatingTotalMinutes} min total
+                                  </span>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    startCircuitTimer(rotatingTotalMinutes, rotatingWorkSec, 0);
+                                    triggerToast(
+                                      `Started ${rotatingTotalMinutes}m Rotating EMOM (${draft.exercises.length} moves)`
+                                    );
+                                  }}
+                                  className="px-3 py-1.5 rounded-xl bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-sm transition-colors shrink-0"
+                                >
+                                  <Play className="w-3.5 h-3.5 fill-current" />
+                                  {isRotatingTimerLive ? 'Restart EMOM' : `Start ${rotatingTotalMinutes}m EMOM`}
+                                </button>
+                              </div>
+
+                              {isRotatingTimerLive && activeMove ? (
+                                <div className="p-2.5 rounded-xl bg-orange-500/12 border border-orange-500/40 flex flex-wrap items-center justify-between gap-2 text-xs">
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    <span className="px-2 py-0.5 rounded-md bg-orange-500 text-white text-[10px] font-mono font-bold tabular-nums animate-pulse shrink-0">
+                                      MIN {timer.currentRound} / {timer.totalRounds}
+                                    </span>
+                                    <span className="font-display font-extrabold text-[var(--text-primary)] truncate">
+                                      {activeMove.exerciseName}
+                                    </span>
+                                  </div>
+                                  {nextMove && (
+                                    <span className="text-[11px] font-semibold text-[var(--text-secondary)] truncate">
+                                      Next: <strong>{nextMove.exerciseName}</strong>
+                                    </span>
+                                  )}
+                                </div>
+                              ) : (
+                                <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-[var(--text-secondary)]">
+                                  {draft.exercises.map((move, idx) => (
+                                    <span
+                                      key={idx}
+                                      className="px-2 py-0.5 rounded-lg bg-[var(--bg-card)] border border-[var(--border-subtle)] font-semibold"
+                                    >
+                                      Min {idx + 1}: {move.exerciseName}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        }
+
                         const hasLadderExercises = draft.exercises.some(
                           (ex) => ex.repScheme && ex.repScheme.schemeType !== 'fixed'
                         );
@@ -1958,10 +2046,16 @@ export const LogView: React.FC = () => {
                               preset?.exercises?.[exIdx]?.baseNotes ||
                               '';
                             const cueNote = filterNoteForWeek(rawCueNote, activeWeekNumber);
+                            const isActiveRotatingRow =
+                              isRotatingEmomWorkout && activeRotatingMoveIdx === exIdx;
                             return (
                               <div
                                 key={`${ex.exerciseUuid}-${exIdx}`}
-                                className="px-3 py-2.5 flex items-start gap-2.5 min-w-0"
+                                className={`px-3 py-2.5 flex items-start gap-2.5 min-w-0 transition-colors ${
+                                  isActiveRotatingRow
+                                    ? 'bg-orange-500/12 ring-2 ring-inset ring-orange-500'
+                                    : ''
+                                }`}
                               >
                                 <button
                                   type="button"
@@ -2049,12 +2143,19 @@ export const LogView: React.FC = () => {
                                   : 'circuit'
                                 : 'standard');
                             const isComplexMode =
+                              !isRotatingEmomWorkout &&
                               (effectiveFormatMode === 'emom_complex' || workoutHasLadder) &&
                               ex.trackingType !== 'cardio';
                             const isCircuitMode =
+                              !isRotatingEmomWorkout &&
                               effectiveFormatMode === 'circuit' &&
                               !workoutHasLadder &&
                               ex.trackingType !== 'cardio';
+                            const isActiveRotatingCard =
+                              isRotatingEmomWorkout && activeRotatingMoveIdx === exIdx;
+                            const rotatingMinuteBadge = isRotatingEmomWorkout
+                              ? `Min ${exIdx + 1}`
+                              : undefined;
                             const exKey = `${draft.logUuid}_${exIdx}`;
                             const rawCueNote =
                               (ex.exerciseNotes && !ex.exerciseNotes.startsWith('Target:')
@@ -2098,28 +2199,46 @@ export const LogView: React.FC = () => {
                               return (
                                 <div
                                   key={`${ex.exerciseUuid}-${exIdx}`}
-                                  className="p-2.5 sm:p-3 rounded-2xl bg-[var(--bg-inset)] border border-[var(--border-card)] space-y-2 min-w-0"
+                                  className={`p-2.5 sm:p-3 rounded-2xl border space-y-2 min-w-0 transition-all ${
+                                    isActiveRotatingCard
+                                      ? 'bg-orange-500/10 border-orange-500 ring-2 ring-orange-500/60 shadow-sm'
+                                      : 'bg-[var(--bg-inset)] border-[var(--border-card)]'
+                                  }`}
                                 >
                                   {/* Row 1: Full-Width Wrapping Title + Menu */}
                                   <div className="flex items-start justify-between gap-2 min-w-0">
                                     <div className="flex items-start gap-1.5 min-w-0 flex-1">
                                       <span
-                                        className={`mt-0.5 min-w-[1.25rem] h-5 px-1 rounded-full text-[10px] font-bold flex items-center justify-center shrink-0 tabular-nums ${
-                                          stepBadge
+                                        className={`mt-0.5 min-w-[1.25rem] h-5 px-1.5 rounded-full text-[10px] font-bold flex items-center justify-center shrink-0 tabular-nums ${
+                                          isActiveRotatingCard || stepBadge || rotatingMinuteBadge
                                             ? 'bg-orange-500 text-white'
                                             : 'bg-[var(--bg-input)] border border-[var(--border-subtle)] text-[var(--text-primary)]'
                                         }`}
                                       >
-                                        {stepBadge || exIdx + 1}
+                                        {rotatingMinuteBadge || stepBadge || exIdx + 1}
                                       </span>
                                       {ex.side && (
                                         <span className="mt-0.5 px-1.5 py-0.5 rounded bg-orange-500 text-white text-[9px] font-bold shrink-0">
                                           {ex.side}
                                         </span>
                                       )}
-                                      <h3 className="font-display font-bold text-sm text-[var(--text-primary)] whitespace-normal break-words leading-snug flex-1 min-w-0">
-                                        {ex.exerciseName}
-                                      </h3>
+                                      <div className="min-w-0 flex-1">
+                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                          <h3 className="font-display font-bold text-sm text-[var(--text-primary)] whitespace-normal break-words leading-snug">
+                                            {ex.exerciseName}
+                                          </h3>
+                                          {isActiveRotatingCard && (
+                                            <span className="px-1.5 py-0.5 rounded-md bg-orange-500 text-white text-[9px] font-bold uppercase tracking-wider animate-pulse">
+                                              Active · Min {timer.currentRound}
+                                            </span>
+                                          )}
+                                        </div>
+                                        {cueNote && (
+                                          <p className="text-[11px] text-[var(--text-secondary)] leading-snug mt-0.5 break-words">
+                                            {cueNote}
+                                          </p>
+                                        )}
+                                      </div>
                                     </div>
 
                                     <div className="shrink-0">
@@ -2499,7 +2618,11 @@ export const LogView: React.FC = () => {
                           return (
                             <div
                               key={`${ex.exerciseUuid}-${exIdx}`}
-                              className="p-3.5 sm:p-4 rounded-2xl bg-slate-50/70 dark:bg-slate-800/30 border border-slate-200/70 dark:border-slate-800/80 space-y-3"
+                              className={`p-3.5 sm:p-4 rounded-2xl border space-y-3 transition-all ${
+                                isActiveRotatingCard
+                                  ? 'bg-orange-500/10 border-orange-500 ring-2 ring-orange-500/60 shadow-sm'
+                                  : 'bg-slate-50/70 dark:bg-slate-800/30 border-slate-200/70 dark:border-slate-800/80'
+                              }`}
                             >
                               {/* Exercise Row Header */}
                               <div className="space-y-1.5">
@@ -2507,13 +2630,18 @@ export const LogView: React.FC = () => {
                                   <div className="flex items-center gap-2">
                                     <span
                                       className={`min-w-[1.25rem] h-5 px-1.5 rounded-full text-[11px] font-bold flex items-center justify-center shrink-0 tabular-nums ${
-                                        stepBadge
+                                        isActiveRotatingCard || stepBadge || rotatingMinuteBadge
                                           ? 'bg-orange-500 text-white'
                                           : 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900'
                                       }`}
                                     >
-                                      {stepBadge || exIdx + 1}
+                                      {rotatingMinuteBadge || stepBadge || exIdx + 1}
                                     </span>
+                                    {isActiveRotatingCard && (
+                                      <span className="px-2 py-0.5 rounded-md bg-orange-500 text-white text-[10px] font-bold uppercase tracking-wider animate-pulse">
+                                        Active · Min {timer.currentRound}
+                                      </span>
+                                    )}
                                   </div>
 
                                   {/* Exercise Action Icons */}
@@ -2552,6 +2680,13 @@ export const LogView: React.FC = () => {
                                     </span>
                                   )}
                                 </h3>
+
+                                {/* Form Cues / Guidance directly beneath exercise title */}
+                                {cueNote && (
+                                  <p className="text-xs text-slate-600 dark:text-slate-300 leading-snug">
+                                    {cueNote}
+                                  </p>
+                                )}
 
                                 {/* Ghost Benchmark Subtitle */}
                                 {ghost && ghostEx && (
