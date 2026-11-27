@@ -11,6 +11,7 @@ import {
   LogStatus,
   LoggedExercise,
   PresetExercise,
+  PresetFormatMode,
   ProgramTemplateItem,
   ScheduleStatus,
   ScheduledItem,
@@ -49,6 +50,7 @@ import {
   normalizeWorkoutLog,
 } from '../utils/scheduleStatus';
 import {
+  computeAmrapExercises,
   expandLadderSequence,
   formatDisplayId,
   getTodayIsoDate,
@@ -130,6 +132,28 @@ export interface OfflineSyncQueue {
   googleTasksSyncNeeded: boolean;
   pendingCount: number;
   queuedAt?: string;
+}
+
+export interface BulkPresetPatch {
+  programsMode?: 'no_change' | 'add' | 'remove' | 'replace';
+  programIds?: string[];
+  addTags?: string[];
+  removeTags?: string[];
+  category?: string;
+  durationMode?: 'no_change' | 'set' | 'clear';
+  durationMinutes?: number;
+  biteSizeMode?: 'no_change' | 'on' | 'off';
+  structureMode?:
+    | 'no_change'
+    | 'standard'
+    | 'circuit'
+    | 'emom_rotating'
+    | 'emom_complex'
+    | 'amrap';
+  timeCapMinutes?: number;
+  defaultRestSec?: number;
+  defaultRounds?: number;
+  defaultWorkSec?: number;
 }
 
 function isNavigatorOffline(): boolean {
@@ -362,6 +386,9 @@ interface WorkoutStoreState {
       durationMinutes?: number;
       elapsedSeconds?: number;
       sessionNotes?: string;
+      amrapRounds?: number;
+      amrapExtraReps?: Record<string, number>;
+      amrapTimeCapMinutes?: number;
     }
   ) => Promise<{ ok: boolean; log?: WorkoutLog }>;
 
@@ -424,6 +451,10 @@ interface WorkoutStoreState {
 
   // Preset & Exercise CRUD
   upsertPreset: (preset: WorkoutPreset) => void;
+  bulkUpdatePresets: (
+    presetUuids: string[],
+    patch: BulkPresetPatch
+  ) => Promise<{ updatedCount: number }>;
   duplicatePreset: (presetUuid: string) => WorkoutPreset | null;
   deletePreset: (presetUuid: string) => void;
   upsertGlobalExercise: (exercise: GlobalExercise) => void;
@@ -516,20 +547,21 @@ interface WorkoutStoreState {
 function buildLoggedExerciseFromPreset(
   pe: PresetExercise,
   defaultDistanceUnit: DistanceUnit,
-  presetFormatMode?: 'standard' | 'circuit' | 'emom_complex',
+  presetFormatMode?: PresetFormatMode,
   presetRounds?: number,
   emomMode?: 'rotating' | 'complex'
 ): LoggedExercise {
   const effectiveRounds = presetRounds || Number(pe.defaultSets) || 3;
   const isComplexAllMovesPerRound =
     presetFormatMode === 'emom_complex' && emomMode !== 'rotating';
-  const numSets = isComplexAllMovesPerRound
-    ? 0
-    : presetFormatMode === 'circuit'
-    ? Math.max(1, Number(pe.defaultSets) || effectiveRounds)
-    : presetFormatMode === 'emom_complex' && emomMode === 'rotating'
-    ? Math.max(1, Number(pe.defaultSets) || 1)
-    : Math.max(1, Number(pe.defaultSets) || 3);
+  const numSets =
+    isComplexAllMovesPerRound || presetFormatMode === 'amrap'
+      ? 0
+      : presetFormatMode === 'circuit'
+      ? Math.max(1, Number(pe.defaultSets) || effectiveRounds)
+      : presetFormatMode === 'emom_complex' && emomMode === 'rotating'
+      ? Math.max(1, Number(pe.defaultSets) || 1)
+      : Math.max(1, Number(pe.defaultSets) || 3);
   const parsedDefaultRep = parseInt(String(pe.defaultReps).replace(/[^0-9]/g, ''), 10) || 0;
   const sets: SetEntry[] =
     pe.trackingType === 'cardio' || pe.trackingType === 'mobility' || numSets === 0
@@ -644,6 +676,11 @@ function createDraftFromPreset(
       options?.exerciseNotesByIndex?.[String(idx)];
     return sessionExNote ? { ...built, exerciseNotes: sessionExNote } : built;
   });
+  const isAmrapPreset = formatMode === 'amrap';
+  const amrapTimeCapMinutes = isAmrapPreset
+    ? preset.defaultTimer?.timeCapMinutes || preset.durationMinutes || 10
+    : undefined;
+
   return {
     logUuid: `log-${uuidv4()}`,
     displayId: formatDisplayId(seqNumber),
@@ -657,10 +694,13 @@ function createDraftFromPreset(
     emomMode,
     targetRounds,
     completedRounds: formatMode === 'emom_complex' && emomMode !== 'rotating' ? 0 : undefined,
+    amrapRounds: isAmrapPreset ? 0 : undefined,
+    amrapExtraReps: isAmrapPreset ? {} : undefined,
+    amrapTimeCapMinutes,
     programUuid: options?.programUuid || preset.programIds?.[0],
     scheduleItemUuid: options?.scheduleItemUuid,
     videoUrl: preset.videoUrl,
-    durationMinutes: preset.durationMinutes,
+    durationMinutes: amrapTimeCapMinutes ?? preset.durationMinutes,
     isBiteSize: preset.isBiteSize,
     status: 'pending',
     sessionNotes: '',
@@ -677,9 +717,19 @@ function createDraftFromPreset(
 }
 
 function hasLoggedWorkoutData(
-  log: Pick<WorkoutLog, 'exercises' | 'completedRounds' | 'durationSec' | 'elapsedSeconds'>
+  log: Pick<
+    WorkoutLog,
+    'exercises' | 'completedRounds' | 'amrapRounds' | 'amrapExtraReps' | 'durationSec' | 'elapsedSeconds'
+  >
 ): boolean {
   if ((log.completedRounds ?? 0) > 0) return true;
+  if ((log.amrapRounds ?? 0) > 0) return true;
+  if (
+    log.amrapExtraReps &&
+    Object.values(log.amrapExtraReps).some((v) => (Number(v) || 0) > 0)
+  ) {
+    return true;
+  }
   if ((log.durationSec ?? 0) > 0 || (log.elapsedSeconds ?? 0) > 0) return true;
   return (log.exercises || []).some(
     (ex) =>
@@ -1210,11 +1260,21 @@ function draftToWorkoutLog(
   fallbackIdx = 0
 ): WorkoutLog {
   const now = new Date().toISOString();
-  const recalcedExercises = draft.exercises.map((ex) => recalculateLoggedExercise(ex));
-  const totalSessionVolumeKg =
-    Math.round(
-      recalcedExercises.reduce((acc, ex) => acc + (Number(ex.totalLoadKg) || 0), 0) * 10
-    ) / 10;
+  const isAmrapDraft =
+    draft.formatMode === 'amrap' ||
+    draft.amrapRounds !== undefined ||
+    draft.amrapTimeCapMinutes !== undefined;
+  const amrapComputed = isAmrapDraft
+    ? computeAmrapExercises(draft.exercises, draft.amrapRounds ?? 0, draft.amrapExtraReps || {})
+    : null;
+  const recalcedExercises = amrapComputed
+    ? amrapComputed.exercises
+    : draft.exercises.map((ex) => recalculateLoggedExercise(ex));
+  const totalSessionVolumeKg = amrapComputed
+    ? amrapComputed.totalSessionVolumeKg
+    : Math.round(
+        recalcedExercises.reduce((acc, ex) => acc + (Number(ex.totalLoadKg) || 0), 0) * 10
+      ) / 10;
 
   const normalized = normalizeLogStatus(draft.status);
   const effectiveStatus: LogStatus = draft.isSaved
@@ -1240,6 +1300,9 @@ function draftToWorkoutLog(
     emomMode: draft.emomMode,
     targetRounds: draft.targetRounds,
     completedRounds: draft.completedRounds,
+    amrapRounds: draft.amrapRounds,
+    amrapExtraReps: draft.amrapExtraReps,
+    amrapTimeCapMinutes: draft.amrapTimeCapMinutes,
     laddersCompleted: draft.laddersCompleted,
     extraRungs: draft.extraRungs,
     programUuid: draft.programUuid,
@@ -1800,8 +1863,21 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           ? state.presets.find((p) => p.presetUuid === drafts[0].presetUuid)
           : undefined;
         let nextTimer = state.timer;
-        if (!state.timer.isRunning && primaryPreset?.defaultTimer) {
-          if (primaryPreset.defaultTimer.mode === 'circuit') {
+        if (!state.timer.isRunning && primaryPreset) {
+          if (primaryPreset.formatMode === 'amrap') {
+            const capMin =
+              primaryPreset.defaultTimer?.timeCapMinutes || primaryPreset.durationMinutes || 10;
+            const capSec = Math.max(60, Math.round(capMin * 60));
+            nextTimer = {
+              ...state.timer,
+              isOpen: true,
+              mode: 'rest',
+              phase: 'work',
+              remainingSec: capSec,
+              totalPhaseSec: capSec,
+              isRunning: false,
+            };
+          } else if (primaryPreset.defaultTimer?.mode === 'circuit') {
             const w = primaryPreset.defaultTimer.workSec ?? 60;
             const r = primaryPreset.defaultTimer.restSec ?? 0;
             const rnd = primaryPreset.defaultTimer.rounds ?? 10;
@@ -1819,7 +1895,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
               isRunning: false,
             };
           } else {
-            const r = Number(primaryPreset.defaultTimer.restSec ?? 0);
+            const r = Number(primaryPreset.defaultTimer?.restSec ?? 0);
             if (r > 0) {
               nextTimer = {
                 ...state.timer,
@@ -2728,11 +2804,28 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           statusOverride || (normalizeLogStatus(draft.status) === 'skipped' ? 'skipped' : 'completed');
         const now = new Date().toISOString();
 
-        const recalcedExercises = draft.exercises.map((ex) => recalculateLoggedExercise(ex));
-        const totalSessionVolumeKg =
-          Math.round(
-            recalcedExercises.reduce((acc, ex) => acc + (Number(ex.totalLoadKg) || 0), 0) * 10
-          ) / 10;
+        const matchedPresetForSave = state.presets.find(
+          (p) => p.presetUuid === draft.presetUuid
+        );
+        const isAmrapSave =
+          draft.formatMode === 'amrap' ||
+          matchedPresetForSave?.formatMode === 'amrap' ||
+          draft.amrapRounds !== undefined;
+        const amrapSaveComputed = isAmrapSave
+          ? computeAmrapExercises(
+              draft.exercises,
+              draft.amrapRounds ?? 0,
+              draft.amrapExtraReps || {}
+            )
+          : null;
+        const recalcedExercises = amrapSaveComputed
+          ? amrapSaveComputed.exercises
+          : draft.exercises.map((ex) => recalculateLoggedExercise(ex));
+        const totalSessionVolumeKg = amrapSaveComputed
+          ? amrapSaveComputed.totalSessionVolumeKg
+          : Math.round(
+              recalcedExercises.reduce((acc, ex) => acc + (Number(ex.totalLoadKg) || 0), 0) * 10
+            ) / 10;
 
         let nextSeq = state.meta.nextLogSequenceNumber;
         let finalDisplayId = draft.displayId;
@@ -2755,12 +2848,16 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         const computedDurationMin =
           totalStopwatchMs > 0 ? Math.max(1, Math.round(totalStopwatchMs / 60000)) : undefined;
 
-        const matchedPresetForSave = state.presets.find(
-          (p) => p.presetUuid === draft.presetUuid
-        );
+        const resolvedAmrapTimeCap = isAmrapSave
+          ? draft.amrapTimeCapMinutes ||
+            matchedPresetForSave?.defaultTimer?.timeCapMinutes ||
+            matchedPresetForSave?.durationMinutes ||
+            10
+          : undefined;
         const resolvedDurationMinutes =
           computedDurationMin ??
           draft.durationMinutes ??
+          resolvedAmrapTimeCap ??
           matchedPresetForSave?.durationMinutes;
         const resolvedDurationSec =
           computedElapsedSec ??
@@ -2780,10 +2877,13 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           presetUuid: draft.presetUuid,
           workoutTitleSnapshot: draft.workoutTitleSnapshot,
           workoutType: draft.workoutType,
-          formatMode: draft.formatMode,
+          formatMode: isAmrapSave ? 'amrap' : draft.formatMode,
           emomMode: draft.emomMode || matchedPresetForSave?.defaultTimer?.emomMode,
           targetRounds: draft.targetRounds,
           completedRounds: draft.completedRounds,
+          amrapRounds: isAmrapSave ? Math.max(0, Math.round(Number(draft.amrapRounds) || 0)) : undefined,
+          amrapExtraReps: isAmrapSave ? draft.amrapExtraReps || {} : undefined,
+          amrapTimeCapMinutes: resolvedAmrapTimeCap,
           laddersCompleted: draft.laddersCompleted,
           extraRungs: draft.extraRungs,
           programUuid: draft.programUuid,
@@ -3246,29 +3346,54 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           { slotRole: 'Bite-Size' }
         );
 
-        const completedExercises: LoggedExercise[] = built.exercises.map((ex) => {
-          if (ex.trackingType === 'mobility') {
-            return { ...ex, isCompleted: true };
-          }
-          if (ex.trackingType === 'cardio') {
-            return {
-              ...ex,
-              durationSec: ex.durationSec || elapsedSec,
-              isCompleted: true,
-            };
-          }
-          const parsedRep = Number((ex.targetRepsLabel || '').match(/\d+/)?.[0] || 0);
-          const sets = (ex.sets || []).map((s) => ({
-            ...s,
-            reps: s.reps > 0 ? s.reps : parsedRep,
-          }));
-          return recalculateLoggedExercise({ ...ex, sets });
-        });
+        const isAmrapBite =
+          preset.formatMode === 'amrap' || options?.amrapRounds !== undefined;
+        const amrapBiteRounds = isAmrapBite
+          ? Math.max(0, Math.round(Number(options?.amrapRounds) || 0))
+          : undefined;
+        const amrapBiteExtra = isAmrapBite ? options?.amrapExtraReps || {} : undefined;
+        const amrapBiteTimeCap = isAmrapBite
+          ? options?.amrapTimeCapMinutes ||
+            preset.defaultTimer?.timeCapMinutes ||
+            durationMin
+          : undefined;
 
-        const totalSessionVolumeKg =
-          Math.round(
-            completedExercises.reduce((acc, e) => acc + (Number(e.totalLoadKg) || 0), 0) * 10
-          ) / 10;
+        let completedExercises: LoggedExercise[];
+        let totalSessionVolumeKg: number;
+
+        if (isAmrapBite) {
+          const computed = computeAmrapExercises(
+            built.exercises,
+            amrapBiteRounds ?? 0,
+            amrapBiteExtra || {}
+          );
+          completedExercises = computed.exercises;
+          totalSessionVolumeKg = computed.totalSessionVolumeKg;
+        } else {
+          completedExercises = built.exercises.map((ex) => {
+            if (ex.trackingType === 'mobility') {
+              return { ...ex, isCompleted: true };
+            }
+            if (ex.trackingType === 'cardio') {
+              return {
+                ...ex,
+                durationSec: ex.durationSec || elapsedSec,
+                isCompleted: true,
+              };
+            }
+            const parsedRep = Number((ex.targetRepsLabel || '').match(/\d+/)?.[0] || 0);
+            const sets = (ex.sets || []).map((s) => ({
+              ...s,
+              reps: s.reps > 0 ? s.reps : parsedRep,
+            }));
+            return recalculateLoggedExercise({ ...ex, sets });
+          });
+
+          totalSessionVolumeKg =
+            Math.round(
+              completedExercises.reduce((acc, e) => acc + (Number(e.totalLoadKg) || 0), 0) * 10
+            ) / 10;
+        }
 
         const logRecord: WorkoutLog = {
           logUuid: built.logUuid,
@@ -3280,7 +3405,10 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           presetUuid: preset.presetUuid,
           workoutTitleSnapshot: preset.title,
           workoutType: preset.workoutType,
-          formatMode: preset.formatMode,
+          formatMode: isAmrapBite ? 'amrap' : preset.formatMode,
+          amrapRounds: amrapBiteRounds,
+          amrapExtraReps: amrapBiteExtra,
+          amrapTimeCapMinutes: amrapBiteTimeCap,
           slotRole: 'Bite-Size',
           isBiteSize: true,
           videoUrl: preset.videoUrl,
@@ -4046,6 +4174,190 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
             set({ syncStatus: 'error', lastSyncError: err?.message || 'Failed to sync preset' });
           });
         }
+      },
+
+      bulkUpdatePresets: async (presetUuids, patch) => {
+        const targetSet = new Set(presetUuids);
+        if (targetSet.size === 0) return { updatedCount: 0 };
+
+        const state = get();
+        const now = new Date().toISOString();
+        const modifiedPresets: WorkoutPreset[] = [];
+
+        const cleanAddTags = (patch.addTags || [])
+          .map((t) => t.trim())
+          .filter(Boolean);
+        const cleanRemoveTagsLower = new Set(
+          (patch.removeTags || []).map((t) => t.trim().toLowerCase()).filter(Boolean)
+        );
+        const targetProgramIds = patch.programIds || [];
+
+        const nextPresets = sortPresetsAlphabetically(
+          state.presets.map((preset) => {
+            if (!targetSet.has(preset.presetUuid)) return preset;
+            const next: WorkoutPreset = { ...preset };
+
+            // 1. Programs
+            if (patch.programsMode === 'add' && targetProgramIds.length > 0) {
+              const merged = Array.from(
+                new Set([...(preset.programIds || []), ...targetProgramIds])
+              );
+              next.programIds = merged;
+            } else if (patch.programsMode === 'remove' && targetProgramIds.length > 0) {
+              const rmSet = new Set(targetProgramIds);
+              next.programIds = (preset.programIds || []).filter((id) => !rmSet.has(id));
+            } else if (patch.programsMode === 'replace') {
+              next.programIds = [...targetProgramIds];
+            }
+
+            // 2. Tags (Add & Remove)
+            if (cleanAddTags.length > 0 || cleanRemoveTagsLower.size > 0) {
+              let tagsList = [...(preset.tags || [])];
+              if (cleanRemoveTagsLower.size > 0) {
+                tagsList = tagsList.filter((t) => !cleanRemoveTagsLower.has(t.toLowerCase()));
+              }
+              const existingLower = new Set(tagsList.map((t) => t.toLowerCase()));
+              for (const tag of cleanAddTags) {
+                if (!existingLower.has(tag.toLowerCase())) {
+                  tagsList.push(tag);
+                  existingLower.add(tag.toLowerCase());
+                }
+              }
+              next.tags = tagsList;
+            }
+
+            // 3. Category
+            if (patch.category && patch.category.trim()) {
+              next.workoutType = patch.category.trim();
+            }
+
+            // 4. Target Duration (mins)
+            if (patch.durationMode === 'set' && typeof patch.durationMinutes === 'number' && patch.durationMinutes > 0) {
+              next.durationMinutes = Math.round(patch.durationMinutes);
+            } else if (patch.durationMode === 'clear') {
+              next.durationMinutes = undefined;
+            }
+
+            // 5. Bite-Size Flag
+            if (patch.biteSizeMode === 'on') {
+              next.isBiteSize = true;
+            } else if (patch.biteSizeMode === 'off') {
+              next.isBiteSize = false;
+            }
+
+            // 6. Default Structure & Timer
+            if (patch.structureMode && patch.structureMode !== 'no_change') {
+              if (patch.structureMode === 'standard') {
+                next.formatMode = 'standard';
+                next.defaultTimer = {
+                  mode: 'rest',
+                  restSec:
+                    typeof patch.defaultRestSec === 'number'
+                      ? Math.max(0, Math.round(patch.defaultRestSec))
+                      : 60,
+                };
+              } else if (patch.structureMode === 'circuit') {
+                next.formatMode = 'circuit';
+                next.defaultTimer = {
+                  mode: 'circuit',
+                  rounds:
+                    typeof patch.defaultRounds === 'number' && patch.defaultRounds > 0
+                      ? Math.round(patch.defaultRounds)
+                      : preset.defaultTimer?.rounds || 12,
+                  workSec:
+                    typeof patch.defaultWorkSec === 'number' && patch.defaultWorkSec >= 0
+                      ? Math.round(patch.defaultWorkSec)
+                      : preset.defaultTimer?.workSec || 40,
+                  restSec:
+                    typeof patch.defaultRestSec === 'number' && patch.defaultRestSec >= 0
+                      ? Math.round(patch.defaultRestSec)
+                      : 20,
+                  targetRange: preset.defaultTimer?.targetRange,
+                };
+              } else if (patch.structureMode === 'emom_rotating') {
+                next.formatMode = 'emom_complex';
+                next.defaultTimer = {
+                  mode: 'circuit',
+                  emomMode: 'rotating',
+                  rounds:
+                    typeof patch.defaultRounds === 'number' && patch.defaultRounds > 0
+                      ? Math.round(patch.defaultRounds)
+                      : Math.max(1, preset.exercises.length || 3),
+                  workSec:
+                    typeof patch.defaultWorkSec === 'number' && patch.defaultWorkSec > 0
+                      ? Math.round(patch.defaultWorkSec)
+                      : 60,
+                  restSec: 0,
+                  targetRange: preset.defaultTimer?.targetRange,
+                };
+              } else if (patch.structureMode === 'emom_complex') {
+                next.formatMode = 'emom_complex';
+                next.defaultTimer = {
+                  mode: 'circuit',
+                  emomMode: 'complex',
+                  rounds:
+                    typeof patch.defaultRounds === 'number' && patch.defaultRounds > 0
+                      ? Math.round(patch.defaultRounds)
+                      : preset.defaultTimer?.rounds || 15,
+                  workSec:
+                    typeof patch.defaultWorkSec === 'number' && patch.defaultWorkSec > 0
+                      ? Math.round(patch.defaultWorkSec)
+                      : 60,
+                  restSec: 0,
+                  targetRange: preset.defaultTimer?.targetRange,
+                };
+              } else if (patch.structureMode === 'amrap') {
+                const capMin =
+                  typeof patch.timeCapMinutes === 'number' && patch.timeCapMinutes > 0
+                    ? Math.round(patch.timeCapMinutes)
+                    : preset.durationMinutes || 10;
+                next.formatMode = 'amrap';
+                next.durationMinutes = capMin;
+                next.defaultTimer = {
+                  mode: 'rest',
+                  timeCapMinutes: capMin,
+                  restSec: capMin * 60,
+                };
+              }
+            }
+
+            next.updatedAt = now;
+            const normalized = normalizePresetMobilityDurations(next);
+            modifiedPresets.push(normalized);
+            return normalized;
+          })
+        );
+
+        const nextCategories = collectUsedCategories(
+          state.categories,
+          nextPresets,
+          state.logs,
+          state.meta.categories
+        );
+
+        set({
+          presets: nextPresets,
+          categories: nextCategories,
+        });
+
+        if (isNavigatorOffline()) {
+          get().queueOfflineSync('firestore');
+        } else if (state.authUser && modifiedPresets.length > 0) {
+          const uid = state.authUser.uid;
+          await Promise.all(
+            modifiedPresets.map((p) =>
+              upsertFirestoreDoc('wt_presets', p.presetUuid, p, uid)
+            )
+          ).catch((err) => {
+            console.error('[Sync] Failed to bulk-update presets in Firestore:', err);
+            set({
+              syncStatus: 'error',
+              lastSyncError: getErrorMessage(err, 'Failed to sync bulk preset edits'),
+            });
+          });
+        }
+
+        return { updatedCount: modifiedPresets.length };
       },
 
       duplicatePreset: (presetUuid) => {

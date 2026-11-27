@@ -614,3 +614,91 @@ export function formatMobilityDurationSeconds(seconds?: number): string {
   const rem = rounded % 60;
   return rem === 0 ? `${mins}m` : `${mins}m ${rem}s`;
 }
+
+/**
+ * Computes exact per-exercise totals (`(amrapRounds * targetReps) + extraReps`) and load volume
+ * for an AMRAP workout so History stats and AI Coach exports reflect exact rep & tonnage totals.
+ */
+export function computeAmrapExercises(
+  exercises: LoggedExercise[],
+  amrapRounds: number,
+  amrapExtraReps: Record<string, number> = {}
+): {
+  exercises: LoggedExercise[];
+  totalSessionVolumeKg: number;
+  totalExtraReps: number;
+} {
+  const safeRounds = Math.max(0, Math.round(Number(amrapRounds) || 0));
+  let totalExtraReps = 0;
+
+  const computed = exercises.map((ex, idx) => {
+    const rawExtra =
+      amrapExtraReps[ex.exerciseUuid] ??
+      amrapExtraReps[String(idx)] ??
+      0;
+    const extra = Math.max(0, Math.round(Number(rawExtra) || 0));
+    totalExtraReps += extra;
+
+    if (ex.trackingType === 'mobility') {
+      return {
+        ...ex,
+        isCompleted: safeRounds > 0 || extra > 0,
+      };
+    }
+
+    const parsedTarget =
+      (ex.repsPerRound && ex.repsPerRound > 0 ? ex.repsPerRound : 0) ||
+      parseInt(String(ex.targetRepsLabel || '').replace(/[^0-9]/g, ''), 10) ||
+      1;
+
+    const sets: SetEntry[] = [];
+    for (let r = 0; r < safeRounds; r += 1) {
+      sets.push({ setNumber: r + 1, reps: parsedTarget });
+    }
+    if (extra > 0) {
+      sets.push({ setNumber: safeRounds + 1, reps: extra });
+    }
+
+    return recalculateLoggedExercise({
+      ...ex,
+      repsPerRound: parsedTarget,
+      roundsCompleted: safeRounds,
+      sets,
+    });
+  });
+
+  const totalSessionVolumeKg =
+    Math.round(
+      computed.reduce((acc, ex) => acc + (Number(ex.totalLoadKg) || 0), 0) * 10
+    ) / 10;
+
+  return {
+    exercises: computed,
+    totalSessionVolumeKg,
+    totalExtraReps,
+  };
+}
+
+/**
+ * Formats the headline AMRAP score badge: "{amrapRounds} Rds + {totalExtraReps} reps ({timeCap}m AMRAP)"
+ */
+export function formatAmrapScoreBadge(log: {
+  formatMode?: string;
+  amrapRounds?: number;
+  amrapExtraReps?: Record<string, number>;
+  amrapTimeCapMinutes?: number;
+  durationMinutes?: number;
+}): string | null {
+  const isAmrap =
+    log.formatMode === 'amrap' ||
+    log.amrapRounds !== undefined ||
+    log.amrapTimeCapMinutes !== undefined;
+  if (!isAmrap) return null;
+  const rounds = Math.max(0, Math.round(Number(log.amrapRounds) || 0));
+  const totalExtra = Object.values(log.amrapExtraReps || {}).reduce(
+    (sum, v) => sum + Math.max(0, Math.round(Number(v) || 0)),
+    0
+  );
+  const timeCap = log.amrapTimeCapMinutes || log.durationMinutes || 10;
+  return `${rounds} Rds + ${totalExtra} reps (${timeCap}m AMRAP)`;
+}

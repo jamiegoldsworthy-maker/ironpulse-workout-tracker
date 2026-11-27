@@ -27,6 +27,7 @@ import {
 import { useWorkoutStore } from '../store/useWorkoutStore';
 import { ContextBlock, WorkoutType } from '../types/workout';
 import {
+  formatAmrapScoreBadge,
   formatExerciseMetricSummary,
   formatLoadBadge,
   formatPace,
@@ -602,6 +603,14 @@ export const HistoryView: React.FC = () => {
                               m
                             </span>
                           )}
+                          {(() => {
+                            const amrapBadge = formatAmrapScoreBadge(log);
+                            return amrapBadge ? (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-lg bg-violet-500/15 text-violet-700 dark:text-violet-300 border border-violet-500/25 tabular-nums">
+                                {amrapBadge}
+                              </span>
+                            ) : null;
+                          })()}
                           <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded bg-orange-500/15 text-orange-600 dark:text-orange-400">
                             {log.workoutType}
                           </span>

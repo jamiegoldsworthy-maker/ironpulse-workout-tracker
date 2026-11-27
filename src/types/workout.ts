@@ -30,11 +30,12 @@ export type DistanceUnit = 'mi' | 'km';
 
 export type ThemeMode = 'light' | 'dark' | 'system';
 
-export type PresetFormatMode = 'standard' | 'circuit' | 'emom_complex';
+export type PresetFormatMode = 'standard' | 'circuit' | 'emom_complex' | 'amrap';
 
 export interface DefaultTimerConfig {
   mode: 'rest' | 'circuit';
   emomMode?: 'rotating' | 'complex';
+  timeCapMinutes?: number;
   workSec?: number;
   restSec: number;
   rounds?: number;
@@ -249,6 +250,9 @@ export interface WorkoutLog {
   emomMode?: 'rotating' | 'complex';
   targetRounds?: number;
   completedRounds?: number;
+  amrapRounds?: number;
+  amrapExtraReps?: Record<string, number>;
+  amrapTimeCapMinutes?: number;
   laddersCompleted?: number;
   extraRungs?: number;
   programUuid?: string;

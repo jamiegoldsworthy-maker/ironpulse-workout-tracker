@@ -5,8 +5,10 @@ import {
   ChevronLeft,
   Clock,
   ExternalLink,
+  Minus,
   Pause,
   Play,
+  Plus,
   RotateCcw,
   X,
   Zap,
@@ -15,6 +17,7 @@ import { ModalPortal } from './ModalPortal';
 import { useWorkoutStore } from '../store/useWorkoutStore';
 import { WorkoutPreset } from '../types/workout';
 import {
+  formatAmrapScoreBadge,
   formatLoadBadge,
   formatMobilityDurationSeconds,
   formatReadableDate,
@@ -94,6 +97,9 @@ export const BiteSizeDrawerModal: React.FC<BiteSizeDrawerModalProps> = ({
   const [remainingSec, setRemainingSec] = useState<number>(300);
   const [isRunning, setIsRunning] = useState<boolean>(false);
   const [checkedSteps, setCheckedSteps] = useState<Record<number, boolean>>({});
+  const [amrapRounds, setAmrapRounds] = useState<number>(0);
+  const [amrapExtraReps, setAmrapExtraReps] = useState<Record<string, number>>({});
+  const [timerExpired, setTimerExpired] = useState<boolean>(false);
   const autoCompletedRef = useRef<boolean>(false);
 
   // Reset transient state when modal opens/closes
@@ -102,6 +108,9 @@ export const BiteSizeDrawerModal: React.FC<BiteSizeDrawerModalProps> = ({
       setGuidedPreset(null);
       setIsRunning(false);
       setCheckedSteps({});
+      setAmrapRounds(0);
+      setAmrapExtraReps({});
+      setTimerExpired(false);
       autoCompletedRef.current = false;
     }
   }, [open]);
@@ -122,12 +131,17 @@ export const BiteSizeDrawerModal: React.FC<BiteSizeDrawerModalProps> = ({
     return () => window.clearInterval(id);
   }, [open, guidedPreset, isRunning]);
 
-  // Auto-complete when guided timer finishes
+  // Auto-complete (or alert for Extra Reps on AMRAP) when guided timer finishes
   useEffect(() => {
     if (!open || !guidedPreset || remainingSec !== 0 || autoCompletedRef.current) return;
     autoCompletedRef.current = true;
+    setTimerExpired(true);
     if (meta.timerSoundEnabled !== false) {
       playBiteCompletionChime();
+    }
+    // For AMRAP, let the user finish entering any partial-round Extra Reps before tapping Log AMRAP
+    if (guidedPreset.formatMode === 'amrap') {
+      return;
     }
     const mins = Math.max(1, Math.round(totalSec / 60));
     void (async () => {
@@ -178,9 +192,13 @@ export const BiteSizeDrawerModal: React.FC<BiteSizeDrawerModalProps> = ({
       (sum, ex) => sum + (ex.trackingType === 'mobility' ? resolveMobilityDurationSeconds(ex) : 0),
       0
     );
+    const capMin =
+      preset.formatMode === 'amrap'
+        ? preset.defaultTimer?.timeCapMinutes || preset.durationMinutes || 5
+        : preset.durationMinutes;
     const secs =
-      preset.durationMinutes && preset.durationMinutes > 0
-        ? Math.round(preset.durationMinutes * 60)
+      capMin && capMin > 0
+        ? Math.round(capMin * 60)
         : sumExerciseSec > 0
         ? sumExerciseSec
         : 300;
@@ -189,6 +207,9 @@ export const BiteSizeDrawerModal: React.FC<BiteSizeDrawerModalProps> = ({
     setTotalSec(secs);
     setRemainingSec(secs);
     setCheckedSteps({});
+    setAmrapRounds(0);
+    setAmrapExtraReps({});
+    setTimerExpired(false);
     setIsRunning(true);
   };
 
@@ -208,20 +229,48 @@ export const BiteSizeDrawerModal: React.FC<BiteSizeDrawerModalProps> = ({
   };
 
   const handleFinishGuidedEarly = async () => {
-    if (!guidedPreset || autoCompletedRef.current) return;
+    if (!guidedPreset) return;
+    const isAmrapGuided = guidedPreset.formatMode === 'amrap';
+    if (!isAmrapGuided && autoCompletedRef.current) return;
     autoCompletedRef.current = true;
     setIsRunning(false);
     const elapsed = Math.max(30, totalSec - remainingSec);
-    const mins = Math.max(1, Math.round((guidedPreset.durationMinutes ?? totalSec / 60)));
+    const mins = Math.max(
+      1,
+      Math.round(
+        guidedPreset.defaultTimer?.timeCapMinutes ??
+          guidedPreset.durationMinutes ??
+          totalSec / 60
+      )
+    );
     setLoggingPresetId(guidedPreset.presetUuid);
     const res = await logBiteSizeWorkout(guidedPreset.presetUuid, {
       date: activeDate,
       durationMinutes: mins,
       elapsedSeconds: elapsed,
+      ...(isAmrapGuided
+        ? {
+            amrapRounds,
+            amrapExtraReps,
+            amrapTimeCapMinutes: mins,
+          }
+        : {}),
     });
     setLoggingPresetId(null);
     if (res.ok) {
-      onLogged(`⚡ Completed ${guidedPreset.title} (${mins}m)`);
+      const score = isAmrapGuided
+        ? formatAmrapScoreBadge({
+            formatMode: 'amrap',
+            amrapRounds,
+            amrapExtraReps,
+            amrapTimeCapMinutes: mins,
+          })
+        : null;
+      onLogged(
+        score
+          ? `⚡ Completed ${guidedPreset.title} · ${score}`
+          : `⚡ Completed ${guidedPreset.title} (${mins}m)`
+      );
       onClose();
     }
   };
@@ -278,11 +327,18 @@ export const BiteSizeDrawerModal: React.FC<BiteSizeDrawerModalProps> = ({
             {/* Countdown Display */}
             <div className="p-5 rounded-3xl bg-slate-50 dark:bg-slate-800/70 border border-slate-200/80 dark:border-slate-700/80 text-center space-y-3">
               <div className="text-[11px] font-bold uppercase tracking-wider text-amber-600 dark:text-amber-400">
-                ⚡ Bite-Size Guided Timer
+                {guidedPreset.formatMode === 'amrap'
+                  ? `⚡ AMRAP Countdown · ${Math.round(totalSec / 60)}m Cap`
+                  : '⚡ Bite-Size Guided Timer'}
               </div>
               <div className="font-mono font-extrabold text-5xl tracking-tight tabular-nums text-slate-900 dark:text-slate-100">
                 {formatSecondsAsMmSs(remainingSec)}
               </div>
+              {timerExpired && guidedPreset.formatMode === 'amrap' && (
+                <div className="px-3 py-1.5 rounded-xl bg-emerald-500/15 border border-emerald-500/35 text-emerald-700 dark:text-emerald-300 text-xs font-bold">
+                  Time's Up! Enter any Extra Reps below &amp; tap Finish &amp; Log AMRAP.
+                </div>
+              )}
               <div className="w-full h-2 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
                 <div
                   className="h-full bg-amber-500 transition-all duration-500"
@@ -313,6 +369,8 @@ export const BiteSizeDrawerModal: React.FC<BiteSizeDrawerModalProps> = ({
                   type="button"
                   onClick={() => {
                     setIsRunning(false);
+                    setTimerExpired(false);
+                    autoCompletedRef.current = false;
                     setRemainingSec(totalSec);
                   }}
                   aria-label="Reset timer"
@@ -322,6 +380,84 @@ export const BiteSizeDrawerModal: React.FC<BiteSizeDrawerModalProps> = ({
                 </button>
               </div>
             </div>
+
+            {/* Live AMRAP +1 Round Counter & Extra Reps (Partial Round) */}
+            {guidedPreset.formatMode === 'amrap' && (
+              <div className="p-3.5 rounded-2xl bg-violet-500/[0.07] border border-violet-500/30 space-y-3">
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={amrapRounds === 0}
+                    onClick={() => setAmrapRounds((r) => Math.max(0, r - 1))}
+                    aria-label="Subtract 1 round"
+                    className="h-12 w-12 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 disabled:opacity-35 flex items-center justify-center shrink-0"
+                  >
+                    <Minus className="w-4 h-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAmrapRounds((r) => r + 1)}
+                    className="tactile-pill flex-1 h-12 px-4 rounded-2xl bg-orange-500 hover:bg-orange-600 text-white font-display font-extrabold text-sm flex items-center justify-between shadow-sm"
+                  >
+                    <span className="inline-flex items-center gap-1.5">
+                      <Plus className="w-4 h-4" />
+                      +1 Round
+                    </span>
+                    <span className="px-2.5 py-0.5 rounded-lg bg-black/20 font-mono text-base tabular-nums">
+                      {amrapRounds} Rds
+                    </span>
+                  </button>
+                </div>
+
+                {guidedPreset.exercises.length > 0 && (
+                  <div className="space-y-1.5">
+                    <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                      Extra Reps (Partial Round)
+                    </div>
+                    {guidedPreset.exercises.map((ex, idx) => {
+                      const val = amrapExtraReps[ex.exerciseUuid] ?? 0;
+                      return (
+                        <div
+                          key={`${ex.exerciseUuid}-${idx}`}
+                          className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-700/80 flex items-center justify-between gap-2"
+                        >
+                          <span className="text-xs font-bold truncate">{ex.exerciseName}</span>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <input
+                              type="number"
+                              inputMode="numeric"
+                              min={0}
+                              value={val === 0 ? '' : val}
+                              placeholder="0"
+                              onChange={(e) => {
+                                const parsed = Math.max(0, parseInt(e.target.value, 10) || 0);
+                                setAmrapExtraReps((prev) => ({
+                                  ...prev,
+                                  [ex.exerciseUuid]: parsed,
+                                }));
+                              }}
+                              className="w-14 h-7 px-2 text-center font-mono text-xs font-bold rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700"
+                            />
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setAmrapExtraReps((prev) => ({
+                                  ...prev,
+                                  [ex.exerciseUuid]: (prev[ex.exerciseUuid] ?? 0) + 1,
+                                }))
+                              }
+                              className="h-7 px-2 rounded-lg bg-slate-100 dark:bg-slate-800 text-[11px] font-bold hover:bg-orange-500 hover:text-white"
+                            >
+                              +1
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Prominent Follow-Along YouTube Video CTA inside Guided Timer */}
             {guidedPreset.videoUrl && (
@@ -387,6 +523,12 @@ export const BiteSizeDrawerModal: React.FC<BiteSizeDrawerModalProps> = ({
                                   }
                                   return durLabel || ex.defaultReps || 'Flow';
                                 })()
+                              : guidedPreset.formatMode === 'amrap'
+                              ? `${ex.defaultReps} / rd${
+                                  ex.loadType !== 'bodyweight' && ex.loadType !== 'none'
+                                    ? ` @ ${formatLoadBadge(ex.loadType, ex.defaultWeight)}`
+                                    : ''
+                                }`
                               : `${ex.defaultSets}×${ex.defaultReps}${
                                   ex.loadType !== 'bodyweight' && ex.loadType !== 'none'
                                     ? ` @ ${formatLoadBadge(ex.loadType, ex.defaultWeight)}`
@@ -414,7 +556,11 @@ export const BiteSizeDrawerModal: React.FC<BiteSizeDrawerModalProps> = ({
                 className="w-full py-2.5 px-4 rounded-2xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold inline-flex items-center justify-center gap-1.5 shadow-sm"
               >
                 <CheckCircle2 className="w-4 h-4" />
-                {loggingPresetId ? 'Logging...' : 'Finish & Log Done'}
+                {loggingPresetId
+                  ? 'Logging...'
+                  : guidedPreset.formatMode === 'amrap'
+                  ? 'Finish & Log AMRAP'
+                  : 'Finish & Log Done'}
               </button>
             </div>
           </div>
@@ -494,6 +640,11 @@ export const BiteSizeDrawerModal: React.FC<BiteSizeDrawerModalProps> = ({
                             <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold uppercase bg-orange-500/12 text-orange-600 dark:text-orange-400">
                               {preset.workoutType}
                             </span>
+                            {preset.formatMode === 'amrap' && (
+                              <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold uppercase bg-violet-500/15 text-violet-600 dark:text-violet-300">
+                                AMRAP
+                              </span>
+                            )}
                             {preset.videoUrl && (
                               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold bg-rose-500/12 text-rose-600 dark:text-rose-400">
                                 <Play className="w-2.5 h-2.5 fill-current" />

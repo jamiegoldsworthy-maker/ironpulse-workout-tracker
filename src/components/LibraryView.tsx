@@ -26,8 +26,13 @@ import {
   Lock,
   Unlock,
   RefreshCw,
+  SlidersHorizontal,
+  Bookmark,
+  CheckSquare,
+  Square,
+  ArrowUpDown,
 } from 'lucide-react';
-import { useWorkoutStore } from '../store/useWorkoutStore';
+import { BulkPresetPatch, useWorkoutStore } from '../store/useWorkoutStore';
 import {
   CardioMode,
   DistanceUnit,
@@ -51,8 +56,26 @@ import {
   slugify,
   uuidv4,
 } from '../utils/calculations';
+import {
+  DEFAULT_LIBRARY_FILTER_STATE,
+  DurationFilterId,
+  ExerciseRowTypeFilterId,
+  LibraryFilterState,
+  LibrarySortOption,
+  LoadStyleFilterId,
+  MetricLateralityFilterId,
+  SavedLibraryFilterView,
+  StructureFilterId,
+  countActiveLibraryFilters,
+  hasAnyActiveFilterOrSort,
+  loadSavedLibraryFilters,
+  matchesLibraryFilters,
+  persistSavedLibraryFilters,
+  sortLibraryPresets,
+} from '../utils/libraryFilters';
 import { useIsMobileView } from '../utils/useIsMobileView';
 import { ModalPortal } from './ModalPortal';
+import { BulkEditWorkoutsModal } from './BulkEditWorkoutsModal';
 
 const CARDIO_MODES: CardioMode[] = ['Ruck', 'Cycle', 'Run', 'Row', 'Swim', 'Other'];
 
@@ -64,6 +87,7 @@ export const LibraryView: React.FC = () => {
     categories,
     meta,
     upsertPreset,
+    bulkUpdatePresets,
     duplicatePreset,
     deletePreset,
     addWorkoutToSession,
@@ -78,13 +102,18 @@ export const LibraryView: React.FC = () => {
 
   const isMobile = useIsMobileView();
 
-  const [searchQuery, setSearchQuery] = useState('');
-  const [selectedProgramFilter, setSelectedProgramFilter] = useState<string>('ALL');
-  const [selectedTypeFilter, setSelectedTypeFilter] = useState<'ALL' | WorkoutType>('ALL');
-  const [selectedDurationFilter, setSelectedDurationFilter] = useState<
-    'ALL' | 'le10' | '15_30' | 'gt30'
-  >('ALL');
-  const [selectedTagFilter, setSelectedTagFilter] = useState<string>('ALL');
+  const [filters, setFilters] = useState<LibraryFilterState>(DEFAULT_LIBRARY_FILTER_STATE);
+  const [filtersPanelOpen, setFiltersPanelOpen] = useState<boolean>(false);
+  const [savedFilterViews, setSavedFilterViews] = useState<SavedLibraryFilterView[]>(() =>
+    loadSavedLibraryFilters()
+  );
+  const [saveViewModalOpen, setSaveViewModalOpen] = useState<boolean>(false);
+  const [saveViewNameInput, setSaveViewNameInput] = useState<string>('');
+
+  const [selectionMode, setSelectionMode] = useState<boolean>(false);
+  const [selectedPresetIds, setSelectedPresetIds] = useState<string[]>([]);
+  const [bulkEditModalOpen, setBulkEditModalOpen] = useState<boolean>(false);
+
   const [expandedPresetIds, setExpandedPresetIds] = useState<Record<string, boolean>>({});
 
   const [editingPreset, setEditingPreset] = useState<WorkoutPreset | null>(null);
@@ -186,61 +215,83 @@ export const LibraryView: React.FC = () => {
     });
   };
 
-  const allTags = useMemo(() => {
+  const allTagsList = useMemo(() => {
     const tags = new Set<string>();
     presets.forEach((p) => p.tags?.forEach((t) => tags.add(t)));
-    return ['ALL', ...Array.from(tags)];
+    return Array.from(tags).sort((a, b) => a.localeCompare(b));
   }, [presets]);
 
+  const activeFilterCount = useMemo(() => countActiveLibraryFilters(filters), [filters]);
+  const canSaveOrResetView = useMemo(() => hasAnyActiveFilterOrSort(filters), [filters]);
+
   const filteredPresets = useMemo(() => {
-    return presets.filter((p) => {
-      if (
-        selectedProgramFilter !== 'ALL' &&
-        !p.programIds?.includes(selectedProgramFilter)
-      ) {
-        return false;
-      }
-      if (selectedTypeFilter !== 'ALL' && p.workoutType !== selectedTypeFilter) {
-        return false;
-      }
-      if (selectedDurationFilter !== 'ALL') {
-        const dur = p.durationMinutes;
-        if (selectedDurationFilter === 'le10') {
-          if (!(p.isBiteSize || (typeof dur === 'number' && dur > 0 && dur <= 10))) {
-            return false;
-          }
-        } else if (selectedDurationFilter === '15_30') {
-          if (!(typeof dur === 'number' && dur >= 15 && dur <= 30)) {
-            return false;
-          }
-        } else if (selectedDurationFilter === 'gt30') {
-          if (!(typeof dur === 'number' && dur > 30)) {
-            return false;
-          }
-        }
-      }
-      if (selectedTagFilter !== 'ALL' && !p.tags?.includes(selectedTagFilter)) {
-        return false;
-      }
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase();
-        const matchTitle = p.title.toLowerCase().includes(q);
-        const matchLegacyId = (p.legacyWorkoutId || '').toLowerCase().includes(q);
-        const matchType = p.workoutType.toLowerCase().includes(q);
-        const matchTag = p.tags?.some((t) => t.toLowerCase().includes(q));
-        const matchEx = p.exercises.some((e) => e.exerciseName.toLowerCase().includes(q));
-        return matchTitle || matchLegacyId || matchType || matchTag || matchEx;
-      }
-      return true;
+    const matched = presets.filter((p) => matchesLibraryFilters(p, filters));
+    return sortLibraryPresets(matched, filters.sortBy);
+  }, [presets, filters]);
+
+  const selectedPresetsList = useMemo(() => {
+    const idSet = new Set(selectedPresetIds);
+    return presets.filter((p) => idSet.has(p.presetUuid));
+  }, [presets, selectedPresetIds]);
+
+  const toggleArrayFilter = <T extends string>(
+    key:
+      | 'categories'
+      | 'programIds'
+      | 'tags'
+      | 'structureModes'
+      | 'exerciseTypes'
+      | 'loadStyles'
+      | 'metricLaterality',
+    val: T
+  ) => {
+    setFilters((prev) => {
+      const curr = prev[key] as T[];
+      const next = curr.includes(val) ? curr.filter((x) => x !== val) : [...curr, val];
+      return { ...prev, [key]: next };
     });
-  }, [
-    presets,
-    selectedProgramFilter,
-    selectedTypeFilter,
-    selectedDurationFilter,
-    selectedTagFilter,
-    searchQuery,
-  ]);
+  };
+
+  const resetAllFilters = () => {
+    setFilters(DEFAULT_LIBRARY_FILTER_STATE);
+  };
+
+  const handleSaveCurrentFilterView = () => {
+    const label = saveViewNameInput.trim();
+    if (!label) return;
+    const newView: SavedLibraryFilterView = {
+      id: `flt-${uuidv4()}`,
+      name: label,
+      filters: JSON.parse(JSON.stringify(filters)),
+      createdAt: new Date().toISOString(),
+    };
+    const nextViews = [...savedFilterViews, newView];
+    setSavedFilterViews(nextViews);
+    persistSavedLibraryFilters(nextViews);
+    setSaveViewNameInput('');
+    setSaveViewModalOpen(false);
+    showToast(`Saved filter view "${label}"`);
+  };
+
+  const handleDeleteSavedFilterView = (id: string) => {
+    const nextViews = savedFilterViews.filter((v) => v.id !== id);
+    setSavedFilterViews(nextViews);
+    persistSavedLibraryFilters(nextViews);
+  };
+
+  const toggleSelectPreset = (presetUuid: string) => {
+    setSelectedPresetIds((prev) =>
+      prev.includes(presetUuid) ? prev.filter((id) => id !== presetUuid) : [...prev, presetUuid]
+    );
+  };
+
+  const handleBulkEditApply = async (patch: BulkPresetPatch) => {
+    const res = await bulkUpdatePresets(selectedPresetIds, patch);
+    setBulkEditModalOpen(false);
+    setSelectionMode(false);
+    setSelectedPresetIds([]);
+    showToast(`Updated ${res.updatedCount} workout${res.updatedCount === 1 ? '' : 's'}`);
+  };
 
   const allFilteredExpanded =
     filteredPresets.length > 0 &&
@@ -315,19 +366,40 @@ export const LibraryView: React.FC = () => {
         </div>
       )}
 
-      {/* Top Search & Filter Bar */}
-      <div className="bg-white dark:bg-slate-900 rounded-3xl p-4 sm:p-5 border border-slate-200/80 dark:border-slate-800 space-y-3.5 shadow-2xs">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+      {/* Top Search, Power-User Filter Bar & Saved Smart Views */}
+      <div className="bg-white dark:bg-slate-900 rounded-3xl p-4 sm:p-5 border border-slate-200/80 dark:border-slate-800 space-y-3 shadow-2xs">
+        {/* Header Row: Title + Select + Expand/Collapse All + New Workout */}
+        <div className="flex flex-wrap items-center justify-between gap-2.5">
           <div>
             <h2 className="font-display font-bold text-base sm:text-lg text-slate-900 dark:text-slate-100">
-              Preset Workouts ({filteredPresets.length})
+              Preset Workouts ({filteredPresets.length}
+              {filteredPresets.length !== presets.length ? ` / ${presets.length}` : ''})
             </h2>
             <p className="text-xs text-slate-500 dark:text-slate-400">
-              Search, filter, customize, or launch any workout directly onto the gym floor
+              Filter, bulk-edit, or launch any workout directly onto the gym floor
             </p>
           </div>
 
-          <div className="flex items-center gap-2.5">
+          <div className="flex flex-wrap items-center gap-1.5">
+            {presets.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectionMode((prev) => {
+                    if (prev) setSelectedPresetIds([]);
+                    return !prev;
+                  });
+                }}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 border transition-colors ${
+                  selectionMode
+                    ? 'bg-orange-500 text-white border-orange-500 shadow-2xs'
+                    : 'bg-slate-100 dark:bg-slate-800 border-slate-200/70 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-orange-500'
+                }`}
+              >
+                <CheckSquare className="w-3.5 h-3.5" />
+                {selectionMode ? 'Done' : 'Select'}
+              </button>
+            )}
             {filteredPresets.length > 0 && (
               <button
                 type="button"
@@ -342,7 +414,7 @@ export const LibraryView: React.FC = () => {
               onClick={handleCreateNewPreset}
               data-tooltip="Create a new workout template"
               title="Create a new workout template"
-              className="px-4 py-2.5 rounded-2xl bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-sm shadow-orange-500/20 transition-all"
+              className="px-3.5 py-2 rounded-2xl bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-sm shadow-orange-500/20 transition-all"
             >
               <Plus className="w-4 h-4" />
               New Workout
@@ -350,97 +422,503 @@ export const LibraryView: React.FC = () => {
           </div>
         </div>
 
-        {/* Search + Program + Workout Type Filters */}
-        <div className={`grid gap-2.5 ${isMobile ? 'grid-cols-1' : 'grid-cols-3'}`}>
-          <div className="relative">
+        {/* Saved Smart Filter Chips (persisted in wt_saved_library_filters) */}
+        {savedFilterViews.length > 0 && (
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 inline-flex items-center gap-1 shrink-0 mr-0.5">
+              <Bookmark className="w-3 h-3 text-orange-500" />
+              Saved:
+            </span>
+            {savedFilterViews.map((view) => {
+              const isCurrent =
+                JSON.stringify(view.filters) === JSON.stringify(filters);
+              return (
+                <div
+                  key={view.id}
+                  className={`inline-flex items-center rounded-xl border text-[11px] font-bold whitespace-nowrap transition-colors shrink-0 ${
+                    isCurrent
+                      ? 'bg-orange-500 text-white border-orange-500 shadow-2xs'
+                      : 'bg-slate-100 dark:bg-slate-800 border-slate-200/70 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:border-orange-500'
+                  }`}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setFilters(JSON.parse(JSON.stringify(view.filters)))}
+                    className="pl-2.5 pr-1.5 py-1"
+                  >
+                    {view.name}
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Delete saved filter ${view.name}`}
+                    onClick={() => handleDeleteSavedFilterView(view.id)}
+                    className={`pr-2 pl-0.5 py-1 opacity-75 hover:opacity-100 ${
+                      isCurrent ? 'text-white' : 'text-slate-400 hover:text-rose-500'
+                    }`}
+                  >
+                    ×
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Primary Search + Filters Toggle + Sort + Save View Row */}
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative flex-1 min-w-[180px]">
             <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
             <input
               type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search workouts, exercises, or ID..."
+              value={filters.searchQuery}
+              onChange={(e) => setFilters((prev) => ({ ...prev, searchQuery: e.target.value }))}
+              placeholder="Search workouts, exercises, tags, or ID..."
               className="w-full pl-9 pr-3 py-2 text-xs rounded-2xl bg-slate-100 dark:bg-slate-800 border border-transparent focus:border-orange-500 focus:outline-none"
             />
           </div>
 
-          <select
-            value={selectedProgramFilter}
-            onChange={(e) => setSelectedProgramFilter(e.target.value)}
-            title="Filter by Training Program"
-            className="px-3.5 py-2 text-xs font-semibold rounded-2xl bg-slate-100 dark:bg-slate-800 border border-transparent focus:border-orange-500 focus:outline-none"
+          <button
+            type="button"
+            onClick={() => setFiltersPanelOpen((prev) => !prev)}
+            aria-expanded={filtersPanelOpen}
+            className={`px-3 py-2 rounded-2xl text-xs font-bold inline-flex items-center gap-1.5 border transition-colors shrink-0 ${
+              filtersPanelOpen || activeFilterCount > 0
+                ? 'bg-orange-500 text-white border-orange-500 shadow-2xs'
+                : 'bg-slate-100 dark:bg-slate-800 border-slate-200/70 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:border-orange-500'
+            }`}
           >
-            <option value="ALL">All Programs</option>
-            {programs.map((prog) => (
-              <option key={prog.programUuid} value={prog.programUuid}>
-                {prog.title}
-              </option>
-            ))}
-          </select>
+            <SlidersHorizontal className="w-3.5 h-3.5" />
+            <span>Filters</span>
+            {activeFilterCount > 0 && (
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-mono font-extrabold bg-white/25 text-white">
+                {activeFilterCount}
+              </span>
+            )}
+          </button>
 
-          <select
-            value={selectedTypeFilter}
-            onChange={(e) => setSelectedTypeFilter(e.target.value as any)}
-            title="Filter by Workout Category"
-            className="px-3.5 py-2 text-xs font-semibold rounded-2xl bg-slate-100 dark:bg-slate-800 border border-transparent focus:border-orange-500 focus:outline-none"
-          >
-            <option value="ALL">All Categories</option>
-            {categories.map((wt) => (
-              <option key={wt} value={wt}>
-                {wt}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {/* Compact Duration Filter Bar */}
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-[11px] font-bold text-slate-400 inline-flex items-center gap-1 mr-1">
-            <Clock className="w-3.5 h-3.5" />
-            Duration:
-          </span>
-          {(
-            [
-              { id: 'ALL', label: 'All' },
-              { id: 'le10', label: '≤10m' },
-              { id: '15_30', label: '15–30m' },
-              { id: 'gt30', label: '30m+' },
-            ] as const
-          ).map((opt) => (
-            <button
-              key={opt.id}
-              type="button"
-              onClick={() => setSelectedDurationFilter(opt.id)}
-              className={`px-2.5 py-1 rounded-xl text-[11px] font-bold transition-colors ${
-                selectedDurationFilter === opt.id
-                  ? 'bg-orange-500 text-white shadow-2xs'
-                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
-              }`}
+          <div className="inline-flex items-center gap-1 bg-slate-100 dark:bg-slate-800 rounded-2xl px-2.5 py-1.5 shrink-0">
+            <ArrowUpDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+            <select
+              value={filters.sortBy}
+              onChange={(e) =>
+                setFilters((prev) => ({ ...prev, sortBy: e.target.value as LibrarySortOption }))
+              }
+              aria-label="Sort workouts"
+              className="bg-transparent text-xs font-semibold text-slate-700 dark:text-slate-200 focus:outline-none"
             >
-              {opt.label}
-            </button>
-          ))}
+              <option value="title_asc">Title A–Z</option>
+              <option value="duration_asc">Duration: Shortest</option>
+              <option value="duration_desc">Duration: Longest</option>
+              <option value="exercises_desc">Most Exercises</option>
+              <option value="updated_desc">Recently Updated</option>
+            </select>
+          </div>
+
+          {canSaveOrResetView && (
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  setSaveViewNameInput('');
+                  setSaveViewModalOpen(true);
+                }}
+                className="px-3 py-2 rounded-2xl bg-orange-500/12 hover:bg-orange-500/20 text-orange-600 dark:text-orange-400 text-xs font-bold inline-flex items-center gap-1 transition-colors shrink-0"
+              >
+                <Bookmark className="w-3.5 h-3.5" />
+                Save Filter View
+              </button>
+              <button
+                type="button"
+                onClick={resetAllFilters}
+                className="px-2.5 py-2 rounded-2xl bg-slate-100 dark:bg-slate-800 hover:text-rose-500 text-slate-500 dark:text-slate-400 text-xs font-bold transition-colors shrink-0"
+              >
+                Reset All
+              </button>
+            </>
+          )}
         </div>
 
-        {/* Tag Filter Pills */}
-        {allTags.length > 1 && (
-          <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
-            {allTags.map((tag) => (
-              <button
-                key={tag}
-                type="button"
-                onClick={() => setSelectedTagFilter(tag)}
-                className={`px-3 py-1 rounded-xl text-[11px] font-semibold whitespace-nowrap transition-colors ${
-                  selectedTagFilter === tag
-                    ? 'bg-slate-900 dark:bg-orange-500 text-white'
-                    : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
-                }`}
-              >
-                {tag === 'ALL' ? 'All Tags' : `#${tag}`}
-              </button>
-            ))}
+        {/* Collapsible Power-User Multi-Criteria Filter Drawer (All 10 Groups) */}
+        {filtersPanelOpen && (
+          <div className="pt-3 border-t border-slate-100 dark:border-slate-800 space-y-3.5 text-xs">
+            {/* 1. Categories */}
+            <div className="space-y-1.5">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                1. Categories
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {categories.map((cat) => {
+                  const active = filters.categories.includes(cat);
+                  return (
+                    <button
+                      key={cat}
+                      type="button"
+                      onClick={() => toggleArrayFilter('categories', cat)}
+                      className={`px-2.5 py-1 rounded-xl text-[11px] font-bold border transition-colors ${
+                        active
+                          ? 'bg-orange-500 text-white border-orange-500'
+                          : 'bg-slate-50 dark:bg-slate-800/70 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-orange-400'
+                      }`}
+                    >
+                      {cat}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* 2. Programs */}
+            <div className="space-y-1.5">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                2. Programs
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {programs.map((prog) => {
+                  const active = filters.programIds.includes(prog.programUuid);
+                  return (
+                    <button
+                      key={prog.programUuid}
+                      type="button"
+                      onClick={() => toggleArrayFilter('programIds', prog.programUuid)}
+                      className={`px-2.5 py-1 rounded-xl text-[11px] font-bold border transition-colors ${
+                        active
+                          ? 'bg-orange-500 text-white border-orange-500'
+                          : 'bg-slate-50 dark:bg-slate-800/70 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-orange-400'
+                      }`}
+                    >
+                      {prog.title}
+                    </button>
+                  );
+                })}
+                <button
+                  type="button"
+                  onClick={() => toggleArrayFilter('programIds', '__unassigned__')}
+                  className={`px-2.5 py-1 rounded-xl text-[11px] font-bold border transition-colors ${
+                    filters.programIds.includes('__unassigned__')
+                      ? 'bg-orange-500 text-white border-orange-500'
+                      : 'bg-slate-50 dark:bg-slate-800/70 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-orange-400'
+                  }`}
+                >
+                  Unassigned
+                </button>
+              </div>
+            </div>
+
+            {/* 3. Tags + Any (OR) / All (AND) Toggle */}
+            {allTagsList.length > 0 && (
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                    3. Tags
+                  </span>
+                  <div className="inline-flex rounded-lg bg-slate-100 dark:bg-slate-800 p-0.5 text-[10px] font-bold">
+                    <button
+                      type="button"
+                      onClick={() => setFilters((prev) => ({ ...prev, tagMatchMode: 'any' }))}
+                      className={`px-2 py-0.5 rounded-md transition-colors ${
+                        filters.tagMatchMode === 'any'
+                          ? 'bg-orange-500 text-white'
+                          : 'text-slate-500'
+                      }`}
+                    >
+                      Any (OR)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFilters((prev) => ({ ...prev, tagMatchMode: 'all' }))}
+                      className={`px-2 py-0.5 rounded-md transition-colors ${
+                        filters.tagMatchMode === 'all'
+                          ? 'bg-orange-500 text-white'
+                          : 'text-slate-500'
+                      }`}
+                    >
+                      All (AND)
+                    </button>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {allTagsList.map((tag) => {
+                    const active = filters.tags.includes(tag);
+                    return (
+                      <button
+                        key={tag}
+                        type="button"
+                        onClick={() => toggleArrayFilter('tags', tag)}
+                        className={`px-2.5 py-1 rounded-xl text-[11px] font-semibold border transition-colors ${
+                          active
+                            ? 'bg-slate-900 dark:bg-orange-500 text-white border-slate-900 dark:border-orange-500'
+                            : 'bg-slate-50 dark:bg-slate-800/70 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-orange-400'
+                        }`}
+                      >
+                        #{tag}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* 4. Structure & Timer Mode */}
+            <div className="space-y-1.5">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                4. Structure &amp; Timer Mode
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {(
+                  [
+                    { id: 'standard', label: 'Standard (Straight Sets)' },
+                    { id: 'circuit', label: 'Circuit' },
+                    { id: 'emom_rotating', label: 'EMOM — Rotating (1 Move/Min)' },
+                    { id: 'emom_complex', label: 'EMOM / Complex (Multi-Round)' },
+                    { id: 'amrap', label: 'AMRAP' },
+                    { id: 'no_rest', label: 'No Rest (0s)' },
+                  ] as Array<{ id: StructureFilterId; label: string }>
+                ).map((opt) => {
+                  const active = filters.structureModes.includes(opt.id);
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => toggleArrayFilter('structureModes', opt.id)}
+                      className={`px-2.5 py-1 rounded-xl text-[11px] font-bold border transition-colors ${
+                        active
+                          ? 'bg-orange-500 text-white border-orange-500'
+                          : 'bg-slate-50 dark:bg-slate-800/70 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-orange-400'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* 5. Exercise Format / Row Type & 6. Load Style */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                  5. Exercise Format / Row Type
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {(
+                    [
+                      { id: 'strength', label: 'Strength / Sets' },
+                      { id: 'mobility', label: 'Mobility / Flow' },
+                      { id: 'cardio', label: 'Cardio / Distance' },
+                    ] as Array<{ id: ExerciseRowTypeFilterId; label: string }>
+                  ).map((opt) => {
+                    const active = filters.exerciseTypes.includes(opt.id);
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => toggleArrayFilter('exerciseTypes', opt.id)}
+                        className={`px-2.5 py-1 rounded-xl text-[11px] font-bold border transition-colors ${
+                          active
+                            ? 'bg-orange-500 text-white border-orange-500'
+                            : 'bg-slate-50 dark:bg-slate-800/70 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-orange-400'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                  6. Load Style
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {(
+                    [
+                      { id: 'bodyweight', label: 'Bodyweight' },
+                      { id: 'single_kb_db', label: 'Single KB / DB' },
+                      { id: 'double_kg', label: '2x Double (kg)' },
+                      { id: 'barbell_plate', label: 'Barbell / Plate' },
+                      { id: 'band_assisted', label: 'Band / Assisted' },
+                    ] as Array<{ id: LoadStyleFilterId; label: string }>
+                  ).map((opt) => {
+                    const active = filters.loadStyles.includes(opt.id);
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => toggleArrayFilter('loadStyles', opt.id)}
+                        className={`px-2.5 py-1 rounded-xl text-[11px] font-bold border transition-colors ${
+                          active
+                            ? 'bg-orange-500 text-white border-orange-500'
+                            : 'bg-slate-50 dark:bg-slate-800/70 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-orange-400'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* 7. Tracking Metric & Laterality */}
+            <div className="space-y-1.5">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                7. Tracking Metric &amp; Laterality
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {(
+                  [
+                    { id: 'reps', label: 'Reps' },
+                    { id: 'time', label: 'Time (s)' },
+                    { id: 'distance', label: 'Distance' },
+                    { id: 'unilateral', label: 'Unilateral / Per-Side (L/R)' },
+                    { id: 'rep_scheme', label: 'Descending / Ascending / Pyramid Scheme' },
+                  ] as Array<{ id: MetricLateralityFilterId; label: string }>
+                ).map((opt) => {
+                  const active = filters.metricLaterality.includes(opt.id);
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => toggleArrayFilter('metricLaterality', opt.id)}
+                      className={`px-2.5 py-1 rounded-xl text-[11px] font-bold border transition-colors ${
+                        active
+                          ? 'bg-orange-500 text-white border-orange-500'
+                          : 'bg-slate-50 dark:bg-slate-800/70 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-orange-400'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* 8. Target Duration & 9. Attributes & Media */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                  8. Target Duration
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {(
+                    [
+                      { id: 'any', label: 'Any' },
+                      { id: 'le5', label: '≤5m' },
+                      { id: 'le10', label: '≤10m' },
+                      { id: '15_30', label: '15–30m' },
+                      { id: 'gt30', label: '30m+' },
+                      { id: 'none', label: 'No Duration Set' },
+                    ] as Array<{ id: DurationFilterId; label: string }>
+                  ).map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => setFilters((prev) => ({ ...prev, duration: opt.id }))}
+                      className={`px-2.5 py-1 rounded-xl text-[11px] font-bold border transition-colors ${
+                        filters.duration === opt.id
+                          ? 'bg-orange-500 text-white border-orange-500'
+                          : 'bg-slate-50 dark:bg-slate-800/70 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-orange-400'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                  9. Attributes &amp; Media
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setFilters((prev) => ({ ...prev, biteSizeOnly: !prev.biteSizeOnly }))
+                    }
+                    className={`px-2.5 py-1 rounded-xl text-[11px] font-bold border transition-colors ${
+                      filters.biteSizeOnly
+                        ? 'bg-orange-500 text-white border-orange-500'
+                        : 'bg-slate-50 dark:bg-slate-800/70 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-orange-400'
+                    }`}
+                  >
+                    ⚡ Bite-Size Only
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setFilters((prev) => ({ ...prev, hasVideoOnly: !prev.hasVideoOnly }))
+                    }
+                    className={`px-2.5 py-1 rounded-xl text-[11px] font-bold border transition-colors ${
+                      filters.hasVideoOnly
+                        ? 'bg-orange-500 text-white border-orange-500'
+                        : 'bg-slate-50 dark:bg-slate-800/70 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-orange-400'
+                    }`}
+                  >
+                    ▶ Has Follow-Along Video
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setFilters((prev) => ({ ...prev, hasCuesOnly: !prev.hasCuesOnly }))
+                    }
+                    className={`px-2.5 py-1 rounded-xl text-[11px] font-bold border transition-colors ${
+                      filters.hasCuesOnly
+                        ? 'bg-orange-500 text-white border-orange-500'
+                        : 'bg-slate-50 dark:bg-slate-800/70 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:border-orange-400'
+                    }`}
+                  >
+                    📝 Has Form Cues / Notes
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* 10. Includes Exercise / Cue Text */}
+            <div className="space-y-1.5">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                10. Includes Exercise / Cue Text
+              </div>
+              <input
+                type="text"
+                value={filters.exerciseCueQuery}
+                onChange={(e) =>
+                  setFilters((prev) => ({ ...prev, exerciseCueQuery: e.target.value }))
+                }
+                placeholder='e.g. "curl", "swing", "pelvic", "RDL"...'
+                className="w-full px-3 py-2 text-xs rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 focus:outline-none focus:border-orange-500"
+              />
+            </div>
           </div>
         )}
       </div>
+
+      {/* Multi-Select Mode Bar */}
+      {selectionMode && (
+        <div className="bg-orange-500/10 border border-orange-500/30 rounded-2xl px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs">
+          <div className="font-bold text-orange-700 dark:text-orange-300">
+            Selection Mode · {selectedPresetIds.length} selected
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setSelectedPresetIds(filteredPresets.map((p) => p.presetUuid))}
+              className="px-2.5 py-1 rounded-xl bg-white dark:bg-slate-900 border border-orange-500/30 text-orange-600 dark:text-orange-400 font-bold hover:bg-orange-500 hover:text-white transition-colors"
+            >
+              Select All Filtered ({filteredPresets.length})
+            </button>
+            <button
+              type="button"
+              disabled={selectedPresetIds.length === 0}
+              onClick={() => setSelectedPresetIds([])}
+              className="px-2.5 py-1 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 font-semibold disabled:opacity-40"
+            >
+              Deselect All
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Preset Cards Grid */}
       {filteredPresets.length === 0 ? (
@@ -451,16 +929,10 @@ export const LibraryView: React.FC = () => {
           </p>
           <button
             type="button"
-            onClick={() => {
-              setSearchQuery('');
-              setSelectedProgramFilter('ALL');
-              setSelectedTypeFilter('ALL');
-              setSelectedDurationFilter('ALL');
-              setSelectedTagFilter('ALL');
-            }}
+            onClick={resetAllFilters}
             className="text-xs font-bold text-orange-500 hover:underline"
           >
-            Reset Filters
+            Reset All Filters
           </button>
         </div>
       ) : (
@@ -470,24 +942,48 @@ export const LibraryView: React.FC = () => {
               preset.programIds?.includes(pg.programUuid)
             );
             const isExpanded = Boolean(expandedPresetIds[preset.presetUuid]);
+            const isSelected = selectedPresetIds.includes(preset.presetUuid);
 
             return (
               <div
                 key={preset.presetUuid}
                 className={`bg-white dark:bg-slate-900 rounded-2xl border transition-all shadow-2xs overflow-hidden ${
-                  isExpanded
+                  isSelected
+                    ? 'border-orange-500 ring-2 ring-orange-500/25'
+                    : isExpanded
                     ? 'border-orange-500/40'
                     : 'border-slate-200/80 dark:border-slate-800 hover:border-orange-500/35'
                 }`}
               >
-                {/* Compact Single-Row Collapsible Header (Tap Anywhere to Expand/Collapse) */}
-                <button
-                  type="button"
-                  onClick={() => togglePresetCardExpanded(preset.presetUuid)}
-                  aria-expanded={isExpanded}
-                  className="w-full px-4 py-3 text-left flex items-center justify-between gap-2.5 hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors"
-                >
-                  <div className="min-w-0 flex-1 space-y-1">
+                {/* Compact Single-Row Collapsible Header (Selects in Selection Mode, Expands Normally) */}
+                <div className="w-full px-4 py-3 flex items-center justify-between gap-2.5 hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors">
+                  {selectionMode && (
+                    <button
+                      type="button"
+                      onClick={() => toggleSelectPreset(preset.presetUuid)}
+                      aria-label={isSelected ? `Deselect ${preset.title}` : `Select ${preset.title}`}
+                      className={`p-0.5 rounded-lg shrink-0 transition-colors ${
+                        isSelected ? 'text-orange-500' : 'text-slate-400 hover:text-orange-500'
+                      }`}
+                    >
+                      {isSelected ? (
+                        <CheckSquare className="w-5 h-5" />
+                      ) : (
+                        <Square className="w-5 h-5" />
+                      )}
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      selectionMode
+                        ? toggleSelectPreset(preset.presetUuid)
+                        : togglePresetCardExpanded(preset.presetUuid)
+                    }
+                    aria-expanded={isExpanded}
+                    className="min-w-0 flex-1 text-left space-y-1"
+                  >
                     <div className="flex items-center gap-2 min-w-0">
                       <h3 className="font-display font-bold text-sm sm:text-[15px] text-slate-900 dark:text-slate-100 truncate">
                         {preset.title}
@@ -497,6 +993,11 @@ export const LibraryView: React.FC = () => {
                       <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold uppercase tracking-wider bg-orange-500/15 text-orange-600 dark:text-orange-400">
                         {preset.workoutType}
                       </span>
+                      {preset.formatMode === 'amrap' && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold uppercase tracking-wider bg-violet-500/15 text-violet-600 dark:text-violet-300">
+                          AMRAP
+                        </span>
+                      )}
                       {preset.isBiteSize ? (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold uppercase tracking-wider bg-amber-500/15 text-amber-700 dark:text-amber-300">
                           <Zap className="w-2.5 h-2.5 fill-current" />
@@ -515,19 +1016,21 @@ export const LibraryView: React.FC = () => {
                         </span>
                       )}
                     </div>
-                  </div>
+                  </button>
 
-                  <span
-                    className="p-1.5 rounded-xl bg-slate-100/80 dark:bg-slate-800 text-slate-500 dark:text-slate-400 shrink-0"
-                    aria-hidden="true"
+                  <button
+                    type="button"
+                    onClick={() => togglePresetCardExpanded(preset.presetUuid)}
+                    aria-label={isExpanded ? 'Collapse workout card' : 'Expand workout card'}
+                    className="p-1.5 rounded-xl bg-slate-100/80 dark:bg-slate-800 text-slate-500 dark:text-slate-400 hover:text-orange-500 shrink-0 transition-colors"
                   >
                     {isExpanded ? (
                       <ChevronUp className="w-4 h-4" />
                     ) : (
                       <ChevronDown className="w-4 h-4" />
                     )}
-                  </span>
-                </button>
+                  </button>
+                </div>
 
                 {/* Expanded Body: Actions, Coaching Notes, Exercises & Tags */}
                 {isExpanded && (
@@ -1078,9 +1581,15 @@ export const LibraryView: React.FC = () => {
                 const durationTag = editingPreset.durationMinutes
                   ? ` · ${editingPreset.durationMinutes}m`
                   : '';
+                const amrapCapMin =
+                  editingPreset.defaultTimer?.timeCapMinutes ||
+                  editingPreset.durationMinutes ||
+                  (editingPreset.isBiteSize ? 5 : 10);
 
                 const timerSummary =
-                  activeFormat === 'standard'
+                  activeFormat === 'amrap'
+                    ? `AMRAP · ${amrapCapMin}m Cap`
+                    : activeFormat === 'standard'
                     ? `Standard · ${rstVal === 0 ? 'No Rest' : `${rstVal}s`}${durationTag}`
                     : isRotatingEmom
                     ? `${formatPrefix} · ${rndVal}m (${wrkVal}s/move)`
@@ -1098,7 +1607,22 @@ export const LibraryView: React.FC = () => {
                   activeFormat === 'circuit' || activeFormat === 'emom_complex';
 
                 const switchFormat = (nextFormat: PresetFormatMode) => {
-                  if (nextFormat === 'standard') {
+                  if (nextFormat === 'amrap') {
+                    const cap =
+                      editingPreset.defaultTimer?.timeCapMinutes ||
+                      editingPreset.durationMinutes ||
+                      (editingPreset.isBiteSize ? 5 : 10);
+                    setEditingPreset({
+                      ...editingPreset,
+                      formatMode: 'amrap',
+                      durationMinutes: cap,
+                      defaultTimer: {
+                        mode: 'rest',
+                        timeCapMinutes: cap,
+                        restSec: cap * 60,
+                      },
+                    });
+                  } else if (nextFormat === 'standard') {
                     setEditingPreset({
                       ...editingPreset,
                       formatMode: 'standard',
@@ -1512,6 +2036,7 @@ export const LibraryView: React.FC = () => {
                                   { id: 'standard', label: 'Standard' },
                                   { id: 'circuit', label: 'Circuit' },
                                   { id: 'emom_complex', label: 'EMOM / Complex' },
+                                  { id: 'amrap', label: 'AMRAP' },
                                 ] as Array<{ id: PresetFormatMode; label: string }>
                               ).map((opt) => (
                                 <button
@@ -1620,7 +2145,45 @@ export const LibraryView: React.FC = () => {
                           </div>
                         )}
 
-                        {isIntervalFormat ? (
+                        {activeFormat === 'amrap' ? (
+                          <div className="flex flex-wrap items-end gap-3">
+                            <div className="w-36">
+                              <label className="block text-[10px] font-semibold text-violet-600 dark:text-violet-400 mb-0.5">
+                                Time Cap (mins)
+                              </label>
+                              <input
+                                type="number"
+                                min={1}
+                                max={180}
+                                value={
+                                  editingPreset.defaultTimer?.timeCapMinutes ??
+                                  editingPreset.durationMinutes ??
+                                  ''
+                                }
+                                placeholder={editingPreset.isBiteSize ? '5' : '10'}
+                                onChange={(e) => {
+                                  const raw = e.target.value.trim();
+                                  const cap =
+                                    raw === '' ? undefined : Math.max(1, parseInt(raw, 10) || 1);
+                                  setEditingPreset({
+                                    ...editingPreset,
+                                    durationMinutes: cap,
+                                    defaultTimer: {
+                                      mode: 'rest',
+                                      timeCapMinutes: cap,
+                                      restSec: (cap || 10) * 60,
+                                    },
+                                  });
+                                }}
+                                className="w-full px-2.5 py-1.5 text-xs font-mono font-bold rounded-xl border border-violet-500/40 bg-white dark:bg-slate-900"
+                              />
+                            </div>
+                            <p className="text-[11px] text-slate-500 dark:text-slate-400 pb-1.5 flex-1 min-w-[180px]">
+                              As Many Rounds As Possible within the Time Cap. Set each exercise's{' '}
+                              <strong>Reps / Round</strong> below (fixed round counts are hidden).
+                            </p>
+                          </div>
+                        ) : isIntervalFormat ? (
                           <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
                             <div>
                               <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">
@@ -1955,6 +2518,7 @@ export const LibraryView: React.FC = () => {
                 </div>
 
                 {(() => {
+                  const isAmrapFormat = editingPreset.formatMode === 'amrap';
                   const isSequenceMode =
                     editingPreset.formatMode === 'circuit' ||
                     editingPreset.formatMode === 'emom_complex' ||
@@ -2428,7 +2992,7 @@ export const LibraryView: React.FC = () => {
                               </div>
                             )}
 
-                            {isSequenceMode ? (
+                            {isAmrapFormat ? null : isSequenceMode ? (
                               <div>
                                 <div className="flex items-center justify-between gap-1 mb-0.5">
                                   <label className="block text-[10px] font-semibold text-slate-400">
@@ -2516,7 +3080,7 @@ export const LibraryView: React.FC = () => {
                                   ? 'Target Distance (m)'
                                   : (pe.metricType || 'reps') === 'time'
                                   ? 'Target Time (s)'
-                                  : isSequenceMode
+                                  : isSequenceMode || isAmrapFormat
                                   ? 'Reps / Round'
                                   : 'Target Reps'}
                               </label>
@@ -2528,8 +3092,8 @@ export const LibraryView: React.FC = () => {
                                     ? 'e.g. 40'
                                     : (pe.metricType || 'reps') === 'time'
                                     ? 'e.g. 45'
-                                    : isSequenceMode
-                                    ? 'e.g. 2'
+                                    : isSequenceMode || isAmrapFormat
+                                    ? 'e.g. 10'
                                     : 'e.g. 10 or AMRAP'
                                 }
                                 onChange={(e) => {
@@ -2902,6 +3466,105 @@ export const LibraryView: React.FC = () => {
           </div>
         )}
       </ModalPortal>
+
+      {/* STICKY BULK ACTION BAR (shown above bottom navigation when >= 1 selected) */}
+      {selectionMode && selectedPresetIds.length > 0 && (
+        <div
+          style={{ position: 'sticky', bottom: '4.5rem', zIndex: 35 }}
+          className="mx-auto max-w-md rounded-2xl bg-slate-900 dark:bg-slate-800 text-white border border-slate-700 px-4 py-3 shadow-2xl flex items-center justify-between gap-3"
+        >
+          <span className="text-xs font-bold">
+            <span className="text-orange-400 font-mono">{selectedPresetIds.length}</span> selected
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setSelectedPresetIds([])}
+              className="px-3 py-1.5 rounded-xl bg-slate-800 dark:bg-slate-700 hover:bg-slate-700 text-xs font-semibold text-slate-200"
+            >
+              Clear
+            </button>
+            <button
+              type="button"
+              onClick={() => setBulkEditModalOpen(true)}
+              className="px-4 py-1.5 rounded-xl bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-sm transition-colors"
+            >
+              <Edit3 className="w-3.5 h-3.5" />
+              Bulk Edit
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* PORTALED SAVE FILTER VIEW MODAL (z-1000) */}
+      <ModalPortal
+        open={saveViewModalOpen}
+        onClose={() => setSaveViewModalOpen(false)}
+        tier="primary"
+      >
+        <div className="w-full max-w-sm rounded-3xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-5 space-y-4 shadow-2xl">
+          <div className="flex items-center justify-between">
+            <h3 className="font-display font-bold text-base flex items-center gap-2">
+              <Bookmark className="w-4 h-4 text-orange-500" />
+              Save Filter View
+            </h3>
+            <button
+              type="button"
+              onClick={() => setSaveViewModalOpen(false)}
+              className="p-1.5 rounded-xl text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="space-y-1.5">
+            <label className="block text-xs font-semibold text-slate-500">
+              Short Label
+            </label>
+            <input
+              type="text"
+              autoFocus
+              value={saveViewNameInput}
+              onChange={(e) => setSaveViewNameInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && saveViewNameInput.trim()) {
+                  e.preventDefault();
+                  handleSaveCurrentFilterView();
+                }
+              }}
+              placeholder='e.g. "Strength + Curls", "Rotating EMOMs", "≤5m Mobility"'
+              className="w-full px-3 py-2 text-xs font-semibold rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 focus:outline-none focus:border-orange-500"
+            />
+          </div>
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setSaveViewModalOpen(false)}
+              className="px-4 py-2 rounded-xl text-xs font-semibold bg-slate-100 dark:bg-slate-800"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={!saveViewNameInput.trim()}
+              onClick={handleSaveCurrentFilterView}
+              className="px-4 py-2 rounded-xl text-xs font-bold bg-orange-500 hover:bg-orange-600 disabled:opacity-40 text-white"
+            >
+              Save View
+            </button>
+          </div>
+        </div>
+      </ModalPortal>
+
+      {/* PORTALED BULK EDIT WORKOUTS MODAL (z-1000) */}
+      <BulkEditWorkoutsModal
+        open={bulkEditModalOpen}
+        selectedPresets={selectedPresetsList}
+        programs={programs}
+        categories={categories}
+        allTags={allTagsList}
+        onClose={() => setBulkEditModalOpen(false)}
+        onApply={handleBulkEditApply}
+      />
     </div>
   );
 };

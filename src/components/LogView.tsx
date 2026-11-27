@@ -53,7 +53,9 @@ import {
 } from '../types/workout';
 import {
   buildLadderWorkoutSets,
+  computeAmrapExercises,
   expandLadderSequence,
+  formatAmrapScoreBadge,
   formatExerciseMetricSummary,
   formatLoadBadge,
   formatMobilityDurationSeconds,
@@ -616,6 +618,12 @@ export const LogView: React.FC = () => {
   };
 
   const getWorkoutSummaryMetric = (d: DraftWorkoutCard): string => {
+    const amrapBadge = formatAmrapScoreBadge(d);
+    if (amrapBadge) {
+      return d.totalSessionVolumeKg > 0
+        ? `${amrapBadge} · ${d.totalSessionVolumeKg.toLocaleString()} kg`
+        : amrapBadge;
+    }
     if (d.totalSessionVolumeKg > 0) {
       return `${d.totalSessionVolumeKg.toLocaleString()} kg total`;
     }
@@ -1235,6 +1243,24 @@ export const LogView: React.FC = () => {
                 activeWeekNumber
               );
               const activeVideoUrl = draft.videoUrl || preset?.videoUrl;
+              const isAmrapWorkout =
+                (draft.formatMode || preset?.formatMode) === 'amrap' ||
+                draft.amrapRounds !== undefined ||
+                draft.amrapTimeCapMinutes !== undefined;
+              const amrapTimeCapMin =
+                draft.amrapTimeCapMinutes ||
+                preset?.defaultTimer?.timeCapMinutes ||
+                draft.durationMinutes ||
+                preset?.durationMinutes ||
+                10;
+              const amrapScoreBadge = isAmrapWorkout
+                ? formatAmrapScoreBadge({
+                    formatMode: 'amrap',
+                    amrapRounds: draft.amrapRounds ?? 0,
+                    amrapExtraReps: draft.amrapExtraReps || {},
+                    amrapTimeCapMinutes: amrapTimeCapMin,
+                  })
+                : null;
               const isRotatingEmomWorkout =
                 (draft.emomMode || preset?.defaultTimer?.emomMode) === 'rotating' &&
                 draft.exercises.length > 0;
@@ -1302,6 +1328,11 @@ export const LogView: React.FC = () => {
                             <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-lg bg-rose-500/12 text-rose-600 dark:text-rose-400">
                               <Play className="w-2.5 h-2.5 fill-current" />
                               Video
+                            </span>
+                          )}
+                          {amrapScoreBadge && (draftStatus === 'completed' || (draft.amrapRounds ?? 0) > 0) && (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-lg bg-violet-500/15 text-violet-700 dark:text-violet-300 border border-violet-500/25 tabular-nums">
+                              {amrapScoreBadge}
                             </span>
                           )}
                           <span className="font-mono text-[10px] font-medium px-1.5 py-0.5 rounded-md text-slate-400 dark:text-slate-500 tabular-nums">
@@ -1659,8 +1690,188 @@ export const LogView: React.FC = () => {
                         </div>
                       )}
 
-                      {/* WORKOUT-LEVEL ROUNDS / LADDER / ROTATING EMOM BAR */}
+                      {/* WORKOUT-LEVEL ROUNDS / LADDER / ROTATING EMOM / AMRAP BAR */}
                       {(() => {
+                        if (isAmrapWorkout) {
+                          const currentRounds = Math.max(0, Math.round(Number(draft.amrapRounds) || 0));
+                          const currentExtraMap = draft.amrapExtraReps || {};
+                          const liveAmrap = computeAmrapExercises(
+                            draft.exercises,
+                            currentRounds,
+                            currentExtraMap
+                          );
+
+                          const updateAmrapScore = (
+                            nextRounds: number,
+                            nextExtra: Record<string, number>
+                          ) => {
+                            const clampedRounds = Math.max(0, Math.round(nextRounds));
+                            updateDraftWorkout(draft.logUuid, (curr) => {
+                              const recomputed = computeAmrapExercises(
+                                curr.exercises,
+                                clampedRounds,
+                                nextExtra
+                              );
+                              return {
+                                ...curr,
+                                formatMode: 'amrap',
+                                amrapRounds: clampedRounds,
+                                amrapExtraReps: nextExtra,
+                                amrapTimeCapMinutes: amrapTimeCapMin,
+                                durationMinutes: amrapTimeCapMin,
+                                exercises: recomputed.exercises,
+                                totalSessionVolumeKg: recomputed.totalSessionVolumeKg,
+                              };
+                            });
+                          };
+
+                          return (
+                            <div className="p-4 rounded-2xl bg-[var(--bg-inset)] border border-violet-500/35 space-y-3.5">
+                              {/* Top Bar: AMRAP Badge + Countdown Timer Start */}
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <span className="px-2 py-0.5 rounded-lg bg-violet-600 text-white text-[10px] font-bold uppercase tracking-wider shrink-0">
+                                    AMRAP
+                                  </span>
+                                  <span className="text-xs font-bold text-[var(--text-primary)]">
+                                    {amrapTimeCapMin}m Time Cap
+                                  </span>
+                                  {amrapScoreBadge && (
+                                    <span className="px-2 py-0.5 rounded-lg bg-violet-500/15 text-violet-700 dark:text-violet-300 text-[11px] font-mono font-bold tabular-nums">
+                                      {amrapScoreBadge}
+                                    </span>
+                                  )}
+                                </div>
+
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    startRestTimer(amrapTimeCapMin * 60);
+                                    triggerToast(`Started ${amrapTimeCapMin}:00 AMRAP countdown!`);
+                                  }}
+                                  className="px-3.5 py-1.5 rounded-xl bg-violet-600 hover:bg-violet-700 text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-sm transition-colors shrink-0"
+                                >
+                                  <Timer className="w-3.5 h-3.5" />
+                                  Start {amrapTimeCapMin}:00 Cap
+                                </button>
+                              </div>
+
+                              {/* Large Thumb-Friendly +1 Round Counter */}
+                              <div className="flex items-center gap-2.5">
+                                <button
+                                  type="button"
+                                  aria-label="Subtract 1 round"
+                                  disabled={currentRounds === 0}
+                                  onClick={() =>
+                                    updateAmrapScore(currentRounds - 1, currentExtraMap)
+                                  }
+                                  className="h-14 w-14 rounded-2xl bg-[var(--bg-card)] border border-[var(--border-card)] hover:border-rose-400 disabled:opacity-35 flex items-center justify-center text-[var(--text-primary)] font-bold text-lg shrink-0 transition-colors"
+                                >
+                                  <Minus className="w-5 h-5" />
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    updateAmrapScore(currentRounds + 1, currentExtraMap)
+                                  }
+                                  className="tactile-pill flex-1 h-14 px-4 rounded-2xl bg-orange-500 hover:bg-orange-600 active:scale-[0.99] text-white font-display font-extrabold text-base flex items-center justify-between gap-3 shadow-md shadow-orange-500/25 transition-all"
+                                >
+                                  <span className="inline-flex items-center gap-2">
+                                    <Plus className="w-5 h-5" />
+                                    <span>+1 Round</span>
+                                  </span>
+                                  <span className="px-3 py-1 rounded-xl bg-black/20 font-mono text-lg tabular-nums">
+                                    {currentRounds} Rds
+                                  </span>
+                                </button>
+                              </div>
+
+                              {/* Extra Reps (Partial Round) */}
+                              {draft.exercises.length > 0 && (
+                                <div className="space-y-1.5 pt-2 border-t border-[var(--border-subtle)]">
+                                  <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">
+                                    <span>Extra Reps (Partial Round)</span>
+                                    <span className="font-mono tabular-nums text-violet-600 dark:text-violet-300">
+                                      +{liveAmrap.totalExtraReps} extra ·{' '}
+                                      {liveAmrap.totalSessionVolumeKg.toLocaleString()} kg
+                                    </span>
+                                  </div>
+                                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                                    {draft.exercises.map((ex, idx) => {
+                                      const extraVal = Number(
+                                        currentExtraMap[ex.exerciseUuid] ?? 0
+                                      );
+                                      const perRnd =
+                                        ex.repsPerRound ||
+                                        parseInt(
+                                          String(ex.targetRepsLabel || '').replace(/[^0-9]/g, ''),
+                                          10
+                                        ) ||
+                                        1;
+                                      const computedEx = liveAmrap.exercises[idx];
+                                      return (
+                                        <div
+                                          key={`${ex.exerciseUuid}-${idx}`}
+                                          className="px-2.5 py-2 rounded-xl bg-[var(--bg-card)] border border-[var(--border-subtle)] flex items-center justify-between gap-2"
+                                        >
+                                          <div className="min-w-0 flex-1">
+                                            <div className="text-xs font-bold text-[var(--text-primary)] truncate">
+                                              {ex.exerciseName}
+                                            </div>
+                                            <div className="text-[10px] font-mono text-[var(--text-muted)] tabular-nums">
+                                              {perRnd}/rd → Total:{' '}
+                                              <strong className="text-orange-500">
+                                                {computedEx?.totalReps ?? 0}
+                                              </strong>
+                                              {computedEx && computedEx.totalLoadKg > 0
+                                                ? ` (${computedEx.totalLoadKg.toLocaleString()} kg)`
+                                                : ''}
+                                            </div>
+                                          </div>
+                                          <div className="flex items-center gap-1 shrink-0">
+                                            <input
+                                              type="number"
+                                              inputMode="numeric"
+                                              min={0}
+                                              value={extraVal === 0 ? '' : extraVal}
+                                              placeholder="0"
+                                              aria-label={`Extra reps for ${ex.exerciseName}`}
+                                              onChange={(e) => {
+                                                const parsed = Math.max(
+                                                  0,
+                                                  parseInt(e.target.value, 10) || 0
+                                                );
+                                                updateAmrapScore(currentRounds, {
+                                                  ...currentExtraMap,
+                                                  [ex.exerciseUuid]: parsed,
+                                                });
+                                              }}
+                                              className="w-14 h-8 px-2 text-center font-mono text-xs font-bold rounded-lg bg-[var(--bg-input)] border border-[var(--border-subtle)] focus:outline-none focus:border-orange-500 tabular-nums"
+                                            />
+                                            <button
+                                              type="button"
+                                              onClick={() =>
+                                                updateAmrapScore(currentRounds, {
+                                                  ...currentExtraMap,
+                                                  [ex.exerciseUuid]: extraVal + 1,
+                                                })
+                                              }
+                                              className="h-8 px-2 rounded-lg bg-slate-200/70 dark:bg-slate-700 text-[11px] font-bold hover:bg-orange-500 hover:text-white transition-colors"
+                                            >
+                                              +1
+                                            </button>
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        }
+
                         if (isRotatingEmomWorkout) {
                           const activeMove =
                             activeRotatingMoveIdx >= 0

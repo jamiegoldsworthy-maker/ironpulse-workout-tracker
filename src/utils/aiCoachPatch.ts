@@ -555,6 +555,14 @@ export function buildCoachReviewExport(params: CoachReviewExportParams): {
         : {}),
       ...(durationMin !== undefined ? { durationMin } : {}),
       totalVolumeKg: Math.round((log.totalSessionVolumeKg || 0) * 10) / 10,
+      ...(log.amrapRounds !== undefined || log.formatMode === 'amrap'
+        ? {
+            formatMode: 'amrap',
+            amrapRounds: log.amrapRounds ?? 0,
+            amrapExtraReps: log.amrapExtraReps || {},
+            amrapTimeCapMinutes: log.amrapTimeCapMinutes || durationMin,
+          }
+        : {}),
       ...(log.completedRounds !== undefined
         ? {
             roundsCompleted: log.completedRounds,
