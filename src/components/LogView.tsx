@@ -31,8 +31,15 @@ import {
   Clock,
   Edit3,
   Zap,
+  Play,
+  ExternalLink,
 } from 'lucide-react';
-import { DraftWorkoutCard, useWorkoutStore } from '../store/useWorkoutStore';
+import {
+  DraftWorkoutCard,
+  recordLogInteraction,
+  shouldAutoResetLogDateToToday,
+  useWorkoutStore,
+} from '../store/useWorkoutStore';
 import {
   CardioMode,
   ContextBlock,
@@ -256,6 +263,30 @@ export const LogView: React.FC = () => {
       document.removeEventListener('keydown', handleEsc);
     };
   }, [openExerciseMenuKey, openCueKey]);
+
+  // Auto-reset LogView to Today on mount or visibility return after 60+ min inactivity / date rollover;
+  // within an active session (<60 min), preserve the user's selected date across tab switches.
+  useEffect(() => {
+    const checkInactivityAndSyncToday = () => {
+      if (shouldAutoResetLogDateToToday()) {
+        const currentToday = getTodayIsoDate();
+        if (useWorkoutStore.getState().activeDate !== currentToday) {
+          setActiveDate(currentToday);
+        }
+      }
+      recordLogInteraction();
+    };
+
+    checkInactivityAndSyncToday();
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        checkInactivityAndSyncToday();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [setActiveDate]);
 
   // Keep activeCardIdx in bounds when draftWorkouts length changes
   useEffect(() => {
@@ -593,7 +624,12 @@ export const LogView: React.FC = () => {
     if (durSec > 0) {
       return `${formatSecondsAsMmSs(durSec)} total`;
     }
-    return '0 kg total';
+    const presetRef = presets.find((p) => p.presetUuid === d.presetUuid);
+    const targetMins = d.durationMinutes ?? presetRef?.durationMinutes;
+    if (targetMins && targetMins > 0) {
+      return d.videoUrl || presetRef?.videoUrl ? `${targetMins}m video` : `${targetMins}m`;
+    }
+    return d.videoUrl || presetRef?.videoUrl ? 'Follow-Along Video' : '0 kg total';
   };
 
   const openSwitchWorkoutPicker = () => {
@@ -1195,6 +1231,7 @@ export const LogView: React.FC = () => {
                 draft.coachNotes,
                 activeWeekNumber
               );
+              const activeVideoUrl = draft.videoUrl || preset?.videoUrl;
 
               if (isCollapsed) {
                 return (
@@ -1243,6 +1280,12 @@ export const LogView: React.FC = () => {
                           <span className="text-[11px] font-semibold px-2 py-0.5 rounded-lg bg-slate-200/60 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
                             {draft.workoutType}
                           </span>
+                          {activeVideoUrl && (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-lg bg-rose-500/12 text-rose-600 dark:text-rose-400">
+                              <Play className="w-2.5 h-2.5 fill-current" />
+                              Video
+                            </span>
+                          )}
                           <span className="font-mono text-[10px] font-medium px-1.5 py-0.5 rounded-md text-slate-400 dark:text-slate-500 tabular-nums">
                             #{draft.displayId.replace(/^ID-/i, '')}
                           </span>
@@ -1485,6 +1528,21 @@ export const LogView: React.FC = () => {
                       </span>
                     </div>
 
+                    {/* Prominent Follow-Along YouTube Video CTA */}
+                    {activeVideoUrl && (
+                      <a
+                        href={activeVideoUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={() => recordLogInteraction()}
+                        className="w-full py-2.5 px-4 rounded-2xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold inline-flex items-center justify-center gap-2 shadow-sm shadow-rose-600/20 transition-colors"
+                      >
+                        <Play className="w-4 h-4 fill-current shrink-0" />
+                        <span>Open Follow-Along Video</span>
+                        <ExternalLink className="w-3.5 h-3.5 opacity-85 shrink-0" />
+                      </a>
+                    )}
+
                     {/* Collapsible Workout Guidance, Target Range & Scheduled Coach Notes Banner */}
                     {(filteredWorkoutNotes ||
                       filteredCoachNotes ||
@@ -1538,6 +1596,51 @@ export const LogView: React.FC = () => {
                   {/* Collapsible Body */}
                   {!isCollapsed && (
                     <div className="p-4 sm:p-5 space-y-4">
+                      {/* Video-Only / 0-Exercise Follow-Along Duration Card */}
+                      {draft.exercises.length === 0 && (
+                        <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/70 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="text-xs font-bold text-slate-800 dark:text-slate-100">
+                              {activeVideoUrl
+                                ? 'Follow-Along Video Session'
+                                : 'Unstructured / Flow Session'}
+                            </div>
+                            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                              No individual sets required — tap Complete when finished to record your
+                              duration.
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <label className="text-[11px] font-bold text-slate-500">
+                              Duration (min):
+                            </label>
+                            <input
+                              type="number"
+                              min={1}
+                              max={240}
+                              value={draft.durationMinutes ?? preset?.durationMinutes ?? ''}
+                              placeholder="15"
+                              onChange={(e) => {
+                                const raw = e.target.value.trim();
+                                const mins =
+                                  raw === '' ? undefined : Math.max(1, Math.round(Number(raw)));
+                                updateDraftWorkout(draft.logUuid, (curr) => ({
+                                  ...curr,
+                                  durationMinutes: Number.isFinite(mins as number)
+                                    ? mins
+                                    : undefined,
+                                  durationSec:
+                                    Number.isFinite(mins as number) && mins
+                                      ? mins * 60
+                                      : undefined,
+                                }));
+                              }}
+                              className="w-16 px-2.5 py-1.5 text-xs font-mono font-bold text-center rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 focus:outline-none focus:border-orange-500"
+                            />
+                          </div>
+                        </div>
+                      )}
+
                       {/* WORKOUT-LEVEL ROUNDS / LADDER BAR */}
                       {(() => {
                         const hasLadderExercises = draft.exercises.some(

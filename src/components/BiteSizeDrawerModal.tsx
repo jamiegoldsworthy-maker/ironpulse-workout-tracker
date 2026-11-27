@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   ChevronLeft,
   Clock,
+  ExternalLink,
   Pause,
   Play,
   RotateCcw,
@@ -308,64 +309,80 @@ export const BiteSizeDrawerModal: React.FC<BiteSizeDrawerModalProps> = ({
               </div>
             </div>
 
+            {/* Prominent Follow-Along YouTube Video CTA inside Guided Timer */}
+            {guidedPreset.videoUrl && (
+              <a
+                href={guidedPreset.videoUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-full py-2.5 px-4 rounded-2xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold inline-flex items-center justify-center gap-2 shadow-sm shadow-rose-600/20 transition-colors"
+              >
+                <Play className="w-4 h-4 fill-current shrink-0" />
+                <span>Open Follow-Along Video</span>
+                <ExternalLink className="w-3.5 h-3.5 opacity-85 shrink-0" />
+              </a>
+            )}
+
             {/* Movement Checklist */}
-            <div className="space-y-2">
-              <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                Movements ({guidedPreset.exercises.length})
-              </div>
-              {guidedPreset.exercises.map((ex, idx) => {
-                const done = Boolean(checkedSteps[idx]);
-                return (
-                  <button
-                    key={idx}
-                    type="button"
-                    onClick={() =>
-                      setCheckedSteps((prev) => ({ ...prev, [idx]: !prev[idx] }))
-                    }
-                    className={`w-full text-left p-3 rounded-2xl border flex items-start gap-2.5 transition-all ${
-                      done
-                        ? 'bg-emerald-500/10 border-emerald-500/35 opacity-80'
-                        : 'bg-slate-50 dark:bg-slate-800/50 border-slate-200/70 dark:border-slate-800'
-                    }`}
-                  >
-                    <span
-                      className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 mt-0.5 text-[10px] font-bold ${
+            {guidedPreset.exercises.length > 0 && (
+              <div className="space-y-2">
+                <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                  Movements ({guidedPreset.exercises.length})
+                </div>
+                {guidedPreset.exercises.map((ex, idx) => {
+                  const done = Boolean(checkedSteps[idx]);
+                  return (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() =>
+                        setCheckedSteps((prev) => ({ ...prev, [idx]: !prev[idx] }))
+                      }
+                      className={`w-full text-left p-3 rounded-2xl border flex items-start gap-2.5 transition-all ${
                         done
-                          ? 'bg-emerald-500 text-white'
-                          : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
+                          ? 'bg-emerald-500/10 border-emerald-500/35 opacity-80'
+                          : 'bg-slate-50 dark:bg-slate-800/50 border-slate-200/70 dark:border-slate-800'
                       }`}
                     >
-                      {done ? <Check className="w-3 h-3" /> : idx + 1}
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center justify-between gap-2">
-                        <span
-                          className={`text-xs font-bold ${
-                            done ? 'line-through text-slate-500' : 'text-slate-900 dark:text-slate-100'
-                          }`}
-                        >
-                          {ex.exerciseName}
-                        </span>
-                        <span className="font-mono text-[11px] font-semibold text-orange-600 dark:text-orange-400 shrink-0">
-                          {ex.trackingType === 'mobility'
-                            ? ex.defaultReps || (ex.defaultDurationMin ? `${ex.defaultDurationMin}m` : 'Flow')
-                            : `${ex.defaultSets}×${ex.defaultReps}${
-                                ex.loadType !== 'bodyweight' && ex.loadType !== 'none'
-                                  ? ` @ ${formatLoadBadge(ex.loadType, ex.defaultWeight)}`
-                                  : ''
-                              }`}
-                        </span>
+                      <span
+                        className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 mt-0.5 text-[10px] font-bold ${
+                          done
+                            ? 'bg-emerald-500 text-white'
+                            : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
+                        }`}
+                      >
+                        {done ? <Check className="w-3 h-3" /> : idx + 1}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <span
+                            className={`text-xs font-bold ${
+                              done ? 'line-through text-slate-500' : 'text-slate-900 dark:text-slate-100'
+                            }`}
+                          >
+                            {ex.exerciseName}
+                          </span>
+                          <span className="font-mono text-[11px] font-semibold text-orange-600 dark:text-orange-400 shrink-0">
+                            {ex.trackingType === 'mobility'
+                              ? ex.defaultReps || (ex.defaultDurationMin ? `${ex.defaultDurationMin}m` : 'Flow')
+                              : `${ex.defaultSets}×${ex.defaultReps}${
+                                  ex.loadType !== 'bodyweight' && ex.loadType !== 'none'
+                                    ? ` @ ${formatLoadBadge(ex.loadType, ex.defaultWeight)}`
+                                    : ''
+                                }`}
+                          </span>
+                        </div>
+                        {ex.baseNotes && (
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                            {ex.baseNotes}
+                          </p>
+                        )}
                       </div>
-                      {ex.baseNotes && (
-                        <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                          {ex.baseNotes}
-                        </p>
-                      )}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
 
             <div className="pt-1 flex justify-end">
               <button
@@ -455,12 +472,31 @@ export const BiteSizeDrawerModal: React.FC<BiteSizeDrawerModalProps> = ({
                             <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold uppercase bg-orange-500/12 text-orange-600 dark:text-orange-400">
                               {preset.workoutType}
                             </span>
+                            {preset.videoUrl && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold bg-rose-500/12 text-rose-600 dark:text-rose-400">
+                                <Play className="w-2.5 h-2.5 fill-current" />
+                                Video
+                              </span>
+                            )}
                           </div>
                           <h4 className="font-display font-bold text-sm text-slate-900 dark:text-slate-100 leading-snug">
                             {preset.title}
                           </h4>
                         </div>
                       </div>
+
+                      {preset.videoUrl && (
+                        <a
+                          href={preset.videoUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="w-full py-2 px-3 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold inline-flex items-center justify-center gap-1.5 shadow-xs transition-colors"
+                        >
+                          <Play className="w-3.5 h-3.5 fill-current shrink-0" />
+                          <span>Open Follow-Along Video</span>
+                          <ExternalLink className="w-3 h-3 opacity-85 shrink-0" />
+                        </a>
+                      )}
 
                       {preset.exercises.length > 0 && (
                         <div className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">

@@ -21,6 +21,8 @@ import {
   Check,
   Clock,
   Zap,
+  ExternalLink,
+  Video,
 } from 'lucide-react';
 import { useWorkoutStore } from '../store/useWorkoutStore';
 import {
@@ -78,6 +80,7 @@ export const LibraryView: React.FC = () => {
     'ALL' | 'le10' | '15_30' | 'gt30'
   >('ALL');
   const [selectedTagFilter, setSelectedTagFilter] = useState<string>('ALL');
+  const [expandedPresetIds, setExpandedPresetIds] = useState<Record<string, boolean>>({});
 
   const [editingPreset, setEditingPreset] = useState<WorkoutPreset | null>(null);
   const [tagInput, setTagInput] = useState('');
@@ -227,6 +230,29 @@ export const LibraryView: React.FC = () => {
     searchQuery,
   ]);
 
+  const allFilteredExpanded =
+    filteredPresets.length > 0 &&
+    filteredPresets.every((p) => Boolean(expandedPresetIds[p.presetUuid]));
+
+  const handleToggleExpandAll = () => {
+    if (allFilteredExpanded) {
+      setExpandedPresetIds({});
+    } else {
+      const next: Record<string, boolean> = {};
+      for (const p of filteredPresets) {
+        next[p.presetUuid] = true;
+      }
+      setExpandedPresetIds(next);
+    }
+  };
+
+  const togglePresetCardExpanded = (presetUuid: string) => {
+    setExpandedPresetIds((prev) => ({
+      ...prev,
+      [presetUuid]: !prev[presetUuid],
+    }));
+  };
+
   const handleCreateNewPreset = () => {
     const now = new Date().toISOString();
     setEditingPreset({
@@ -286,16 +312,27 @@ export const LibraryView: React.FC = () => {
             </p>
           </div>
 
-          <button
-            type="button"
-            onClick={handleCreateNewPreset}
-            data-tooltip="Create a new workout template"
-            title="Create a new workout template"
-            className="px-4 py-2.5 rounded-2xl bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-sm shadow-orange-500/20 transition-all"
-          >
-            <Plus className="w-4 h-4" />
-            New Workout
-          </button>
+          <div className="flex items-center gap-2.5">
+            {filteredPresets.length > 0 && (
+              <button
+                type="button"
+                onClick={handleToggleExpandAll}
+                className="text-xs font-bold text-slate-500 dark:text-slate-400 hover:text-orange-500 dark:hover:text-orange-400 transition-colors px-2 py-1"
+              >
+                {allFilteredExpanded ? 'Collapse All' : 'Expand All'}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={handleCreateNewPreset}
+              data-tooltip="Create a new workout template"
+              title="Create a new workout template"
+              className="px-4 py-2.5 rounded-2xl bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-sm shadow-orange-500/20 transition-all"
+            >
+              <Plus className="w-4 h-4" />
+              New Workout
+            </button>
+          </div>
         </div>
 
         {/* Search + Program + Workout Type Filters */}
@@ -412,172 +449,237 @@ export const LibraryView: React.FC = () => {
           </button>
         </div>
       ) : (
-        <div className={`grid gap-3.5 ${isMobile ? 'grid-cols-1' : 'grid-cols-1 md:grid-cols-2'}`}>
+        <div className={`grid gap-2.5 ${isMobile ? 'grid-cols-1' : 'grid-cols-1 md:grid-cols-2'}`}>
           {filteredPresets.map((preset) => {
             const linkedPrograms = programs.filter((pg) =>
               preset.programIds?.includes(pg.programUuid)
             );
+            const isExpanded = Boolean(expandedPresetIds[preset.presetUuid]);
 
             return (
               <div
                 key={preset.presetUuid}
-                className="bg-white dark:bg-slate-900 rounded-3xl p-4 sm:p-5 border border-slate-200/80 dark:border-slate-800 hover:border-orange-500/40 transition-all flex flex-col justify-between gap-4 shadow-2xs"
+                className={`bg-white dark:bg-slate-900 rounded-2xl border transition-all shadow-2xs overflow-hidden ${
+                  isExpanded
+                    ? 'border-orange-500/40'
+                    : 'border-slate-200/80 dark:border-slate-800 hover:border-orange-500/35'
+                }`}
               >
-                <div className="space-y-3">
-                  {/* Top Badges & Action Buttons Row */}
-                  <div className="flex flex-wrap items-center justify-between gap-2">
+                {/* Compact Single-Row Collapsible Header (Tap Anywhere to Expand/Collapse) */}
+                <button
+                  type="button"
+                  onClick={() => togglePresetCardExpanded(preset.presetUuid)}
+                  aria-expanded={isExpanded}
+                  className="w-full px-4 py-3 text-left flex items-center justify-between gap-2.5 hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors"
+                >
+                  <div className="min-w-0 flex-1 space-y-1">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <h3 className="font-display font-bold text-sm sm:text-[15px] text-slate-900 dark:text-slate-100 truncate">
+                        {preset.title}
+                      </h3>
+                    </div>
                     <div className="flex flex-wrap items-center gap-1.5">
-                      <span className="px-2.5 py-0.5 rounded-lg text-[10px] font-bold uppercase tracking-wider bg-orange-500/15 text-orange-600 dark:text-orange-400">
+                      <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold uppercase tracking-wider bg-orange-500/15 text-orange-600 dark:text-orange-400">
                         {preset.workoutType}
                       </span>
                       {preset.isBiteSize ? (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold uppercase tracking-wider bg-amber-500/15 text-amber-700 dark:text-amber-300">
-                          <Zap className="w-3 h-3 fill-current" />
+                          <Zap className="w-2.5 h-2.5 fill-current" />
                           Bite-Size{preset.durationMinutes ? ` · ${preset.durationMinutes}m` : ''}
                         </span>
                       ) : preset.durationMinutes ? (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
-                          <Clock className="w-3 h-3 text-orange-500" />
+                          <Clock className="w-2.5 h-2.5 text-orange-500" />
                           {preset.durationMinutes}m
                         </span>
                       ) : null}
-                      {preset.legacyWorkoutId && (
-                        <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded-lg bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
-                          {preset.legacyWorkoutId}
+                      {preset.videoUrl && (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold bg-rose-500/12 text-rose-600 dark:text-rose-400">
+                          <Play className="w-2.5 h-2.5 fill-current" />
+                          Video
                         </span>
                       )}
-                      {preset.defaultTimer &&
-                        (preset.defaultTimer.mode === 'circuit' ||
-                          (Number(preset.defaultTimer.restSec) || 0) > 0) && (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
-                            <Timer className="w-3 h-3 text-orange-500" />
-                            {preset.defaultTimer.mode === 'circuit'
-                              ? (preset.defaultTimer.workSec ?? 60) === 0
-                                ? `${preset.defaultTimer.rounds ?? 0} rnds · ${
-                                    (preset.defaultTimer.restSec ?? 0) === 0
-                                      ? 'No Rest'
-                                      : `${preset.defaultTimer.restSec}s rest`
-                                  }`
-                                : `${preset.defaultTimer.rounds ?? 10}× ${
-                                    preset.defaultTimer.workSec ?? 60
-                                  }s/${preset.defaultTimer.restSec ?? 0}s`
-                              : `${preset.defaultTimer.restSec}s Rest`}
+                    </div>
+                  </div>
+
+                  <span
+                    className="p-1.5 rounded-xl bg-slate-100/80 dark:bg-slate-800 text-slate-500 dark:text-slate-400 shrink-0"
+                    aria-hidden="true"
+                  >
+                    {isExpanded ? (
+                      <ChevronUp className="w-4 h-4" />
+                    ) : (
+                      <ChevronDown className="w-4 h-4" />
+                    )}
+                  </span>
+                </button>
+
+                {/* Expanded Body: Actions, Coaching Notes, Exercises & Tags */}
+                {isExpanded && (
+                  <div className="px-4 pb-4 pt-3 border-t border-slate-100 dark:border-slate-800 space-y-3">
+                    {/* Action Buttons & Optional Timer/Legacy Badges */}
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {preset.legacyWorkoutId && (
+                          <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded-lg bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+                            {preset.legacyWorkoutId}
                           </span>
                         )}
-                    </div>
-
-                    <div className="flex items-center gap-1">
-                      <button
-                        type="button"
-                        data-tooltip="Start workout on Gym Floor"
-                        title="Start workout on Gym Floor"
-                        onClick={() => {
-                          addWorkoutToSession(preset.presetUuid);
-                          setActiveTab('log');
-                        }}
-                        className="px-3 py-1.5 rounded-xl bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold inline-flex items-center gap-1 shadow-2xs transition-colors"
-                      >
-                        <Play className="w-3 h-3 fill-current" />
-                        Start
-                      </button>
-
-                      <button
-                        type="button"
-                        data-tooltip="Edit workout"
-                        title="Edit workout"
-                        onClick={() => setEditingPreset(JSON.parse(JSON.stringify(preset)))}
-                        className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-orange-500 transition-colors"
-                      >
-                        <Edit3 className="w-3.5 h-3.5" />
-                      </button>
-
-                      <button
-                        type="button"
-                        data-tooltip="Duplicate workout"
-                        title="Duplicate workout"
-                        onClick={() => {
-                          duplicatePreset(preset.presetUuid);
-                          showToast(`Duplicated "${preset.title}"`);
-                        }}
-                        className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-orange-500 transition-colors"
-                      >
-                        <Copy className="w-3.5 h-3.5" />
-                      </button>
-
-                      <button
-                        type="button"
-                        data-tooltip="Delete workout"
-                        title="Delete workout"
-                        onClick={() => {
-                          deletePreset(preset.presetUuid);
-                          showToast(`Deleted "${preset.title}"`);
-                        }}
-                        className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-400 hover:text-rose-500 transition-colors"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Full-Width Workout Title (Never Squished!) */}
-                  <h3 className="font-display font-extrabold text-base sm:text-lg text-slate-900 dark:text-slate-100 leading-snug">
-                    {preset.title}
-                  </h3>
-
-                  {/* Clean Exercises List */}
-                  <div className="space-y-1.5">
-                    {preset.exercises.map((ex, i) => (
-                      <div
-                        key={i}
-                        className="text-xs flex flex-wrap items-center justify-between gap-2 py-2 px-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800/80"
-                      >
-                        <div className="flex items-center gap-2 min-w-0">
-                          <span className="w-5 h-5 rounded-full bg-slate-200 dark:bg-slate-700 text-[10px] font-bold flex items-center justify-center shrink-0 tabular-nums">
-                            {i + 1}
-                          </span>
-                          <span className="font-semibold text-slate-800 dark:text-slate-200">
-                            {ex.side ? (
-                              <span className="mr-1.5 px-1.5 py-0.2 rounded bg-orange-500/15 text-orange-600 dark:text-orange-400 text-[10px] font-bold">
-                                {ex.side}
-                              </span>
-                            ) : null}
-                            {ex.exerciseName}
-                          </span>
-                        </div>
-                        <span className="font-mono text-[11px] font-semibold text-orange-600 dark:text-orange-400 tabular-nums ml-auto">
-                          {ex.trackingType === 'mobility'
-                            ? ex.defaultDurationMin
-                              ? `${ex.defaultDurationMin} min`
-                              : 'Flow'
-                            : ex.trackingType === 'cardio'
-                            ? `${ex.cardioMode || 'Cardio'} (${ex.defaultDistanceUnit || 'mi'})`
-                            : `${ex.defaultSets} × ${ex.defaultReps}${
-                                ex.isPerSide ? '/side' : ''
-                              } @ ${formatLoadBadge(ex.loadType, ex.defaultWeight, undefined, ex.secondaryWeightKg)}`}
-                        </span>
+                        {preset.defaultTimer &&
+                          (preset.defaultTimer.mode === 'circuit' ||
+                            (Number(preset.defaultTimer.restSec) || 0) > 0) && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                              <Timer className="w-3 h-3 text-orange-500" />
+                              {preset.defaultTimer.mode === 'circuit'
+                                ? (preset.defaultTimer.workSec ?? 60) === 0
+                                  ? `${preset.defaultTimer.rounds ?? 0} rnds · ${
+                                      (preset.defaultTimer.restSec ?? 0) === 0
+                                        ? 'No Rest'
+                                        : `${preset.defaultTimer.restSec}s rest`
+                                    }`
+                                  : `${preset.defaultTimer.rounds ?? 10}× ${
+                                      preset.defaultTimer.workSec ?? 60
+                                    }s/${preset.defaultTimer.restSec ?? 0}s`
+                                : `${preset.defaultTimer.restSec}s Rest`}
+                            </span>
+                          )}
                       </div>
-                    ))}
-                  </div>
-                </div>
 
-                {/* Tags & Program Pills Footer */}
-                <div className="flex flex-wrap items-center justify-between gap-2 pt-2.5 border-t border-slate-100 dark:border-slate-800 text-[11px]">
-                  <div className="flex flex-wrap gap-1">
-                    {preset.tags?.map((t) => (
-                      <span
-                        key={t}
-                        className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 font-medium"
+                      <div className="flex items-center gap-1 ml-auto">
+                        <button
+                          type="button"
+                          data-tooltip="Start workout on Gym Floor"
+                          title="Start workout on Gym Floor"
+                          onClick={() => {
+                            addWorkoutToSession(preset.presetUuid);
+                            setActiveTab('log');
+                          }}
+                          className="px-3 py-1.5 rounded-xl bg-orange-500 hover:bg-orange-600 text-white text-xs font-bold inline-flex items-center gap-1 shadow-2xs transition-colors"
+                        >
+                          <Play className="w-3 h-3 fill-current" />
+                          Start
+                        </button>
+
+                        <button
+                          type="button"
+                          data-tooltip="Edit workout"
+                          title="Edit workout"
+                          onClick={() => setEditingPreset(JSON.parse(JSON.stringify(preset)))}
+                          className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-orange-500 transition-colors"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                        </button>
+
+                        <button
+                          type="button"
+                          data-tooltip="Duplicate workout"
+                          title="Duplicate workout"
+                          onClick={() => {
+                            duplicatePreset(preset.presetUuid);
+                            showToast(`Duplicated "${preset.title}"`);
+                          }}
+                          className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-orange-500 transition-colors"
+                        >
+                          <Copy className="w-3.5 h-3.5" />
+                        </button>
+
+                        <button
+                          type="button"
+                          data-tooltip="Delete workout"
+                          title="Delete workout"
+                          onClick={() => {
+                            deletePreset(preset.presetUuid);
+                            showToast(`Deleted "${preset.title}"`);
+                          }}
+                          className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-400 hover:text-rose-500 transition-colors"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+
+                    {preset.videoUrl && (
+                      <a
+                        href={preset.videoUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="w-full py-2 px-3 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/25 text-rose-600 dark:text-rose-400 text-xs font-bold inline-flex items-center justify-center gap-1.5 transition-colors"
                       >
-                        #{t}
-                      </span>
-                    ))}
+                        <Play className="w-3.5 h-3.5 fill-current" />
+                        Open Follow-Along Video
+                        <ExternalLink className="w-3 h-3 opacity-80" />
+                      </a>
+                    )}
+
+                    {preset.workoutNotes && (
+                      <p className="text-xs text-slate-600 dark:text-slate-300 bg-orange-500/[0.06] border border-orange-500/15 rounded-xl px-3 py-2 leading-relaxed">
+                        {preset.workoutNotes}
+                      </p>
+                    )}
+
+                    {/* Clean Exercises List */}
+                    {preset.exercises.length > 0 ? (
+                      <div className="space-y-1.5">
+                        {preset.exercises.map((ex, i) => (
+                          <div
+                            key={i}
+                            className="text-xs flex flex-wrap items-center justify-between gap-2 py-2 px-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800/80"
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className="w-5 h-5 rounded-full bg-slate-200 dark:bg-slate-700 text-[10px] font-bold flex items-center justify-center shrink-0 tabular-nums">
+                                {i + 1}
+                              </span>
+                              <span className="font-semibold text-slate-800 dark:text-slate-200">
+                                {ex.side ? (
+                                  <span className="mr-1.5 px-1.5 py-0.2 rounded bg-orange-500/15 text-orange-600 dark:text-orange-400 text-[10px] font-bold">
+                                    {ex.side}
+                                  </span>
+                                ) : null}
+                                {ex.exerciseName}
+                              </span>
+                            </div>
+                            <span className="font-mono text-[11px] font-semibold text-orange-600 dark:text-orange-400 tabular-nums ml-auto">
+                              {ex.trackingType === 'mobility'
+                                ? ex.defaultDurationMin
+                                  ? `${ex.defaultDurationMin} min`
+                                  : 'Flow'
+                                : ex.trackingType === 'cardio'
+                                ? `${ex.cardioMode || 'Cardio'} (${ex.defaultDistanceUnit || 'mi'})`
+                                : `${ex.defaultSets} × ${ex.defaultReps}${
+                                    ex.isPerSide ? '/side' : ''
+                                  } @ ${formatLoadBadge(ex.loadType, ex.defaultWeight, undefined, ex.secondaryWeightKg)}`}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-[11px] text-slate-500 dark:text-slate-400 italic px-2 py-1">
+                        Follow-along video routine (no individual set tracking required).
+                      </div>
+                    )}
+
+                    {/* Tags & Program Pills Footer */}
+                    {(preset.tags?.length > 0 || linkedPrograms.length > 0) && (
+                      <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100 dark:border-slate-800 text-[11px]">
+                        <div className="flex flex-wrap gap-1">
+                          {preset.tags?.map((t) => (
+                            <span
+                              key={t}
+                              className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 font-medium"
+                            >
+                              #{t}
+                            </span>
+                          ))}
+                        </div>
+                        {linkedPrograms.length > 0 && (
+                          <span className="text-slate-400 font-medium truncate">
+                            {linkedPrograms.map((p) => p.title).join(', ')}
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </div>
-                  {linkedPrograms.length > 0 && (
-                    <span className="text-slate-400 font-medium truncate">
-                      {linkedPrograms.map((p) => p.title).join(', ')}
-                    </span>
-                  )}
-                </div>
+                )}
               </div>
             );
           })}
@@ -901,6 +1003,42 @@ export const LibraryView: React.FC = () => {
                     className="rounded accent-orange-500 w-4 h-4 shrink-0"
                   />
                 </label>
+
+                <div className="sm:col-span-2">
+                  <label className="flex items-center gap-1.5 text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
+                    <Video className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                    <span>Follow-Along Video URL (YouTube) — Optional</span>
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="url"
+                      value={editingPreset.videoUrl || ''}
+                      placeholder="https://youtube.com/watch?v=... or https://youtu.be/..."
+                      onChange={(e) =>
+                        setEditingPreset({
+                          ...editingPreset,
+                          videoUrl: e.target.value,
+                        })
+                      }
+                      className="flex-1 min-w-0 px-3 py-1.5 text-xs rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 focus:outline-none focus:border-orange-500"
+                    />
+                    {editingPreset.videoUrl?.trim() && editingPreset.exercises.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setEditingPreset({
+                            ...editingPreset,
+                            exercises: [],
+                          })
+                        }
+                        title="Clear exercises for a video-only follow-along routine"
+                        className="px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:text-rose-500 text-[11px] font-semibold shrink-0"
+                      >
+                        Video-Only
+                      </button>
+                    )}
+                  </div>
+                </div>
               </div>
 
               {/* Row 2: Always-Collapsed Summary Chips (Programs, Tags, Timer, Notes) */}
@@ -1540,6 +1678,11 @@ export const LibraryView: React.FC = () => {
                   <label className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
                     Exercises ({editingPreset.exercises.length})
                   </label>
+                  {editingPreset.exercises.length === 0 && (
+                    <span className="text-[11px] text-slate-400">
+                      Optional when using a Follow-Along Video
+                    </span>
+                  )}
                 </div>
 
                 {(() => {
@@ -2380,7 +2523,11 @@ export const LibraryView: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => {
-                    upsertPreset(editingPreset);
+                    const cleanedVideoUrl = editingPreset.videoUrl?.trim() || undefined;
+                    upsertPreset({
+                      ...editingPreset,
+                      videoUrl: cleanedVideoUrl,
+                    });
                     const savedTitle = editingPreset.title;
                     closePresetEditorModal();
                     showToast(`Saved "${savedTitle}"!`);

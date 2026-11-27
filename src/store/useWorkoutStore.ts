@@ -69,6 +69,42 @@ import {
 export type AppTab = 'log' | 'plan' | 'library' | 'history' | 'settings';
 
 export const SAFETY_SNAPSHOT_STORAGE_KEY = 'wt_safety_snapshot';
+export const LAST_LOG_INTERACTION_KEY = 'ironpulse_last_log_interaction_at';
+export const LOG_INACTIVITY_RESET_MS = 60 * 60 * 1000; // 60 minutes
+
+export function recordLogInteraction(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(
+      LAST_LOG_INTERACTION_KEY,
+      JSON.stringify({
+        ts: Date.now(),
+        calendarDate: getTodayIsoDate(),
+      })
+    );
+  } catch {
+    // Ignore storage access errors
+  }
+}
+
+export function shouldAutoResetLogDateToToday(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    const raw = window.localStorage.getItem(LAST_LOG_INTERACTION_KEY);
+    if (!raw) return true;
+    const parsed = JSON.parse(raw) as { ts?: number; calendarDate?: string } | number;
+    const today = getTodayIsoDate();
+    if (typeof parsed === 'number') {
+      const lastDay = new Date(parsed).toISOString().slice(0, 10);
+      return Date.now() - parsed >= LOG_INACTIVITY_RESET_MS || lastDay !== today;
+    }
+    if (!parsed || typeof parsed.ts !== 'number') return true;
+    if (parsed.calendarDate && parsed.calendarDate !== today) return true;
+    return Date.now() - parsed.ts >= LOG_INACTIVITY_RESET_MS;
+  } catch {
+    return true;
+  }
+}
 
 export interface SafetySnapshot {
   timestamp: string;
@@ -604,6 +640,9 @@ function createDraftFromPreset(
     completedRounds: formatMode === 'emom_complex' ? 0 : undefined,
     programUuid: options?.programUuid || preset.programIds?.[0],
     scheduleItemUuid: options?.scheduleItemUuid,
+    videoUrl: preset.videoUrl,
+    durationMinutes: preset.durationMinutes,
+    isBiteSize: preset.isBiteSize,
     status: 'pending',
     sessionNotes: '',
     totalSessionVolumeKg: 0,
@@ -1039,6 +1078,7 @@ function buildInitialDraftsForDate(
         }
       }
 
+      const matchedPresetForDraft = presets.find((p) => p.presetUuid === l.presetUuid);
       return {
         ...JSON.parse(JSON.stringify(l)),
         scheduleItemUuid: linkedSched?.scheduleItemUuid || l.scheduleItemUuid,
@@ -1048,6 +1088,8 @@ function buildInitialDraftsForDate(
         slotRole:
           l.slotRole || linkedSched?.slotRole || (idx === 0 ? 'Primary' : `Chained #${idx + 1}`),
         isBiteSize: isBiteSizeLog || undefined,
+        videoUrl: l.videoUrl || matchedPresetForDraft?.videoUrl,
+        durationMinutes: l.durationMinutes ?? matchedPresetForDraft?.durationMinutes,
         updatePresetOnSave: false,
       };
     });
@@ -1183,6 +1225,7 @@ function draftToWorkoutLog(
     scheduleItemUuid: draft.scheduleItemUuid,
     slotRole: draft.slotRole,
     isBiteSize: draft.isBiteSize,
+    videoUrl: draft.videoUrl,
     status: effectiveStatus,
     sessionNotes: draft.sessionNotes,
     totalSessionVolumeKg,
@@ -1701,6 +1744,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
       },
 
       setActiveDate: (date) => {
+        recordLogInteraction();
         const state = get();
         const { sessionGroupUuid, drafts } = buildInitialDraftsForDate(
           date,
@@ -2409,6 +2453,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
       },
 
       updateDraftWorkout: (logUuid, updater) => {
+        recordLogInteraction();
         const state = get();
         let updatedRecord: WorkoutLog | null = null;
         let transitionedScheduleDate: string | null = null;
@@ -2667,6 +2712,20 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         const computedDurationMin =
           totalStopwatchMs > 0 ? Math.max(1, Math.round(totalStopwatchMs / 60000)) : undefined;
 
+        const matchedPresetForSave = state.presets.find(
+          (p) => p.presetUuid === draft.presetUuid
+        );
+        const resolvedDurationMinutes =
+          computedDurationMin ??
+          draft.durationMinutes ??
+          matchedPresetForSave?.durationMinutes;
+        const resolvedDurationSec =
+          computedElapsedSec ??
+          draft.durationSec ??
+          (resolvedDurationMinutes && resolvedDurationMinutes > 0
+            ? Math.round(resolvedDurationMinutes * 60)
+            : undefined);
+
         const logRecord: WorkoutLog = {
           logUuid: draft.logUuid,
           uid: state.authUser?.uid || state.meta.uid,
@@ -2685,17 +2744,21 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           extraRungs: draft.extraRungs,
           programUuid: draft.programUuid,
           scheduleItemUuid: draft.scheduleItemUuid,
+          slotRole: draft.slotRole,
+          isBiteSize: draft.isBiteSize,
+          videoUrl: draft.videoUrl || matchedPresetForSave?.videoUrl,
           status: finalStatus,
           sessionNotes: draft.sessionNotes,
           totalSessionVolumeKg,
-          durationSec: computedElapsedSec ?? draft.durationSec,
-          durationMinutes: computedDurationMin ?? draft.durationMinutes,
-          elapsedSeconds: computedElapsedSec ?? draft.elapsedSeconds,
+          durationSec: resolvedDurationSec,
+          durationMinutes: resolvedDurationMinutes,
+          elapsedSeconds: computedElapsedSec ?? draft.elapsedSeconds ?? resolvedDurationSec,
           exerciseUuids: recalcedExercises.map((e) => e.exerciseUuid),
           exercises: recalcedExercises,
           createdAt: draft.createdAt || now,
           updatedAt: now,
         };
+        recordLogInteraction();
 
         const alreadyInLogs = state.logs.some((l) => l.logUuid === logUuid);
         const nextLogs = alreadyInLogs
@@ -3108,6 +3171,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
       },
 
       logBiteSizeWorkout: async (presetUuid, options) => {
+        recordLogInteraction();
         const state = get();
         const preset = state.presets.find((p) => p.presetUuid === presetUuid);
         if (!preset) return { ok: false };
@@ -3175,6 +3239,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
           formatMode: preset.formatMode,
           slotRole: 'Bite-Size',
           isBiteSize: true,
+          videoUrl: preset.videoUrl,
           status: 'completed',
           sessionNotes: options?.sessionNotes || '',
           totalSessionVolumeKg,
@@ -6307,8 +6372,16 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         );
         const normalizedSchedules = reconciled.schedules;
         const normalizedLogs = reconciled.logs;
+        const todayIso = getTodayIsoDate();
+        const shouldResetDate = shouldAutoResetLogDateToToday();
+        const targetActiveDate = shouldResetDate
+          ? todayIso
+          : rehydratedState.activeDate || todayIso;
+        if (shouldResetDate) {
+          recordLogInteraction();
+        }
         const refreshedFloor = buildInitialDraftsForDate(
-          rehydratedState.activeDate || getTodayIsoDate(),
+          targetActiveDate,
           normalizedLogs,
           normalizedSchedules,
           nextPresetsList,
@@ -6319,6 +6392,7 @@ export const useWorkoutStore = create<WorkoutStoreState>()(
         if (rehydratedState.hasSeeded) {
           queueMicrotask(() => {
             useWorkoutStore.setState({
+              activeDate: targetActiveDate,
               presets: nextPresetsList,
               hasSeededBiteSizePresets: true,
               schedules: normalizedSchedules,

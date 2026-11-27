@@ -106,6 +106,7 @@ export interface WorkoutPreset {
   tags: string[];
   durationMinutes?: number;
   isBiteSize?: boolean;
+  videoUrl?: string;
   defaultTimer?: DefaultTimerConfig;
   exercises: PresetExercise[];
   isArchived?: boolean;
@@ -249,6 +250,7 @@ export interface WorkoutLog {
   scheduleItemUuid?: string;
   slotRole?: string;
   isBiteSize?: boolean;
+  videoUrl?: string;
   status: LogStatus;
   sessionNotes?: string;
   totalSessionVolumeKg: number;
